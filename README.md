@@ -72,7 +72,7 @@ MCP clients should launch `dist/index.js` over stdio with the env vars above.
 ## Emergency Python Fallback
 
 The supported path is the npm-installed MCP. For a one-time emergency where
-the MCP cannot start, [`fallback/tracker.py`](fallback/tracker.py) provides a
+the MCP cannot start, [`fallback/vikunja-cli.py`](fallback/vikunja-cli.py) provides a
 standalone `/api/v2` CLI with explicit setup, safety limits, and offline unit
 tests documented in [`fallback/README.md`](fallback/README.md). Do not run both
 as independent tracker writers.

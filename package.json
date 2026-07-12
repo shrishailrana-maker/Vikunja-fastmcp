@@ -1,6 +1,6 @@
 {
   "name": "vikunja-fastmcp",
-  "version": "2.3.993",
+  "version": "2.3.994",
   "description": "Clean-room, v2-only Vikunja Model Context Protocol server (rebuilt from scratch; no legacy code).",
   "type": "module",
   "main": "dist/index.js",
@@ -10,8 +10,8 @@
   },
   "files": [
     "dist/**/*",
-    "fallback/tracker.py",
-    "fallback/test_tracker.py",
+    "fallback/vikunja-cli.py",
+    "fallback/test_vikunja_cli.py",
     "fallback/README.md",
     "fallback/requirements.txt",
     "README.md",

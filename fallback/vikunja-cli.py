@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-tracker.py - Emergency Python fallback CLI for the Vikunja FastMCP v2 server.
+vikunja-cli.py - Emergency Python fallback CLI for the Vikunja FastMCP v2 server.
 
 Part of Vikunja FastMCP — a clean, v2-only Model Context Protocol server for Vikunja.
 Repository: https://github.com/shrishailrana-maker/Vikunja-fastmcp
@@ -15,7 +15,7 @@ REST API while preserving the critical identity rules, guardrails, and JSON
 output shape. The MCP remains the authoritative implementation.
 
 Usage:
-    python tracker.py <tool> <action> [--param value ...]
+    python vikunja-cli.py <tool> <action> [--param value ...]
 
 Environment:
     VIKUNJA_URL                    (required) Vikunja server URL
@@ -2896,8 +2896,8 @@ def build_parser() -> argparse.ArgumentParser:
         description="Vikunja FastMCP v2 - Python fallback CLI",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=("Tools: " + ", ".join(sorted(TOOL_ACTIONS.keys())) +
-                "\n\nExample:\n  python fallback/tracker.py vikunja_tasks list --project-title MyProject\n"
-                "  python fallback/tracker.py vikunja_tasks create --project-id 1 --title 'Buy milk'"),
+                "\n\nExample:\n  python fallback/vikunja-cli.py vikunja_tasks list --project-title MyProject\n"
+                "  python fallback/vikunja-cli.py vikunja_tasks create --project-id 1 --title 'Buy milk'"),
     )
     parser.add_argument("tool", help="Tool name (e.g. vikunja_tasks)")
     parser.add_argument("action", nargs="?", default="",

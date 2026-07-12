@@ -1,10 +1,17 @@
 import json
-import os
+import importlib.util
 import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 
-from fallback import tracker
+
+module_path = Path(__file__).with_name("vikunja-cli.py")
+spec = importlib.util.spec_from_file_location("vikunja_cli", module_path)
+if spec is None or spec.loader is None:
+    raise RuntimeError(f"Could not load fallback CLI from {module_path}")
+vikunja_cli = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(vikunja_cli)
 
 
 class FakeClient:
@@ -26,7 +33,7 @@ class FakeClient:
 
 class TrackerFallbackTests(unittest.TestCase):
     def test_envelope_escapes_fences_without_changing_parsed_data(self):
-        rendered = tracker.render_envelope(
+        rendered = vikunja_cli.render_envelope(
             "Task details.", {"ok": True, "data": {"description": "```json\n{}\n```"}}, None
         )
         payload = rendered.split("```json\n", 1)[1].rsplit("\n```", 1)[0]
@@ -34,7 +41,7 @@ class TrackerFallbackTests(unittest.TestCase):
         self.assertEqual(rendered.count("```"), 2)
 
     def test_task_normalization_includes_creator(self):
-        task = tracker.normalize_task(
+        task = vikunja_cli.normalize_task(
             {
                 "id": 10,
                 "index": 4,
@@ -59,7 +66,7 @@ class TrackerFallbackTests(unittest.TestCase):
                 }
             }
         )
-        _, result = tracker.cmd_tasks_apply_label(
+        _, result = vikunja_cli.cmd_tasks_apply_label(
             client, {"task_selector": 10, "label_title": "BUG"}
         )
         self.assertEqual(result["action"], "unchanged")
@@ -67,7 +74,7 @@ class TrackerFallbackTests(unittest.TestCase):
 
     def test_bulk_update_accepts_extra_writable_fields(self):
         client = FakeClient({("PUT", "/tasks/bulk"): {"tasks": []}})
-        tracker.cmd_bulk_update(
+        vikunja_cli.cmd_bulk_update(
             client, {"task_ids": [10], "fields_extra": {"percent_done": 0.5}}
         )
         body = client.calls[0][2]["body"]
@@ -109,7 +116,7 @@ class TrackerFallbackTests(unittest.TestCase):
                 },
                 root,
             )
-            _, result = tracker.cmd_export_project(
+            _, result = vikunja_cli.cmd_export_project(
                 client,
                 {
                     "project_id": 2,

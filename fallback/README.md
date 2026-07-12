@@ -1,6 +1,6 @@
 # Emergency Python Fallback
 
-`tracker.py` is a standalone, one-time fallback for machines where the normal
+`vikunja-cli.py` is a standalone, one-time fallback for machines where the normal
 `vikunja-fastmcp` MCP process cannot be started or repaired promptly. It calls
 the Vikunja `/api/v2` REST API directly and emits the same human summary plus
 one fenced JSON envelope used by the MCP.
@@ -30,8 +30,8 @@ tracker comments.
 ## Verify
 
 ```powershell
-python fallback\tracker.py self_check
-python -m unittest fallback.test_tracker
+python fallback\vikunja-cli.py self_check
+python -m unittest fallback.test_vikunja_cli
 ```
 
 ## Examples
@@ -39,17 +39,17 @@ python -m unittest fallback.test_tracker
 Always scope task operations to the intended project:
 
 ```powershell
-python fallback\tracker.py vikunja_tasks list --project-id 2 --count-only
-python fallback\tracker.py vikunja_tasks get --project-id 2 --task-selector "#305"
-python fallback\tracker.py vikunja_tasks create --project-id 2 --title "Example bug"
-python fallback\tracker.py vikunja_tasks update --project-id 2 --task-selector 9005 --fields-json '{"percent_done":0.5}'
+python fallback\vikunja-cli.py vikunja_tasks list --project-id 2 --count-only
+python fallback\vikunja-cli.py vikunja_tasks get --project-id 2 --task-selector "#305"
+python fallback\vikunja-cli.py vikunja_tasks create --project-id 2 --title "Example bug"
+python fallback\vikunja-cli.py vikunja_tasks update --project-id 2 --task-selector 9005 --fields-json '{"percent_done":0.5}'
 ```
 
 Export comments only when needed because it performs an additional paginated
 request for every exported task:
 
 ```powershell
-python fallback\tracker.py vikunja_export_project export --project-id 2 --format json --include-comments
+python fallback\vikunja-cli.py vikunja_export_project export --project-id 2 --format json --include-comments
 ```
 
 ## Safety And Limits

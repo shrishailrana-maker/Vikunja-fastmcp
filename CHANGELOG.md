@@ -1,11 +1,12 @@
 # Changelog
 
-## Unreleased
+## 2.3.994 - 2026-07-12
 
 - Include task creator identity in task responses and project exports.
 - Make repeated label application a successful `unchanged` operation.
 - Add opt-in project comment export with `includeComments: true`.
 - Publish action-specific tool schema branches and explicit list continuation hints.
+- Add a documented emergency Python fallback as `fallback/vikunja-cli.py`.
 
 ## 2.3.993 - 2026-07-12
 
