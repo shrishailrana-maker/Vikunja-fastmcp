@@ -10,6 +10,10 @@
   },
   "files": [
     "dist/**/*",
+    "fallback/tracker.py",
+    "fallback/test_tracker.py",
+    "fallback/README.md",
+    "fallback/requirements.txt",
     "README.md",
     "MCP_API.md",
     "CHANGELOG.md",
