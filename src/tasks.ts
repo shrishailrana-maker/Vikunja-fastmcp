@@ -36,6 +36,7 @@ export interface Task {
   done: boolean;
   priority: number;
   dueDate: string | null;
+  creator: { id: number; username: string } | null;
   labels: { id: number; title: string }[];
   assignees: { id: number; username: string }[];
   taskUrl: string;
@@ -52,13 +53,14 @@ export type TaskListItem = Pick<
   | 'title'
   | 'done'
   | 'priority'
+  | 'creator'
   | 'labels'
   | 'taskUrl'
   | 'projectUrl'
 >;
 
 export interface WriteEcho {
-  action: 'created' | 'exists' | 'updated' | 'deleted' | 'closed' | 'reopened';
+  action: 'created' | 'exists' | 'updated' | 'unchanged' | 'deleted' | 'closed' | 'reopened';
   target: {
     id: number;
     index: number;
@@ -170,6 +172,9 @@ export function normalizeTask(task: any, projectRef: ProjectRef, webUrl: string)
     done: !!normalized.done,
     priority: normalized.priority || 0,
     dueDate: normalized.due_date || normalized.dueDate || null,
+    creator: normalized.created_by
+      ? { id: normalized.created_by.id, username: normalized.created_by.username }
+      : null,
     labels,
     assignees,
     taskUrl: `${webUrl}tasks/${normalized.id}`,
@@ -188,6 +193,7 @@ function normalizeTaskListItem(task: any, projectRef: ProjectRef, webUrl: string
     title: full.title,
     done: full.done,
     priority: full.priority,
+    creator: full.creator,
     labels: full.labels,
     taskUrl: full.taskUrl,
     projectUrl: full.projectUrl,
@@ -930,7 +936,21 @@ export async function applyLabel(
   projectSelector?: { id?: number; title?: string },
 ): Promise<WriteEcho> {
   const taskRef = await resolveTask(client, taskSelector, projectSelector);
+  const target = {
+    id: taskRef.id,
+    index: taskRef.index,
+    identifier: taskRef.identifier,
+    project: taskRef.project,
+    title: taskRef.title,
+  };
+  if (taskRef.labels.some((label) => label.title.toLowerCase() === labelTitle.toLowerCase())) {
+    return { action: 'unchanged', target };
+  }
   const labelId = await resolveOrCreateLabel(client, labelTitle);
+
+  if (taskRef.labels.some((label) => label.id === labelId)) {
+    return { action: 'unchanged', target };
+  }
 
   await client.request<any>('POST', `/tasks/${taskRef.id}/labels`, {
     body: { label_id: labelId },
@@ -938,13 +958,7 @@ export async function applyLabel(
 
   return {
     action: 'updated',
-    target: {
-      id: taskRef.id,
-      index: taskRef.index,
-      identifier: taskRef.identifier,
-      project: taskRef.project,
-      title: taskRef.title,
-    },
+    target,
   };
 }
 

@@ -24,6 +24,13 @@ export interface TaskRef {
   identifier?: string;
   project: ProjectRef;
   title: string;
+  labels: { id: number; title: string }[];
+}
+
+function taskLabels(task: any): { id: number; title: string }[] {
+  return Array.isArray(task.labels)
+    ? task.labels.map((label: any) => ({ id: label.id, title: label.title }))
+    : [];
 }
 
 interface CacheEntry<T> {
@@ -245,6 +252,7 @@ export async function resolveTask(
         identifier: task.identifier,
         project,
         title: task.title,
+        labels: taskLabels(task),
       };
     } catch (err: any) {
       if (err instanceof VikunjaError && err.status === 404) {
@@ -354,6 +362,7 @@ export async function resolveTask(
       identifier: task.identifier,
       project: { id: task.project_id, title: project.title },
       title: task.title,
+      labels: taskLabels(task),
     };
   } catch (err: any) {
     if (err instanceof VikunjaError && err.status === 404) {

@@ -54,9 +54,11 @@ function getPropertyTypeDescription(prop: any): string {
 function generateMarkdown(): string {
   let md = `# Vikunja FastMCP V2 Tool Reference\n\n`;
   md += `This reference is generated automatically from runtime schemas.\n\n`;
+  md += `Tools with multiple actions publish action-specific JSON Schema branches, so clients can present only the fields valid for the selected action.\n\n`;
   md += `All responses contain a short Markdown summary followed by exactly one fenced JSON envelope: \`{ "ok": true, "data": ... }\` or \`{ "ok": false, "error": ... }\`. HTTP error status, method, and path are preserved and secrets are redacted.\n\n`;
   md += `## Identity And Scope\n\n`;
   md += `Numeric task selectors are global database IDs. A portal reference such as \`#305\` or \`PRJ-305\` requires an explicit \`projectSelector\`. Task lists require exactly one explicit scope: \`projectSelector\`, \`projects\`, or \`allProjects: true\`. Writes echo task title, project title/id, portal index, identifier, and global ID.\n\n`;
+  md += `Normalized task records include \`creator: { id, username }\` when Vikunja supplies \`created_by\`. Project exports always include creator identity; comments are included only when \`includeComments: true\` is requested.\n\n`;
   md += `## Tools\n\n`;
 
   for (const tool of TOOLS) {

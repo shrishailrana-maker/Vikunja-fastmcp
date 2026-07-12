@@ -206,13 +206,14 @@ export async function exportProject(
   selector: { id?: number; title?: string },
   format: 'json' | 'csv' = 'json',
   destinationPath?: string,
+  includeComments = false,
 ) {
   const project = await resolveProject(client, selector);
   const raw = await fetchAllCollectionItems<any>(
     (requestPath) => client.request('GET', requestPath),
     `/projects/${project.id}/tasks`,
   );
-  const tasks = raw.map((task) => ({
+  const tasks: any[] = raw.map((task) => ({
     id: task.id,
     index: task.index,
     identifier: task.identifier,
@@ -221,11 +222,32 @@ export async function exportProject(
     done: !!task.done,
     priority: task.priority || 0,
     dueDate: normalizeDate(task.due_date),
+    creator: task.created_by
+      ? { id: task.created_by.id, username: task.created_by.username }
+      : null,
     labels: Array.isArray(task.labels) ? task.labels.map((label: any) => label.title) : [],
     assignees: Array.isArray(task.assignees)
       ? task.assignees.map((user: any) => user.username)
       : [],
   }));
+
+  if (includeComments) {
+    for (const task of tasks) {
+      const comments = await fetchAllCollectionItems<any>(
+        (requestPath) => client.request('GET', requestPath),
+        `/tasks/${task.id}/comments`,
+      );
+      task.comments = comments.map((comment) => ({
+        id: comment.id,
+        comment: comment.comment ? htmlToMarkdown(comment.comment) : '',
+        author: comment.author
+          ? { id: comment.author.id, username: comment.author.username }
+          : null,
+        created: normalizeDate(comment.created),
+        updated: normalizeDate(comment.updated),
+      }));
+    }
+  }
   const fileName = destinationPath || `project-${project.id}-tasks.${format}`;
   const destination = resolveSafePath(client.getConfig().attachmentDownloadRoot, fileName);
   await fs.mkdir(path.dirname(destination), { recursive: true });
@@ -241,12 +263,21 @@ export async function exportProject(
       'done',
       'priority',
       'dueDate',
+      'creatorId',
+      'creatorUsername',
       'labels',
       'assignees',
+      ...(includeComments ? ['comments'] : []),
     ];
+    const csvTasks = tasks.map((task) => ({
+      ...task,
+      creatorId: task.creator?.id ?? '',
+      creatorUsername: task.creator?.username ?? '',
+      ...(includeComments ? { comments: JSON.stringify(task.comments) } : {}),
+    }));
     const lines = [
       header.join(','),
-      ...tasks.map((task) =>
+      ...csvTasks.map((task) =>
         header
           .map((field) =>
             csvCell(

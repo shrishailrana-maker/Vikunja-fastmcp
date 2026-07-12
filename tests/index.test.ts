@@ -83,6 +83,57 @@ describe('MCP Server Registration and Dispatching tests', () => {
       type: 'object',
       additionalProperties: { type: 'string' },
     });
+
+    const taskTool = response.tools.find((t: any) => t.name === 'vikunja_tasks');
+    const applyLabelBranch = taskTool.inputSchema.oneOf.find(
+      (branch: any) => branch.properties.action.const === 'apply-label',
+    );
+    expect(applyLabelBranch.additionalProperties).toBe(false);
+    expect(Object.keys(applyLabelBranch.properties).sort()).toEqual(
+      ['action', 'labelTitle', 'projectSelector', 'taskSelector'].sort(),
+    );
+    const listBranch = taskTool.inputSchema.oneOf.find(
+      (branch: any) => branch.properties.action.const === 'list',
+    );
+    expect(listBranch.properties).not.toHaveProperty('filePaths');
+
+    const webhookTool = response.tools.find((t: any) => t.name === 'vikunja_webhooks');
+    const eventBranch = webhookTool.inputSchema.oneOf.find(
+      (branch: any) => branch.properties.action.const === 'events',
+    );
+    expect(eventBranch.properties).toHaveProperty('scope');
+  });
+
+  it('puts the next-page instruction before a large task-list envelope', async () => {
+    const handler = (server as any)._requestHandlers.get('tools/call');
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ id: 101, title: 'Alpha' }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            items: [],
+            page: 1,
+            per_page: 100,
+            total: 955,
+            total_pages: 10,
+          }),
+      } as Response);
+
+    const response = await handler({
+      method: 'tools/call',
+      params: {
+        name: 'vikunja_tasks',
+        arguments: { action: 'list', projectSelector: { id: 101 }, perPage: 1000 },
+      },
+    });
+
+    expect(response.content[0].text).toMatch(/^Listed 0\/955 tasks.*Next page: 2\./);
   });
 
   it('should dispatch call to self_check diagnostic successfully', async () => {

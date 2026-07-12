@@ -95,6 +95,7 @@ describe('Tasks List and Scoping tests', () => {
             description: '<p>Large evidence body that lists must omit.</p>',
             done: false,
             priority: 3,
+            created_by: { id: 7, username: 'example-tester' },
             labels: [],
             assignees: [],
           },
@@ -111,6 +112,7 @@ describe('Tasks List and Scoping tests', () => {
       expect(result.project).toEqual({ id: 101, title: 'Alpha' });
       expect(result.tasks.length).toBe(1);
       expect(result.tasks[0].title).toBe('Task 1');
+      expect(result.tasks[0].creator).toEqual({ id: 7, username: 'example-tester' });
       expect(result.tasks[0].description).toBeUndefined();
 
       // Must NOT send `expand=labels,assignees`: those are always embedded and
@@ -356,6 +358,7 @@ describe('Tasks List and Scoping tests', () => {
             title: 'Task Title',
             project_id: 101,
             description: '<p>hello</p>',
+            created_by: { id: 7, username: 'example-tester' },
             comments: [
               { id: 2001, comment: '<p>A comment</p>', author: { id: 1, username: 'tester' } },
             ],
@@ -375,6 +378,7 @@ describe('Tasks List and Scoping tests', () => {
       const details = await getTask(client, 9005);
       expect(details.task.id).toBe(9005);
       expect(details.task.description).toBe('hello');
+      expect(details.task.creator).toEqual({ id: 7, username: 'example-tester' });
       expect(details.comments.length).toBe(1);
       expect(details.comments[0].comment).toBe('A comment');
       expect(details.attachments.length).toBe(1);

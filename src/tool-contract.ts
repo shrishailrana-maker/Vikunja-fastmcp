@@ -119,7 +119,8 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
       action: 'apply-label',
       required: ['taskSelector', 'labelTitle'],
       optional: taskSelector,
-      execution: 'Resolve/create label then POST task label',
+      execution:
+        'Return unchanged when already attached; otherwise resolve/create then POST task label',
     },
     {
       action: 'remove-label',
@@ -316,8 +317,9 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     {
       action: 'export',
       required: ['projectSelector'],
-      optional: ['format', 'destinationPath'],
+      optional: ['format', 'destinationPath', 'includeComments'],
       execution: 'MCP-composed paginated export to sandboxed JSON or CSV',
+      note: 'Creator is always included; comments are fetched only when includeComments is true.',
     },
   ],
   vikunja_request_user_export: [
@@ -354,7 +356,11 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     },
   ],
   vikunja_webhooks: [
-    { action: 'events', execution: 'Direct GET /webhooks/events' },
+    {
+      action: 'events',
+      optional: ['scope'],
+      execution: 'Direct project or user event catalog',
+    },
     {
       action: 'list',
       optional: ['scope', 'projectSelector'],

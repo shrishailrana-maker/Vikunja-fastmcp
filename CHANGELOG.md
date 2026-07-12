@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Include task creator identity in task responses and project exports.
+- Make repeated label application a successful `unchanged` operation.
+- Add opt-in project comment export with `includeComments: true`.
+- Publish action-specific tool schema branches and explicit list continuation hints.
+
 ## 2.3.993 - 2026-07-12
 
 ### Added

@@ -125,6 +125,27 @@ describe('Assignees, Labels and Relations tests', () => {
   });
 
   describe('Labels', () => {
+    it('treats an already-applied label as a harmless no-op', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            id: 9005,
+            index: 305,
+            title: 'Existing bug',
+            project_id: 101,
+            project: { title: 'Alpha' },
+            labels: [{ id: 801, title: 'frontend' }],
+          }),
+      } as Response);
+
+      const echo = await applyLabel(client, 9005, 'FRONTEND');
+
+      expect(echo.action).toBe('unchanged');
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
     it('should resolve and create label if absent, caching the ID', async () => {
       // 1. Resolve task
       mockFetch.mockResolvedValueOnce({

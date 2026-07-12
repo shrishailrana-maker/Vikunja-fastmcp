@@ -198,16 +198,28 @@ function addActionRequirements(toolName: string, schema: any): any {
   const operations = TOOL_OPERATION_DOCS[toolName];
   if (!operations || !schema.properties?.action) return schema;
 
-  const conditions = operations.map((operation) => {
+  const propertyNames = Object.keys(schema.properties);
+  const branches = operations.map((operation) => {
+    const documented = [...(operation.required ?? []), ...(operation.optional ?? [])].join(' ');
+    const allowed = propertyNames.filter(
+      (name) => name === 'action' || new RegExp(`\\b${name}\\b`).test(documented),
+    );
     const required = (operation.required ?? [])
       .map((name) => name.match(/^([A-Za-z][A-Za-z0-9]*)(?:\.[A-Za-z][A-Za-z0-9]*)?$/)?.[1])
       .filter((name): name is string => !!name && name in schema.properties);
     return {
-      if: { properties: { action: { const: operation.action } }, required: ['action'] },
-      then: required.length > 0 ? { required } : {},
+      type: 'object',
+      properties: Object.fromEntries(
+        allowed.map((name) => [
+          name,
+          name === 'action' ? { const: operation.action } : schema.properties[name],
+        ]),
+      ),
+      required: ['action', ...required],
+      additionalProperties: false,
     };
   });
-  return { ...schema, allOf: conditions };
+  return { ...schema, oneOf: branches };
 }
 
 function toolDescription(tool: McpToolDefinition): string {
@@ -238,7 +250,10 @@ function summaryFor(toolName: string, args: any, result: any): string {
     return `Count ${result.count} in **${safeSummaryText(result.project.title)}**.`;
   }
   if (result?.pagination?.total !== undefined && result?.project) {
-    return `Listed ${result.tasks?.length ?? 0}/${result.pagination.total} tasks in **${safeSummaryText(result.project.title)}**.`;
+    const continuation = result.pagination.nextPage
+      ? ` Next page: ${result.pagination.nextPage}.`
+      : '';
+    return `Listed ${result.tasks?.length ?? 0}/${result.pagination.total} tasks in **${safeSummaryText(result.project.title)}**.${continuation}`;
   }
   if (Array.isArray(result?.projects)) {
     return `Multi-project list with ${result.projects.length} group(s).`;
@@ -993,9 +1008,16 @@ export const TOOLS: McpToolDefinition[] = [
       }),
       format: z.enum(['json', 'csv']).optional(),
       destinationPath: z.string().optional(),
+      includeComments: z.boolean().optional(),
     }),
     handler: async (args, client) =>
-      exportProject(client, args.projectSelector, args.format, args.destinationPath),
+      exportProject(
+        client,
+        args.projectSelector,
+        args.format,
+        args.destinationPath,
+        args.includeComments,
+      ),
   },
   {
     name: 'vikunja_request_user_export',

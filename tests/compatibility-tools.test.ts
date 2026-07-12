@@ -5,7 +5,12 @@ import path from 'node:path';
 import { VikunjaApiClient } from '../src/api.js';
 import { bulkUpdateTasks, listTaskReminders, addTaskReminder } from '../src/bulk-reminders.js';
 import { listWebhooks, createWebhook, listWebhookEvents, updateWebhook } from '../src/webhooks.js';
-import { previewCsvImport, getUserExportStatus, downloadUserExport } from '../src/data.js';
+import {
+  previewCsvImport,
+  getUserExportStatus,
+  downloadUserExport,
+  exportProject,
+} from '../src/data.js';
 import { TemplateStore } from '../src/templates.js';
 
 const config = {
@@ -335,6 +340,113 @@ describe('restored compatibility capabilities', () => {
       await expect(fs.stat(path.join(root, 'export.zip'))).rejects.toMatchObject({
         code: 'ENOENT',
       });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('exports task creators and optionally includes normalized comments', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vikunja-project-export-'));
+    const exportClient = new VikunjaApiClient({ ...config, attachmentDownloadRoot: root });
+    try {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: 2, title: 'Alpha' }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              items: [
+                {
+                  id: 10,
+                  index: 4,
+                  identifier: 'ALPHA-4',
+                  title: 'Exported task',
+                  created_by: { id: 7, username: 'example-tester' },
+                  labels: [],
+                  assignees: [],
+                },
+              ],
+              page: 1,
+              per_page: 100,
+              total: 1,
+              total_pages: 1,
+            }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              items: [
+                {
+                  id: 50,
+                  comment: '<p><strong>Verified</strong> in build 12.</p>',
+                  author: { id: 9, username: 'example-developer' },
+                  created: '2026-07-12T00:00:00Z',
+                },
+              ],
+              page: 1,
+              per_page: 100,
+              total: 1,
+              total_pages: 1,
+            }),
+        } as Response);
+
+      const result = await exportProject(exportClient, { id: 2 }, 'json', 'alpha.json', true);
+      const exported = JSON.parse(await fs.readFile(result.path, 'utf8'));
+
+      expect(exported.tasks[0].creator).toEqual({ id: 7, username: 'example-tester' });
+      expect(exported.tasks[0].comments).toEqual([
+        {
+          id: 50,
+          comment: '**Verified** in build 12.',
+          author: { id: 9, username: 'example-developer' },
+          created: '2026-07-12T00:00:00Z',
+          updated: null,
+        },
+      ]);
+
+      mockFetch.mockClear();
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: 2, title: 'Alpha' }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              items: [
+                {
+                  id: 10,
+                  index: 4,
+                  title: 'Exported task',
+                  created_by: { id: 7, username: 'example-tester' },
+                },
+              ],
+              page: 1,
+              per_page: 100,
+              total: 1,
+              total_pages: 1,
+            }),
+        } as Response);
+
+      const compact = await exportProject(
+        exportClient,
+        { id: 2 },
+        'json',
+        'alpha-without-comments.json',
+      );
+      const compactExport = JSON.parse(await fs.readFile(compact.path, 'utf8'));
+      expect(compactExport.tasks[0]).not.toHaveProperty('comments');
+      expect(mockFetch).toHaveBeenCalledTimes(2);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

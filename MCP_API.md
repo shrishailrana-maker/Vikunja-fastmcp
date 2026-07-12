@@ -2,11 +2,15 @@
 
 This reference is generated automatically from runtime schemas.
 
+Tools with multiple actions publish action-specific JSON Schema branches, so clients can present only the fields valid for the selected action.
+
 All responses contain a short Markdown summary followed by exactly one fenced JSON envelope: `{ "ok": true, "data": ... }` or `{ "ok": false, "error": ... }`. HTTP error status, method, and path are preserved and secrets are redacted.
 
 ## Identity And Scope
 
 Numeric task selectors are global database IDs. A portal reference such as `#305` or `PRJ-305` requires an explicit `projectSelector`. Task lists require exactly one explicit scope: `projectSelector`, `projects`, or `allProjects: true`. Writes echo task title, project title/id, portal index, identifier, and global ID.
+
+Normalized task records include `creator: { id, username }` when Vikunja supplies `created_by`. Project exports always include creator identity; comments are included only when `includeComments: true` is requested.
 
 ## Tools
 
@@ -91,7 +95,7 @@ Numeric task selectors are global database IDs. A portal reference such as `#305
 | `assign` | taskSelector, userSelector | projectSelector (required for #index or PRJ-index) | Identity preflight then POST assignee |
 | `unassign` | taskSelector, userSelector | projectSelector (required for #index or PRJ-index) | Identity preflight then DELETE assignee |
 | `list-assignees` | taskSelector | projectSelector (required for #index or PRJ-index) | Direct GET after identity resolution |
-| `apply-label` | taskSelector, labelTitle | projectSelector (required for #index or PRJ-index) | Resolve/create label then POST task label |
+| `apply-label` | taskSelector, labelTitle | projectSelector (required for #index or PRJ-index) | Return unchanged when already attached; otherwise resolve/create then POST task label |
 | `remove-label` | taskSelector, labelTitle | projectSelector (required for #index or PRJ-index) | Resolve label then DELETE task label |
 | `list-labels` | taskSelector | projectSelector (required for #index or PRJ-index) | Direct GET after identity resolution |
 | `relate` | taskSelector, otherTaskSelector, relationKind | projectSelector (required for #index or PRJ-index) | Resolve both tasks then POST relation |
@@ -253,12 +257,13 @@ Numeric task selectors are global database IDs. A portal reference such as `#305
   * `projectSelector`: object (required)
   * `format`: enum ["json", "csv"] (optional)
   * `destinationPath`: string (optional)
+  * `includeComments`: boolean (optional)
 
 #### Operations
 
 | Action | Required | Optional | Execution |
 | --- | --- | --- | --- |
-| `export` | projectSelector | format, destinationPath | MCP-composed paginated export to sandboxed JSON or CSV |
+| `export` | projectSelector | format, destinationPath, includeComments | MCP-composed paginated export to sandboxed JSON or CSV. Creator is always included; comments are fetched only when includeComments is true. |
 
 ### `vikunja_request_user_export`
 * **Description**: Request a native Vikunja user-data export. Password input is never returned.
@@ -322,7 +327,7 @@ Numeric task selectors are global database IDs. A portal reference such as `#305
 
 | Action | Required | Optional | Execution |
 | --- | --- | --- | --- |
-| `events` | none | none | Direct GET /webhooks/events |
+| `events` | none | scope | Direct project or user event catalog |
 | `list` | none | scope, projectSelector | Direct project or user webhook list |
 | `create` | targetUrl, events | scope, projectSelector, secret, basicAuthUser, basicAuthPassword | Direct project or user webhook create; credentials are write-only |
 | `update` | webhookId, events | scope, projectSelector | Direct project or user webhook event update. Vikunja treats target URL and credentials as immutable after creation. |

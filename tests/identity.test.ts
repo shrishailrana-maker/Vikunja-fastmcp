@@ -159,8 +159,10 @@ describe('Identity and Resolution Cache tests', () => {
       expect(ref).toEqual({
         id: 9005,
         index: 305,
+        identifier: undefined,
         project: { id: 101, title: 'Alpha' },
         title: 'My Task',
+        labels: [],
       });
     });
 
@@ -256,8 +258,10 @@ describe('Identity and Resolution Cache tests', () => {
       expect(ref).toEqual({
         id: 9005,
         index: 305,
+        identifier: undefined,
         project: { id: 102, title: 'Beta' },
         title: 'Task Title',
+        labels: [],
       });
       const lookupUrl = mockFetch.mock.calls[1][0] as string;
       expect(new URL(lookupUrl).searchParams.get('filter')).toBe('index = 305');
