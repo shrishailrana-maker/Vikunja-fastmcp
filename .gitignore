@@ -1,0 +1,89 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Claude local settings
+.claude/
+CLAUDE.local.md
+
+# Agent and local tool state
+.codex/
+.agents/
+.remember/
+.vs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Release and package output
+current/
+releases/
+npm-cache-seed/
+*.tgz
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+
+# Backup files (use proper git branches instead)
+*.bak
+*.bak*
+*.backup
+*.old
+*~
+
+# Debug
+.inspector-pid
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+temp-coverage/
+
+# One-off local validation artifacts
+coverage_output.txt
+final-dx-evaluation-report.json
+real-mcp-validation-report.json
+test-report.json
+final-dx-evaluation.js
+simple-mcp-test.js
+task-creation-test.js
+test-auth-errors.js
+test-mcp-functionality.js
+test-mcp-server.js
+test-projects-crud-real.js
+test-projects-hierarchy.js
+test-projects-validation.js
+test-real-mcp-operations.js

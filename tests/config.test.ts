@@ -1,0 +1,96 @@
+/**
+ * Tests for config loading and URL normalization.
+ *
+ * Part of Vikunja FastMCP — a clean, v2-only Model Context Protocol server for Vikunja.
+ * Repository: https://github.com/shrishailrana-maker/Vikunja-fastmcp
+ *
+ * Copyright (c) 2026 Shrishail Rana
+ * Authors: Shrishail Rana, Codex, Claude, AntiGravity, Grok
+ * SPDX-License-Identifier: MIT
+ */
+
+import { normalizeUrl, loadConfig } from '../src/config.js';
+
+const TEST_TOKEN = `tk_${'a'.repeat(40)}`;
+
+describe('Config tests', () => {
+  describe('normalizeUrl', () => {
+    it('should normalize server root url without api/v2', () => {
+      const { apiUrl, webUrl } = normalizeUrl('https://vikunja.example.com');
+      expect(apiUrl).toBe('https://vikunja.example.com/api/v2');
+      expect(webUrl).toBe('https://vikunja.example.com/');
+    });
+
+    it('should normalize server root url with trailing slash', () => {
+      const { apiUrl, webUrl } = normalizeUrl('https://vikunja.example.com/');
+      expect(apiUrl).toBe('https://vikunja.example.com/api/v2');
+      expect(webUrl).toBe('https://vikunja.example.com/');
+    });
+
+    it('should normalize server root url with api/v2', () => {
+      const { apiUrl, webUrl } = normalizeUrl('https://vikunja.example.com/api/v2');
+      expect(apiUrl).toBe('https://vikunja.example.com/api/v2');
+      expect(webUrl).toBe('https://vikunja.example.com/');
+    });
+
+    it('should normalize server root url with api/v2/', () => {
+      const { apiUrl, webUrl } = normalizeUrl('https://vikunja.example.com/api/v2/');
+      expect(apiUrl).toBe('https://vikunja.example.com/api/v2');
+      expect(webUrl).toBe('https://vikunja.example.com/');
+    });
+
+    it('should reject v1 URLs', () => {
+      expect(() => normalizeUrl('https://vikunja.example.com/api/v1')).toThrow(
+        'Vikunja FastMCP V2 does not support v1 API routes (/api/v1).',
+      );
+    });
+
+    it('should throw on invalid URLs', () => {
+      expect(() => normalizeUrl('invalid-url')).toThrow('Invalid VIKUNJA_URL');
+    });
+  });
+
+  describe('loadConfig', () => {
+    it('should load config from environment variables successfully', () => {
+      const env = {
+        VIKUNJA_URL: 'https://vikunja.example.com',
+        VIKUNJA_API_TOKEN: TEST_TOKEN,
+        VIKUNJA_WEB_URL: 'https://vikunja-web.example.com',
+      };
+      const config = loadConfig(env);
+      expect(config.vikunjaUrl).toBe('https://vikunja.example.com/api/v2');
+      expect(config.vikunjaToken).toBe(TEST_TOKEN);
+      expect(config.vikunjaWebUrl).toBe('https://vikunja-web.example.com/');
+    });
+
+    it('should fall back to API root base for webUrl if not set', () => {
+      const env = {
+        VIKUNJA_URL: 'https://vikunja.example.com/api/v2',
+        VIKUNJA_API_TOKEN: TEST_TOKEN,
+      };
+      const config = loadConfig(env);
+      expect(config.vikunjaWebUrl).toBe('https://vikunja.example.com/');
+    });
+
+    it('allows an operator-selected attachment sandbox root', () => {
+      const config = loadConfig({
+        VIKUNJA_URL: 'https://vikunja.example.com/api/v2',
+        VIKUNJA_API_TOKEN: 'test-token',
+        VIKUNJA_ATTACHMENT_DOWNLOAD_ROOT: './durable-attachments',
+      });
+      expect(config.attachmentDownloadRoot).toMatch(/durable-attachments$/);
+    });
+
+    it('should throw if URL is missing', () => {
+      expect(() => loadConfig({ VIKUNJA_API_TOKEN: 'tk_123' })).toThrow(
+        'VIKUNJA_URL environment variable is not set.',
+      );
+    });
+
+    it('should throw if token is missing', () => {
+      expect(() => loadConfig({ VIKUNJA_URL: 'https://foo.com' })).toThrow(
+        'VIKUNJA_API_TOKEN environment variable is not set.',
+      );
+    });
+  });
+});

@@ -1,0 +1,71 @@
+{
+  "name": "vikunja-fastmcp",
+  "version": "2.3.993",
+  "description": "Clean-room, v2-only Vikunja Model Context Protocol server (rebuilt from scratch; no legacy code).",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "vikunja-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist/**/*",
+    "README.md",
+    "MCP_API.md",
+    "CHANGELOG.md",
+    "AUTHORS.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.test.json",
+    "lint": "eslint .",
+    "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\" \"scripts/**/*.ts\"",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "build": "node scripts/build-atomic.js",
+    "docs:api": "tsx scripts/generate-mcp-api.ts",
+    "docs:api:check": "tsx scripts/generate-mcp-api.ts --check"
+  },
+  "keywords": [
+    "mcp",
+    "vikunja",
+    "task-management",
+    "model-context-protocol"
+  ],
+  "author": "Shrishail Rana",
+  "contributors": [
+    "Codex",
+    "Claude",
+    "AntiGravity",
+    "Grok"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shrishailrana-maker/Vikunja-fastmcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/shrishailrana-maker/Vikunja-fastmcp/issues"
+  },
+  "homepage": "https://github.com/shrishailrana-maker/Vikunja-fastmcp#readme",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "@types/node": "^24.13.3",
+    "@typescript-eslint/eslint-plugin": "^8.39.1",
+    "@typescript-eslint/parser": "^8.39.1",
+    "eslint": "^9.39.5",
+    "eslint-plugin-jest": "^29.0.1",
+    "jest": "^30.0.5",
+    "prettier": "^3.0.0",
+    "ts-jest": "^29.4.1",
+    "tsx": "^4.0.0",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "packageManager": "npm@12.0.1"
+}
