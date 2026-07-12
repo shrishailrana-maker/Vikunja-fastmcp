@@ -60,6 +60,7 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
         'allStates',
         'priority (0-5)',
         'label',
+        'assignee (exact username; numeric user IDs are not valid Vikunja list filters)',
         'q',
         'filter',
         'countOnly',

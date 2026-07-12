@@ -96,6 +96,7 @@ describe('MCP Server Registration and Dispatching tests', () => {
       (branch: any) => branch.properties.action.const === 'list',
     );
     expect(listBranch.properties).not.toHaveProperty('filePaths');
+    expect(listBranch.properties.assignee).toMatchObject({ type: 'string' });
 
     const webhookTool = response.tools.find((t: any) => t.name === 'vikunja_webhooks');
     const eventBranch = webhookTool.inputSchema.oneOf.find(
@@ -221,6 +222,7 @@ describe('MCP Server Registration and Dispatching tests', () => {
     expect(diagnostics.packageVersion).toEqual(expect.any(String));
     expect(diagnostics.buildPath).toEqual(expect.any(String));
     expect(diagnostics.apiDocumentPath).toEqual(expect.any(String));
+    expect(diagnostics.agentSkillPath).toEqual(expect.stringContaining('vikunja-fastmcp'));
     expect(diagnostics.supportedTools).toContain('vikunja_tasks');
     expect(diagnostics.supportedSubcommands.vikunja_tasks).toContain('create');
     expect(JSON.stringify(diagnostics)).not.toContain(process.env.VIKUNJA_API_TOKEN);

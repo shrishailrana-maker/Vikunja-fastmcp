@@ -25,6 +25,26 @@ npm install -g vikunja-fastmcp
 
 Restart the MCP client after installing or updating so it starts the new process.
 
+### Optional Agent Skill
+
+The npm package includes a neutral `vikunja-fastmcp` skill containing the
+scope, task-identity, pagination, write-safety, attachment, and error rules an
+agent needs. `self_check.agentSkillPath` reports its installed location.
+
+Install it for Codex on Windows PowerShell:
+
+```powershell
+$source = Join-Path (npm root -g) "vikunja-fastmcp\skills\vikunja-fastmcp"
+$target = Join-Path $HOME ".codex\skills\vikunja-fastmcp"
+New-Item -ItemType Directory -Force -Path (Split-Path $target) | Out-Null
+Copy-Item -LiteralPath $source -Destination $target -Recurse -Force
+```
+
+For Claude, use `$HOME\.claude\skills\vikunja-fastmcp` as the target. For an
+agent without skill-folder support, place the contents of `SKILL.md` in that
+client's persistent agent instructions or rules file. Restart the agent after
+installing or updating the skill.
+
 ## Environment
 
 | Variable | Required | Description |

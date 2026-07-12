@@ -50,6 +50,7 @@ export interface DiagnosticResult {
     packageVersion: string;
     buildPath: string;
     apiDocumentPath: string;
+    agentSkillPath: string;
     attachmentDownloadRoot: string;
     attachmentDownloadRootWritable: boolean;
     supportedTools: string[];
@@ -89,6 +90,7 @@ export async function runSelfCheck(
     packageVersion,
     buildPath,
     apiDocumentPath: path.join(packageRoot, 'MCP_API.md'),
+    agentSkillPath: path.join(packageRoot, 'skills', 'vikunja-fastmcp', 'SKILL.md'),
     attachmentDownloadRoot: 'unknown',
     attachmentDownloadRootWritable: false,
     supportedTools: toolManifest.map((tool) => tool.name),

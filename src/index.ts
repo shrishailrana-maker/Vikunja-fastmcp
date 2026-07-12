@@ -425,6 +425,14 @@ export const TOOLS: McpToolDefinition[] = [
       allStates: z.boolean().optional(),
       priority: z.number().int().min(0).max(5).optional(),
       label: z.union([z.string().trim().min(1), z.number().int().positive()]).optional(),
+      assignee: z
+        .string()
+        .trim()
+        .min(1)
+        .optional()
+        .describe(
+          'Exact assignee username for task lists; Vikunja filters do not accept user IDs.',
+        ),
       q: z.string().optional(),
       countOnly: z.boolean().optional(),
       filter: z.string().optional(),
@@ -472,6 +480,7 @@ export const TOOLS: McpToolDefinition[] = [
             allStates: args.allStates,
             priority: args.priority,
             label: args.label,
+            assignee: args.assignee,
             q: args.q,
             countOnly: args.countOnly,
             filter: args.filter,

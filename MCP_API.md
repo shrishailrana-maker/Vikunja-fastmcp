@@ -59,6 +59,7 @@ Normalized task records include `creator: { id, username }` when Vikunja supplie
   * `allStates`: boolean (optional)
   * `priority`: number (optional); integer, min 0, max 5
   * `label`: string | number (optional)
+  * `assignee`: string (optional); min 1
   * `q`: string (optional)
   * `countOnly`: boolean (optional)
   * `filter`: string (optional)
@@ -86,7 +87,7 @@ Normalized task records include `creator: { id, username }` when Vikunja supplie
 | `create` | projectSelector, fields.title | fields, idempotencyKey, attachments | Direct POST; MCP-composed when attachments are supplied |
 | `create_if_absent` | projectSelector, fields.title | fields, idempotencyKey, attachments | MCP-composed exact-title search then optional create/attach. Best-effort duplicate prevention, not a distributed lock. |
 | `get` | taskSelector | projectSelector (required for #index or PRJ-index), commentLimit (default 5, max 100) | MCP-composed task, recent comments, and attachment metadata |
-| `list` | none | exactly one of projectSelector, projects, allProjects, page (default 1), perPage (default 25; requests above 100 are safely capped to 100), done, allStates, priority (0-5), label, q, filter, countOnly | Direct per project; grouped subsets/allProjects are MCP-composed. Defaults to done=false unless done or allStates is supplied. |
+| `list` | none | exactly one of projectSelector, projects, allProjects, page (default 1), perPage (default 25; requests above 100 are safely capped to 100), done, allStates, priority (0-5), label, assignee (exact username; numeric user IDs are not valid Vikunja list filters), q, filter, countOnly | Direct per project; grouped subsets/allProjects are MCP-composed. Defaults to done=false unless done or allStates is supplied. |
 | `update` | taskSelector, fields | projectSelector (required for #index or PRJ-index), expectedUpdatedAt | Identity/read preflight, RFC 6902 PATCH, guarded writable-field PUT fallback |
 | `delete` | taskSelector | projectSelector (required for #index or PRJ-index) | Identity preflight then DELETE /tasks/{id} |
 | `close` | taskSelector | projectSelector (required for #index or PRJ-index) | Identity/read preflight then task update transport |

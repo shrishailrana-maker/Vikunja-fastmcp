@@ -107,6 +107,8 @@ export interface ListTasksOptions {
   allStates?: boolean;
   priority?: number;
   label?: string | number;
+  /** Vikunja task filters require an assignee username, not a numeric user ID. */
+  assignee?: string;
   q?: string;
   countOnly?: boolean;
   filter?: string;
@@ -134,6 +136,9 @@ export function buildFilterString(options: ListTasksOptions): string {
         ? `labels = ${options.label}`
         : `labels = ${escapeFilterString(options.label)}`,
     );
+  }
+  if (options.assignee !== undefined) {
+    parts.push(`assignees in ${escapeFilterString(options.assignee)}`);
   }
   if (options.filter) {
     parts.push(`(${options.filter})`);

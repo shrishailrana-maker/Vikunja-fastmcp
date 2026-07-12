@@ -72,6 +72,20 @@ describe('Tasks List and Scoping tests', () => {
       });
       expect(filter).toBe("done = false && labels = 'owner''s priority'");
     });
+
+    it('should filter open tasks by assignee username', () => {
+      const filter = buildFilterString({
+        assignee: 'sudhir',
+      });
+      expect(filter).toBe("done = false && assignees in 'sudhir'");
+    });
+
+    it('should escape quotes in assignee usernames', () => {
+      const filter = buildFilterString({
+        assignee: "owner's-agent",
+      });
+      expect(filter).toBe("done = false && assignees in 'owner''s-agent'");
+    });
   });
 
   describe('listTasks', () => {

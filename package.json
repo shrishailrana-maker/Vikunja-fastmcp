@@ -14,6 +14,7 @@
     "fallback/test_vikunja_cli.py",
     "fallback/README.md",
     "fallback/requirements.txt",
+    "skills/**/*",
     "README.md",
     "MCP_API.md",
     "CHANGELOG.md",
