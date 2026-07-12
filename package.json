@@ -1,6 +1,6 @@
 {
   "name": "vikunja-fastmcp",
-  "version": "2.3.994",
+  "version": "2.3.995",
   "description": "Clean-room, v2-only Vikunja Model Context Protocol server (rebuilt from scratch; no legacy code).",
   "type": "module",
   "main": "dist/index.js",

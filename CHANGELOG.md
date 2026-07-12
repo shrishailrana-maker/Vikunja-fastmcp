@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.3.995 - 2026-07-12
+
+- Add first-class task listing by exact assignee username, avoiding Vikunja's
+  silent zero-result behavior when numeric user IDs are used in assignee filters.
+- Ship a neutral `vikunja-fastmcp` agent skill covering project scope, task
+  identity, pagination, write safety, attachments, and truthful errors.
+- Expose the packaged skill path through `self_check` and document installation
+  for Codex, Claude, and clients that use persistent agent rules.
+
 ## 2.3.994 - 2026-07-12
 
 - Include task creator identity in task responses and project exports.
