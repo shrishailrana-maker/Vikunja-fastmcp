@@ -41,23 +41,23 @@ export interface DiagnosticResult {
   ok: boolean;
   diagnostics: {
     vikunjaUrl: string;
-    tokenPresent: boolean;
     connectionStatus: 'online' | 'offline';
     authenticationState: 'authenticated' | 'unauthenticated' | 'unknown';
     currentUser?: { id: number; username: string };
     connectionError?: string;
     apiContractVersion: 'v2';
     packageVersion: string;
-    buildPath: string;
-    apiDocumentPath: string;
-    agentSkillPath: string;
-    attachmentDownloadRoot: string;
     attachmentDownloadRootWritable: boolean;
-    supportedTools: string[];
-    supportedSubcommands: Record<string, string[]>;
     projects: { id: number; title: string; archived: boolean }[];
-    unsupportedOperations: { operation: string; reason: string }[];
-    operationalNotes: string[];
+    tokenPresent?: boolean;
+    buildPath?: string;
+    apiDocumentPath?: string;
+    agentSkillPath?: string;
+    attachmentDownloadRoot?: string;
+    supportedTools?: string[];
+    supportedSubcommands?: Record<string, string[]>;
+    unsupportedOperations?: { operation: string; reason: string }[];
+    operationalNotes?: string[];
   };
 }
 
@@ -68,6 +68,7 @@ export interface DiagnosticToolManifest {
 
 export async function runSelfCheck(
   toolManifest: DiagnosticToolManifest[] = [],
+  detail: 'basic' | 'full' = 'basic',
 ): Promise<DiagnosticResult> {
   const buildPath = fileURLToPath(import.meta.url);
   const packageRoot = path.resolve(path.dirname(buildPath), '..');
@@ -83,31 +84,37 @@ export async function runSelfCheck(
 
   const diagnostics: DiagnosticResult['diagnostics'] = {
     vikunjaUrl: 'unknown',
-    tokenPresent: false,
     connectionStatus: 'offline',
     authenticationState: 'unknown',
     apiContractVersion: 'v2',
     packageVersion,
-    buildPath,
-    apiDocumentPath: path.join(packageRoot, 'MCP_API.md'),
-    agentSkillPath: path.join(packageRoot, 'skills', 'vikunja-fastmcp', 'SKILL.md'),
-    attachmentDownloadRoot: 'unknown',
     attachmentDownloadRootWritable: false,
-    supportedTools: toolManifest.map((tool) => tool.name),
-    supportedSubcommands: Object.fromEntries(
-      toolManifest.map((tool) => [tool.name, tool.subcommands]),
-    ),
     projects: [],
-    unsupportedOperations: UNSUPPORTED_OPERATIONS,
-    operationalNotes: OPERATIONAL_NOTES,
   };
+  if (detail === 'full') {
+    Object.assign(diagnostics, {
+      tokenPresent: false,
+      buildPath,
+      apiDocumentPath: path.join(packageRoot, 'MCP_API.md'),
+      agentSkillPath: path.join(packageRoot, 'skills', 'vikunja-fastmcp', 'SKILL.md'),
+      attachmentDownloadRoot: 'unknown',
+      supportedTools: toolManifest.map((tool) => tool.name),
+      supportedSubcommands: Object.fromEntries(
+        toolManifest.map((tool) => [tool.name, tool.subcommands]),
+      ),
+      unsupportedOperations: UNSUPPORTED_OPERATIONS,
+      operationalNotes: OPERATIONAL_NOTES,
+    });
+  }
 
   let config;
   try {
     config = loadConfig();
     diagnostics.vikunjaUrl = config.vikunjaUrl;
-    diagnostics.tokenPresent = !!config.vikunjaToken;
-    diagnostics.attachmentDownloadRoot = config.attachmentDownloadRoot;
+    if (detail === 'full') {
+      diagnostics.tokenPresent = !!config.vikunjaToken;
+      diagnostics.attachmentDownloadRoot = config.attachmentDownloadRoot;
+    }
   } catch (err: any) {
     return {
       ok: false,

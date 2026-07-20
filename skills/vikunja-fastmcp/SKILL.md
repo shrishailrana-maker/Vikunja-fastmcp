@@ -10,8 +10,11 @@ requests or legacy tracker scripts while the MCP is available.
 
 ## Start
 
-1. Run `self_check` before the first tracker operation in a session.
-2. Confirm the API is v2, authentication is valid, and the intended project is visible.
+1. Do not run `self_check` as a routine session warm-up. Use the compact default
+   only when connectivity is uncertain; use `detail: "full"` only when reporting
+   an exact version, diagnosing configuration, or locating packaged files.
+2. For normal work, choose the intended project explicitly on the requested
+   operation instead of loading diagnostic inventories first.
 3. Never print or store API tokens in chat, commands, logs, task content, or repositories.
 
 ## Scope And Identity
@@ -31,6 +34,7 @@ requests or legacy tracker scripts while the MCP is available.
   usernames; numeric user IDs are only for operations that explicitly accept IDs.
 - Prefer `countOnly: true` when only a total is needed.
 - Paginate large results and follow each project's independent `nextPage` value.
+- Comment lists default to 20 items; request only the `page` and `perPage` needed.
 - Keep searches scoped. Avoid `allProjects` when a project subset is known.
 
 ## Writes
@@ -48,5 +52,5 @@ requests or legacy tracker scripts while the MCP is available.
   sandboxed path. Do not put bearer tokens in download URLs.
 - A `401` means the token or API URL is invalid or expired. A `403` means the
   authenticated identity lacks permission. Preserve the real status.
-- Read `MCP_API.md` from `self_check.apiDocumentPath` for exact tool contracts.
-
+- When exact tool contracts are needed, call `self_check` with `detail: "full"`
+  once and read `MCP_API.md` from its `apiDocumentPath`.

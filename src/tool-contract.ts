@@ -20,7 +20,11 @@ const writeOptions = ['expectedUpdatedAt'];
 export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
   vikunja_auth: [
     { action: 'status', execution: 'Direct: GET /user' },
-    { action: 'self-check', execution: 'MCP-composed diagnostics' },
+    {
+      action: 'self-check',
+      optional: ['detail (basic default, full for capabilities and local paths)'],
+      execution: 'MCP-composed diagnostics',
+    },
   ],
   vikunja_projects: [
     { action: 'list', execution: 'Direct paginated GET /projects' },
@@ -182,8 +186,8 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     {
       action: 'list',
       required: ['taskSelector'],
-      optional: taskSelector,
-      execution: 'Direct GET after identity resolution',
+      optional: [...taskSelector, 'page (default 1)', 'perPage (default 20, max 100)'],
+      execution: 'Direct paginated GET after identity resolution',
     },
     {
       action: 'get',

@@ -15,21 +15,22 @@ Normalized task records include `creator: { id, username }` when Vikunja supplie
 ## Tools
 
 ### `self_check`
-* **Description**: Run diagnostic self-checks verifying configuration and connection status.
+* **Description**: Run a compact configuration and connection self-check; use detail=full only for diagnostics.
 * **Parameters**:
-  * None
+  * `detail`: enum ["basic", "full"] (optional)
 
 ### `vikunja_auth`
 * **Description**: Check connection and get currently authenticated user details or connection status.
 * **Parameters**:
   * `action`: enum ["status", "self-check"] (required)
+  * `detail`: enum ["basic", "full"] (optional)
 
 #### Operations
 
 | Action | Required | Optional | Execution |
 | --- | --- | --- | --- |
 | `status` | none | none | Direct: GET /user |
-| `self-check` | none | none | MCP-composed diagnostics |
+| `self-check` | none | detail (basic default, full for capabilities and local paths) | MCP-composed diagnostics |
 
 ### `vikunja_projects`
 * **Description**: List visible projects or retrieve a specific project details.
@@ -115,13 +116,15 @@ Normalized task records include `creator: { id, username }` when Vikunja supplie
   * `commentId`: number (optional); integer, min 0
   * `comment`: string (optional); min 1
   * `idempotencyKey`: string (optional); min 1, max 200
+  * `page`: number (optional); integer, min 0
+  * `perPage`: number (optional); integer, min 1, max 100
 
 #### Operations
 
 | Action | Required | Optional | Execution |
 | --- | --- | --- | --- |
 | `create` | taskSelector, comment | projectSelector (required for #index or PRJ-index), idempotencyKey | Direct POST after identity resolution |
-| `list` | taskSelector | projectSelector (required for #index or PRJ-index) | Direct GET after identity resolution |
+| `list` | taskSelector | projectSelector (required for #index or PRJ-index), page (default 1), perPage (default 20, max 100) | Direct paginated GET after identity resolution |
 | `get` | taskSelector, commentId | projectSelector (required for #index or PRJ-index) | Direct GET after identity resolution |
 | `update` | taskSelector, commentId, comment | projectSelector (required for #index or PRJ-index) | Direct PATCH after identity resolution |
 | `delete` | taskSelector, commentId | projectSelector (required for #index or PRJ-index) | Direct DELETE after identity resolution |

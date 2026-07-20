@@ -11,7 +11,7 @@
 
 import { VikunjaApiClient } from './api.js';
 import { resolveTask } from './identity.js';
-import { htmlToMarkdown, markdownToHtml, toItemArray } from './format.js';
+import { htmlToMarkdown, markdownToHtml, normalizePagination, toItemArray } from './format.js';
 import { idempotency } from './idempotency.js';
 
 export interface Comment {
@@ -70,19 +70,29 @@ export async function listComments(
   client: VikunjaApiClient,
   taskSelector: string | number,
   projectSelector?: { id?: number; title?: string },
-): Promise<Comment[]> {
+  page = 1,
+  perPage = 20,
+) {
   const task = await resolveTask(client, taskSelector, projectSelector);
-  const rawComments = await client.request<any>('GET', `/tasks/${task.id}/comments`);
+  const safePage = Math.max(1, page);
+  const safePerPage = Math.min(100, Math.max(1, perPage));
+  const rawComments = await client.request<any>(
+    'GET',
+    `/tasks/${task.id}/comments?page=${safePage}&per_page=${safePerPage}`,
+  );
 
-  return toItemArray(rawComments).map((c) => ({
-    id: c.id,
-    comment: htmlToMarkdown(c.comment),
-    author: {
-      id: c.author?.id,
-      username: c.author?.username || 'unknown',
-    },
-    created: c.created,
-  }));
+  return {
+    comments: toItemArray(rawComments).map((c) => ({
+      id: c.id,
+      comment: htmlToMarkdown(c.comment),
+      author: {
+        id: c.author?.id,
+        username: c.author?.username || 'unknown',
+      },
+      created: c.created,
+    })),
+    pagination: normalizePagination(rawComments),
+  };
 }
 
 export async function getComment(

@@ -306,10 +306,13 @@ function getToolManifest() {
 export const TOOLS: McpToolDefinition[] = [
   {
     name: 'self_check',
-    description: 'Run diagnostic self-checks verifying configuration and connection status.',
-    inputSchema: z.object({}),
-    handler: async () => {
-      return runSelfCheck(getToolManifest());
+    description:
+      'Run a compact configuration and connection self-check; use detail=full only for diagnostics.',
+    inputSchema: z.object({
+      detail: z.enum(['basic', 'full']).optional(),
+    }),
+    handler: async (args) => {
+      return runSelfCheck(getToolManifest(), args.detail);
     },
   },
   {
@@ -318,10 +321,11 @@ export const TOOLS: McpToolDefinition[] = [
       'Check connection and get currently authenticated user details or connection status.',
     inputSchema: z.object({
       action: z.enum(['status', 'self-check']),
+      detail: z.enum(['basic', 'full']).optional(),
     }),
     handler: async (args, client) => {
       if (args.action === 'self-check') {
-        return runSelfCheck(getToolManifest());
+        return runSelfCheck(getToolManifest(), args.detail);
       }
       // Query current user profile (no email — minimize PII in agent context)
       const user = await client.request<any>('GET', '/user');
@@ -656,6 +660,8 @@ export const TOOLS: McpToolDefinition[] = [
       commentId: z.number().int().positive().optional(),
       comment: z.string().trim().min(1).optional(),
       idempotencyKey: z.string().trim().min(1).max(200).optional(),
+      page: z.number().int().positive().optional(),
+      perPage: z.number().int().min(1).max(100).optional(),
     }),
     handler: async (args, client) => {
       switch (args.action) {
@@ -669,7 +675,13 @@ export const TOOLS: McpToolDefinition[] = [
             args.idempotencyKey,
           );
         case 'list':
-          return listComments(client, args.taskSelector, args.projectSelector);
+          return listComments(
+            client,
+            args.taskSelector,
+            args.projectSelector,
+            args.page,
+            args.perPage,
+          );
         case 'get':
           if (!args.commentId) throw badRequest('commentId is required.');
           return getComment(client, args.taskSelector, args.commentId, args.projectSelector);

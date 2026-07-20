@@ -29,7 +29,8 @@ Restart the MCP client after installing or updating so it starts the new process
 
 The npm package includes a neutral `vikunja-fastmcp` skill containing the
 scope, task-identity, pagination, write-safety, attachment, and error rules an
-agent needs. `self_check.agentSkillPath` reports its installed location.
+agent needs. `self_check` with `detail: "full"` reports its installed location
+as `agentSkillPath`; the default basic check stays compact.
 
 Install it for Codex on Windows PowerShell:
 
@@ -99,10 +100,10 @@ as independent tracker writers.
 
 ## Tools
 
-- `self_check` / `vikunja_auth` — diagnostics and current user (no email)
+- `self_check` / `vikunja_auth` — compact diagnostics and current user (no email); use `detail: "full"` only for capabilities and local paths
 - `vikunja_projects` — list / get
 - `vikunja_tasks` — CRUD, list (default **open only**), create_if_absent, assignees, labels, relations, attachments
-- `vikunja_task_comments`
+- `vikunja_task_comments` — comment lists default to 20 items per page and accept `page` / `perPage` (max 100)
 - `vikunja_labels` — global labels (title or id)
 - `vikunja_users`
 - `vikunja_teams` — teams/members (`userId` is the Vikunja user id)

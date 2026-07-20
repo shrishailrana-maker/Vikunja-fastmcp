@@ -119,7 +119,7 @@ describe('Comments and Compound Operations tests', () => {
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
-    it('should list comments', async () => {
+    it('should list one bounded page of comments with truthful pagination', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         status: 200,
@@ -130,14 +130,34 @@ describe('Comments and Compound Operations tests', () => {
         ok: true,
         status: 200,
         text: async () =>
-          JSON.stringify([
-            { id: 2001, comment: '<p>c1</p>', author: { id: 1 }, created: '2026-07-12T00:00:00Z' },
-          ]),
+          JSON.stringify({
+            items: [
+              {
+                id: 2001,
+                comment: '<p>c1</p>',
+                author: { id: 1 },
+                created: '2026-07-12T00:00:00Z',
+              },
+            ],
+            page: 2,
+            per_page: 10,
+            total: 21,
+            total_pages: 3,
+          }),
       } as Response);
 
-      const list = await listComments(client, 9005);
-      expect(list.length).toBe(1);
-      expect(list[0].comment).toBe('c1');
+      const list = await listComments(client, 9005, undefined, 2, 10);
+      expect(list.comments).toHaveLength(1);
+      expect(list.comments[0].comment).toBe('c1');
+      expect(list.pagination).toMatchObject({
+        page: 2,
+        perPage: 10,
+        total: 21,
+        totalPages: 3,
+        hasMore: true,
+        nextPage: 3,
+      });
+      expect(mockFetch.mock.calls[1][0]).toContain('/tasks/9005/comments?page=2&per_page=10');
     });
 
     it('should get comment details', async () => {

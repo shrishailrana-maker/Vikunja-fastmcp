@@ -72,6 +72,10 @@ describe('MCP Server Registration and Dispatching tests', () => {
     const selfCheckTool = response.tools.find((t: any) => t.name === 'self_check');
     expect(selfCheckTool).toBeDefined();
     expect(selfCheckTool.description).toContain('self-check');
+    expect(selfCheckTool.inputSchema.properties.detail).toMatchObject({
+      type: 'string',
+      enum: ['basic', 'full'],
+    });
 
     const importTool = response.tools.find((t: any) => t.name === 'vikunja_batch_import');
     expect(importTool.inputSchema.properties.config).toMatchObject({
@@ -170,9 +174,9 @@ describe('MCP Server Registration and Dispatching tests', () => {
     const envelope = JSON.parse(jsonMatch![1]);
     expect(envelope.ok).toBe(true);
     expect(envelope.data.diagnostics.vikunjaUrl).toBe('https://vikunja.example.com/api/v2');
-    expect(envelope.data.diagnostics.unsupportedOperations).toEqual(
-      expect.arrayContaining([expect.objectContaining({ operation: 'vikunja_filters:list' })]),
-    );
+    expect(envelope.data.diagnostics.projects).toEqual([]);
+    expect(envelope.data.diagnostics).not.toHaveProperty('supportedSubcommands');
+    expect(envelope.data.diagnostics).not.toHaveProperty('operationalNotes');
   });
 
   it('returns the complete token-free self-check contract', async () => {
@@ -208,7 +212,7 @@ describe('MCP Server Registration and Dispatching tests', () => {
 
     const response = await handler({
       method: 'tools/call',
-      params: { name: 'self_check', arguments: {} },
+      params: { name: 'self_check', arguments: { detail: 'full' } },
     });
     const jsonMatch = (response.content[0].text as string).match(/```json\n([\s\S]*?)\n```/);
     const diagnostics = JSON.parse(jsonMatch![1]).data.diagnostics;

@@ -118,7 +118,7 @@ server may be newer than the committed snapshot.
 | `vikunja_auth` | `status`, `self-check` |
 | `vikunja_projects` | `list`, `get` |
 | `vikunja_tasks` | `create`, `create_if_absent`, `get`, `list`, `update`, `delete`, `close`, `reopen`, `close_with_evidence`, `assign`, `unassign`, `list-assignees`, `apply-label`, `remove-label`, `list-labels`, `relate`, `unrelate`, `list-relations`, `attach`, `list-attachments`, `download-attachment` |
-| `vikunja_task_comments` | `create`, `list`, `get`, `update`, `delete` |
+| `vikunja_task_comments` | `create`, `list`, `get`, `update`, `delete`; list defaults to page 1 with 20 comments and caps `perPage` at 100 |
 | `vikunja_labels` | `list`, `get`, `create`, `update`, `delete` |
 | `vikunja_users` | `current`, `search` |
 | `vikunja_teams` | `list`, `get`, `create`, `update`, `delete`, `add-member`, `remove-member`, `set-member-admin` |
@@ -394,6 +394,9 @@ A single `vikunja_tasks get` returns a consolidated detail bundle:
 Comment and attachment folding are MCP-composed when they require separate v2
 calls. `commentLimit: 0` omits comments; a higher bounded value is explicit.
 The comments tool remains the path for older pages or complete comment history.
+Its `list` operation is server-paginated once, defaults to 20 comments per
+page, accepts `page` and `perPage`, caps `perPage` at 100, and returns normalized
+continuation metadata instead of an unbounded comment collection.
 This lets an agent answer task state, ownership, labels, reviewed evidence, and
 available logs with one MCP call without claiming that Vikunja provides one
 combined HTTP route.

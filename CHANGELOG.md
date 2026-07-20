@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Make `self_check` compact by default and add `detail: "full"` for capability
+  inventories and local diagnostic paths.
+- Paginate comment listings with a 20-item default and a 100-item maximum,
+  returning normalized continuation metadata.
+- Update the packaged agent skill to avoid routine self-check calls and prefer
+  scoped, paginated, count-only reads.
+
 ## 2.3.995 - 2026-07-12
 
 - Add first-class task listing by exact assignee username, avoiding Vikunja's
