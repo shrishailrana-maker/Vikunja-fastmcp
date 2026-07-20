@@ -57,8 +57,11 @@ installing or updating the skill.
 | `VIKUNJA_MAX_ATTACHMENT_BYTES` | no | Upload/download size ceiling (default 100 MiB) |
 | `VIKUNJA_TEMPLATE_FILE` | no | Machine-local template JSON path (defaults under the user home directory) |
 | `VIKUNJA_MCP_RESPONSE_MODE` | no | Default task response size: `compact` (default), `standard`, or `full` |
+| `VIKUNJA_REQUEST_TIMEOUT_MS` | no | Positive per-request timeout in milliseconds (default 30000) |
+| `VIKUNJA_TRANSFER_TIMEOUT_MS` | no | Streamed and multipart transfer timeout in milliseconds (default 60000) |
 
 Never commit tokens. Rejects `/api/v1` URLs.
+API and browser URLs must use `http://` or `https://`.
 
 ## Configure
 
@@ -122,6 +125,11 @@ with `VIKUNJA_TEMPLATE_FILE`. Downloads and exports remain inside
 `VIKUNJA_ATTACHMENT_DOWNLOAD_ROOT`. Composed batch create/delete operations are
 bounded to 100 tasks and are not atomic.
 
+Task updates, assignment changes, and label removal return `unchanged` when the
+requested state already exists. `close_with_evidence` accepts an
+`idempotencyKey` so a process-local retry does not duplicate its evidence
+comment.
+
 Vikunja permissions still apply per operation. Applying a label may be denied
 even when ordinary task updates are allowed. Some Vikunja builds also require
 JWT/local-password authentication for user-data export routes; the MCP
@@ -131,8 +139,9 @@ See generated `MCP_API.md` for inputs. Responses are Markdown summary + one JSON
 Task lists default to 20 compact items and cap each project page at 100; use
 `countOnly` for totals and pagination for larger result sets. Compact task
 responses retain global ID, portal reference, project identity where needed,
-title, done state, and priority. Request `responseMode: "standard"` for ordinary
-expanded task fields or `responseMode: "full"` for explicit bundled detail.
+title, done state, priority, and the creator username when available. Request
+`responseMode: "standard"` for ordinary expanded task fields or
+`responseMode: "full"` for explicit bundled detail.
 
 ### Operational Limits
 

@@ -9,7 +9,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-import { Config } from './config.js';
+import { Config, DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_TRANSFER_TIMEOUT_MS } from './config.js';
 import { VikunjaError, mapStatusToCode } from './errors.js';
 
 export class VikunjaApiClient {
@@ -51,11 +51,17 @@ export class VikunjaApiClient {
       }
     }
 
+    const timeoutMs =
+      options.isStreamResponse || options.isMultipart
+        ? (this.config.transferTimeoutMs ?? DEFAULT_TRANSFER_TIMEOUT_MS)
+        : (this.config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
+
     try {
       const response = await fetch(url, {
         method,
         headers,
         body,
+        signal: AbortSignal.timeout(timeoutMs),
       });
 
       if (!response.ok) {
@@ -118,6 +124,16 @@ export class VikunjaApiClient {
     } catch (err: any) {
       if (err instanceof VikunjaError) {
         throw err;
+      }
+      if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
+        throw new VikunjaError({
+          status: 504,
+          code: 'REQUEST_TIMEOUT',
+          method,
+          path,
+          message: `Vikunja request timed out after ${timeoutMs} ms.`,
+          fieldErrors: [],
+        });
       }
       // Map general network error
       throw new VikunjaError({

@@ -244,7 +244,9 @@ function summaryFor(toolName: string, args: any, result: any): string {
     return `${result.action} **${safeSummaryText(result.target.title || 'task')}** (#${result.target.index ?? '?'} · id ${result.target.id}) in **${safeSummaryText(result.target.project?.title || 'project')}**.`;
   }
   if (result?.task?.title) {
-    return `Task **${safeSummaryText(result.task.title)}** (#${result.task.index ?? '?'} · id ${result.task.id}).`;
+    const portalRef =
+      result.task.portalRef || result.task.identifier || `#${result.task.index ?? '?'}`;
+    return `Task **${safeSummaryText(result.task.title)}** (${safeSummaryText(portalRef)} · id ${result.task.id}).`;
   }
   if (result?.count !== undefined && result?.project) {
     return `Count ${result.count} in **${safeSummaryText(result.project.title)}**.`;
@@ -283,6 +285,10 @@ function badRequest(message: string): VikunjaError {
     message,
     fieldErrors: [],
   });
+}
+
+function hasDefinedValue(value: Record<string, unknown> | undefined): boolean {
+  return !!value && Object.values(value).some((field) => field !== undefined);
 }
 
 export interface McpToolDefinition {
@@ -534,7 +540,9 @@ export const TOOLS: McpToolDefinition[] = [
           );
         case 'update':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
-          if (!args.fields) throw badRequest('fields object is required for update.');
+          if (!hasDefinedValue(args.fields)) {
+            throw badRequest('At least one task field is required for update.');
+          }
           return updateTask(
             client,
             args.taskSelector,
@@ -565,6 +573,7 @@ export const TOOLS: McpToolDefinition[] = [
             args.taskSelector,
             args.evidenceComment,
             args.projectSelector,
+            args.idempotencyKey,
           );
         case 'assign':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
@@ -761,6 +770,17 @@ export const TOOLS: McpToolDefinition[] = [
         return created;
       }
 
+      if (
+        args.action === 'update' &&
+        !hasDefinedValue({
+          title: args.title,
+          description: args.description,
+          hexColor: args.hexColor,
+        })
+      ) {
+        throw badRequest('At least one label field is required for update.');
+      }
+
       if (!args.labelSelector) throw badRequest('labelSelector is required.');
       const labelId = await resolveLabel(client, args.labelSelector);
 
@@ -894,6 +914,16 @@ export const TOOLS: McpToolDefinition[] = [
         case 'get':
           return getSavedFilter(client, args.filterId);
         case 'update':
+          if (
+            !hasDefinedValue({
+              title: args.title,
+              filterQuery: args.filterQuery,
+              description: args.description,
+              isFavorite: args.isFavorite,
+            })
+          ) {
+            throw badRequest('At least one saved-filter field is required for update.');
+          }
           return updateSavedFilter(client, args.filterId, {
             title: args.title,
             filterQuery: args.filterQuery,
@@ -1203,7 +1233,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   // Parse args
   let parsedArgs: any;
   try {
-    parsedArgs = tool.inputSchema.parse(args || {});
+    parsedArgs = tool.inputSchema.strict().parse(args || {});
   } catch (err: any) {
     const envelope = formatFailureEnvelope(
       'Invalid tool arguments.',

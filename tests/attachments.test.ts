@@ -157,16 +157,16 @@ describe('Attachment Upload, Verification and Download tests', () => {
         arrayBuffer: async () => cleanArrayBuffer,
       } as unknown as Response);
 
-      // Spy fs
-      const mkdirSpy = jest.spyOn(fs, 'mkdir').mockResolvedValue(undefined);
-      const writeFileSpy = jest.spyOn(fs, 'writeFile').mockResolvedValue(undefined);
-
-      const res = await downloadAttachment(client, 9005, 3001, 'downloaded.txt');
-      expect(res.success).toBe(true);
-      expect(res.size).toBe(5);
-
-      expect(mkdirSpy).toHaveBeenCalled();
-      expect(writeFileSpy).toHaveBeenCalledWith(expect.any(String), fileBuffer);
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vikunja-download-'));
+      const localClient = new VikunjaApiClient({ ...config, attachmentDownloadRoot: root });
+      try {
+        const res = await downloadAttachment(localClient, 9005, 3001, 'downloaded.txt');
+        expect(res.success).toBe(true);
+        expect(res.size).toBe(5);
+        expect(await fs.readFile(path.join(root, 'downloaded.txt'))).toEqual(fileBuffer);
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
     });
 
     it('streams a response body to disk in chunks (no full-buffer read)', async () => {
@@ -403,12 +403,39 @@ describe('Attachment Upload, Verification and Download tests', () => {
     } as Response;
 
     it('refuses to overwrite an existing file unless overwrite=true', async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vikunja-download-existing-'));
+      const existing = path.join(root, 'existing.txt');
+      await fs.writeFile(existing, 'keep');
+      const localClient = new VikunjaApiClient({ ...config, attachmentDownloadRoot: root });
       mockFetch.mockResolvedValueOnce(okTask);
-      jest.spyOn(fs, 'access').mockResolvedValue(undefined as any); // file exists
+      try {
+        await expect(downloadAttachment(localClient, 9005, 3001, 'existing.txt')).rejects.toThrow(
+          expect.objectContaining({ status: 409, code: 'FILE_EXISTS' }),
+        );
+        expect(await fs.readFile(existing, 'utf8')).toBe('keep');
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
 
-      await expect(downloadAttachment(client, 9005, 3001, 'existing.txt')).rejects.toThrow(
-        expect.objectContaining({ status: 409, code: 'FILE_EXISTS' }),
-      );
+    it('rejects a destination whose parent escapes through a symlink or junction', async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vikunja-download-root-'));
+      const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'vikunja-download-outside-'));
+      const linkedParent = path.join(root, 'linked');
+      await fs.symlink(outside, linkedParent, process.platform === 'win32' ? 'junction' : 'dir');
+      const localClient = new VikunjaApiClient({ ...config, attachmentDownloadRoot: root });
+      mockFetch.mockResolvedValueOnce(okTask);
+      try {
+        await expect(
+          downloadAttachment(localClient, 9005, 3001, path.join('linked', 'escape.txt')),
+        ).rejects.toMatchObject({ status: 403, code: 'FORBIDDEN' });
+        await expect(fs.stat(path.join(outside, 'escape.txt'))).rejects.toMatchObject({
+          code: 'ENOENT',
+        });
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+        await fs.rm(outside, { recursive: true, force: true });
+      }
     });
 
     it('rejects an attachment larger than the configured limit', async () => {

@@ -266,6 +266,73 @@ describe('MCP Server Registration and Dispatching tests', () => {
     expect(response.content[0].text).toContain('VALIDATION_ERROR');
   });
 
+  it('rejects unknown arguments instead of silently stripping them', async () => {
+    const handler = (server as any)._requestHandlers.get('tools/call');
+
+    const response = await handler({
+      method: 'tools/call',
+      params: {
+        name: 'vikunja_auth',
+        arguments: { action: 'status', unexpected: true },
+      },
+    });
+
+    expect(response.isError).toBe(true);
+    expect(response.content[0].text).toContain('VALIDATION_ERROR');
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('uses the compact portal reference in get-task summaries', async () => {
+    const handler = (server as any)._requestHandlers.get('tools/call');
+    const task = {
+      id: 99,
+      index: 5,
+      identifier: 'ALPHA-5',
+      title: 'Compact task',
+      project_id: 101,
+      project: { title: 'Alpha' },
+      done: false,
+      priority: 2,
+    };
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify(task),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify(task),
+      } as Response);
+
+    const response = await handler({
+      method: 'tools/call',
+      params: { name: 'vikunja_tasks', arguments: { action: 'get', taskSelector: 99 } },
+    });
+
+    expect(response.isError).not.toBe(true);
+    expect(response.content[0].text).toContain('(ALPHA-5 · id 99)');
+    expect(response.content[0].text).not.toContain('#?');
+  });
+
+  it.each([
+    ['vikunja_tasks', { action: 'update', taskSelector: 99, fields: {} }],
+    ['vikunja_labels', { action: 'update', labelSelector: 9 }],
+    ['vikunja_filters', { action: 'update', filterId: 7 }],
+  ])('rejects empty write payloads for %s', async (name, arguments_) => {
+    const handler = (server as any)._requestHandlers.get('tools/call');
+
+    const response = await handler({
+      method: 'tools/call',
+      params: { name, arguments: arguments_ },
+    });
+
+    expect(response.isError).toBe(true);
+    expect(response.content[0].text).toContain('VALIDATION_ERROR');
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
   it('should fail self_check connection diagnostics gracefully if connection fails', async () => {
     const handler = (server as any)._requestHandlers.get('tools/call');
 

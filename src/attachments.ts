@@ -149,6 +149,77 @@ export function resolveSafePath(root: string, target: string): string {
   return absoluteTarget;
 }
 
+function forbiddenDestination(message: string): VikunjaError {
+  return new VikunjaError({
+    status: 403,
+    code: 'FORBIDDEN',
+    method: 'WRITE',
+    path: '/downloads',
+    message,
+    fieldErrors: [],
+  });
+}
+
+function fileExistsError(destination: string): VikunjaError {
+  return new VikunjaError({
+    status: 409,
+    code: 'FILE_EXISTS',
+    method: 'WRITE',
+    path: '/downloads',
+    message: `Refusing to overwrite existing file "${destination}". Pass overwrite=true to replace it.`,
+    fieldErrors: [],
+  });
+}
+
+export async function validateSafeDestination(
+  root: string,
+  target: string,
+  overwrite = false,
+): Promise<string> {
+  const destination = resolveSafePath(root, target);
+  const parent = path.dirname(destination);
+  await fs.mkdir(root, { recursive: true });
+  await fs.mkdir(parent, { recursive: true });
+
+  const [realRoot, realParent] = await Promise.all([fs.realpath(root), fs.realpath(parent)]);
+  const relativeParent = path.relative(realRoot, realParent);
+  if (
+    relativeParent.startsWith('..' + path.sep) ||
+    relativeParent === '..' ||
+    path.isAbsolute(relativeParent)
+  ) {
+    throw forbiddenDestination(
+      'Download destination escapes the configured sandbox through a symbolic link.',
+    );
+  }
+
+  try {
+    const existing = await fs.lstat(destination);
+    if (existing.isSymbolicLink()) {
+      throw forbiddenDestination('Refusing to write through a symbolic-link destination.');
+    }
+    if (!existing.isFile()) {
+      throw forbiddenDestination('Download destination must be a regular file.');
+    }
+    if (!overwrite) throw fileExistsError(destination);
+  } catch (error: any) {
+    if (error instanceof VikunjaError) throw error;
+    if (error?.code !== 'ENOENT') throw error;
+  }
+
+  return destination;
+}
+
+export async function openSafeDestination(root: string, target: string, overwrite = false) {
+  const destination = await validateSafeDestination(root, target, overwrite);
+  try {
+    return { destination, handle: await fs.open(destination, overwrite ? 'w' : 'wx') };
+  } catch (error: any) {
+    if (error?.code === 'EEXIST') throw fileExistsError(destination);
+    throw error;
+  }
+}
+
 export async function uploadAttachment(
   client: VikunjaApiClient,
   taskSelector: string | number,
@@ -432,15 +503,6 @@ export interface DownloadResult {
   taskUrl: string; // browser-friendly link for a signed-in human
 }
 
-async function fileExists(p: string): Promise<boolean> {
-  try {
-    await fs.access(p);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export async function downloadAttachment(
   client: VikunjaApiClient,
   taskSelector: string | number,
@@ -465,27 +527,18 @@ export async function downloadAttachment(
     fileName = path.basename(safeDestPath);
   } else {
     const meta = (await listAttachments(client, task.id)).find((a) => a.id === attachmentId);
-    fileName =
+    fileName = path.basename(
       meta && meta.fileName && meta.fileName !== 'unknown'
         ? meta.fileName
-        : `attachment-${attachmentId}`;
+        : `attachment-${attachmentId}`,
+    );
     safeDestPath = resolveSafePath(
       downloadRoot,
       path.join(String(task.id), String(attachmentId), fileName),
     );
   }
 
-  // Refuse to clobber an existing file unless the caller opted in.
-  if (!options.overwrite && (await fileExists(safeDestPath))) {
-    throw new VikunjaError({
-      status: 409,
-      code: 'FILE_EXISTS',
-      method: 'GET',
-      path: `/tasks/${task.id}/attachments/${attachmentId}`,
-      message: `Refusing to overwrite existing file "${safeDestPath}". Pass overwrite=true to replace it.`,
-      fieldErrors: [],
-    });
-  }
+  await validateSafeDestination(downloadRoot, safeDestPath, options.overwrite === true);
 
   const response = await client.request<Response>(
     'GET',
@@ -535,17 +588,19 @@ export async function downloadAttachment(
       fieldErrors: [],
     });
 
-  await fs.mkdir(path.dirname(safeDestPath), { recursive: true });
-
   const hash = crypto.createHash('sha256');
   let size = 0;
   const body: any = (response as unknown as { body?: any }).body;
+  const { handle } = await openSafeDestination(
+    downloadRoot,
+    safeDestPath,
+    options.overwrite === true,
+  );
 
-  if (body && typeof body[Symbol.asyncIterator] === 'function') {
-    // Stream chunks straight to disk so a large attachment never buffers wholly
-    // in memory; abort (and remove the partial file) past the ceiling.
-    const handle = await fs.open(safeDestPath, 'w');
-    try {
+  try {
+    if (body && typeof body[Symbol.asyncIterator] === 'function') {
+      // Stream chunks straight to disk so a large attachment never buffers wholly
+      // in memory; abort (and remove the partial file) past the ceiling.
       for await (const chunk of body) {
         const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
         size += buf.length;
@@ -554,21 +609,21 @@ export async function downloadAttachment(
         await handle.write(buf);
       }
       if (expectedSize !== undefined && size !== expectedSize) throw sizeMismatch(size);
-    } catch (err) {
-      await handle.close().catch(() => {});
-      await fs.unlink(safeDestPath).catch(() => {});
-      throw err;
+    } else {
+      // Fallback (mocks / non-streaming bodies): buffer, verify, then write.
+      const fileData = Buffer.from(await response.arrayBuffer());
+      size = fileData.length;
+      if (expectedSize !== undefined && size !== expectedSize) throw sizeMismatch(size);
+      if (size > maxBytes) throw tooLarge(size);
+      hash.update(fileData);
+      await handle.writeFile(fileData);
     }
+  } catch (err) {
     await handle.close();
-  } else {
-    // Fallback (mocks / non-streaming bodies): buffer, verify, then write.
-    const fileData = Buffer.from(await response.arrayBuffer());
-    size = fileData.length;
-    if (expectedSize !== undefined && size !== expectedSize) throw sizeMismatch(size);
-    if (size > maxBytes) throw tooLarge(size);
-    hash.update(fileData);
-    await fs.writeFile(safeDestPath, fileData);
+    await fs.unlink(safeDestPath).catch(() => {});
+    throw err;
   }
+  await handle.close();
 
   const checksum = hash.digest('hex');
 

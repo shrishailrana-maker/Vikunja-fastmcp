@@ -66,6 +66,7 @@ export interface CompactTaskListItem {
   title: string;
   done: boolean;
   priority: number;
+  creator: string | null;
 }
 
 export interface CompactTask extends CompactTaskListItem {
@@ -227,6 +228,7 @@ function normalizeCompactTask(task: any, projectRef: ProjectRef): CompactTask {
     title: task.title,
     done: !!task.done,
     priority: task.priority || 0,
+    creator: task.created_by?.username ?? null,
   };
 }
 
@@ -238,6 +240,7 @@ function normalizeCompactTaskListItem(task: any, projectRef: ProjectRef): Compac
     title: compact.title,
     done: compact.done,
     priority: compact.priority,
+    creator: compact.creator,
   };
 }
 
@@ -578,7 +581,9 @@ export async function getTask(
   commentLimit = 5,
   requestedResponseMode?: ResponseMode,
 ): Promise<ConsolidatedTaskDetails | StandardTaskDetails | CompactTaskDetails> {
-  const taskRef = await resolveTask(client, taskSelector, projectSelector);
+  const taskRef = await resolveTask(client, taskSelector, projectSelector, {
+    includeRawTask: true,
+  });
   const webUrl = client.getConfig().vikunjaWebUrl;
   const responseMode = selectedResponseMode(client, requestedResponseMode);
 
@@ -587,7 +592,10 @@ export async function getTask(
     includeBundledDetails && commentLimit > 0
       ? `/tasks/${taskRef.id}?expand=comments`
       : `/tasks/${taskRef.id}`;
-  const rawTask = await client.request<any>('GET', taskPath);
+  const rawTask =
+    includeBundledDetails && commentLimit > 0
+      ? await client.request<any>('GET', taskPath)
+      : taskRef.rawTask;
 
   if (responseMode === 'compact') {
     return { task: normalizeCompactTask(rawTask, taskRef.project) };
@@ -725,7 +733,7 @@ export async function updateTask(
   }
 
   return {
-    action: 'updated',
+    action: 'unchanged',
     target: {
       id: currentTask.id,
       index: currentTask.index,
@@ -824,7 +832,7 @@ export async function deleteTask(
 export interface CloseWithEvidenceResult {
   comment: { id: number; author: { id?: number; username?: string }; created?: string };
   task: WriteEcho;
-  changed: ['comment', 'done'];
+  changed: ('comment' | 'done')[];
   composedCalls: string[];
 }
 
@@ -833,28 +841,45 @@ export async function closeWithEvidence(
   taskSelector: string | number,
   evidenceComment: string,
   projectSelector?: { id?: number; title?: string },
+  idempotencyKey?: string,
 ): Promise<CloseWithEvidenceResult> {
+  const projectKey = projectSelector?.id ?? projectSelector?.title?.toLowerCase() ?? 'global';
+  const cacheKey = idempotencyKey
+    ? `close-with-evidence:${projectKey}:${String(taskSelector).trim()}:${idempotencyKey}`
+    : '';
+  if (cacheKey) {
+    const cached = idempotency.get(cacheKey);
+    if (cached) return cached;
+  }
   const taskRef = await resolveTask(client, taskSelector, projectSelector);
   const composedCalls = [];
 
   // 1. Post evidence comment
   composedCalls.push(`POST /tasks/${taskRef.id}/comments`);
-  const comment = await createComment(client, taskRef.id, evidenceComment);
+  const comment = await createComment(
+    client,
+    taskRef.id,
+    evidenceComment,
+    undefined,
+    idempotencyKey ? `close-with-evidence:${idempotencyKey}` : undefined,
+  );
 
   // 2. Close task (if comment succeeds)
-  composedCalls.push(`PATCH /tasks/${taskRef.id}`);
   const taskEcho = await updateTask(client, taskRef.id, { done: true });
+  if (taskEcho.action !== 'unchanged') composedCalls.push(`PATCH /tasks/${taskRef.id}`);
 
-  return {
+  const result: CloseWithEvidenceResult = {
     comment: {
       id: comment.id,
       author: comment.author,
       created: comment.created,
     },
     task: taskEcho,
-    changed: ['comment', 'done'],
+    changed: taskEcho.action === 'unchanged' ? ['comment'] : ['comment', 'done'],
     composedCalls,
   };
+  if (cacheKey) idempotency.set(cacheKey, result);
+  return result;
 }
 
 export async function resolveUser(
@@ -989,6 +1014,17 @@ export async function assignTask(
 ): Promise<WriteEcho> {
   const taskRef = await resolveTask(client, taskSelector, projectSelector);
   const userId = await resolveUser(client, userSelector);
+  const target = {
+    id: taskRef.id,
+    index: taskRef.index,
+    identifier: taskRef.identifier,
+    project: taskRef.project,
+    title: taskRef.title,
+  };
+
+  if (taskRef.assignees.some((user) => user.id === userId)) {
+    return { action: 'unchanged', target };
+  }
 
   await client.request<any>('POST', `/tasks/${taskRef.id}/assignees`, {
     body: { user_id: userId },
@@ -996,13 +1032,7 @@ export async function assignTask(
 
   return {
     action: 'updated',
-    target: {
-      id: taskRef.id,
-      index: taskRef.index,
-      identifier: taskRef.identifier,
-      project: taskRef.project,
-      title: taskRef.title,
-    },
+    target,
   };
 }
 
@@ -1014,18 +1044,23 @@ export async function unassignTask(
 ): Promise<WriteEcho> {
   const taskRef = await resolveTask(client, taskSelector, projectSelector);
   const userId = await resolveUser(client, userSelector);
+  const target = {
+    id: taskRef.id,
+    index: taskRef.index,
+    identifier: taskRef.identifier,
+    project: taskRef.project,
+    title: taskRef.title,
+  };
+
+  if (!taskRef.assignees.some((user) => user.id === userId)) {
+    return { action: 'unchanged', target };
+  }
 
   await client.request<any>('DELETE', `/tasks/${taskRef.id}/assignees/${userId}`);
 
   return {
     action: 'updated',
-    target: {
-      id: taskRef.id,
-      index: taskRef.index,
-      identifier: taskRef.identifier,
-      project: taskRef.project,
-      title: taskRef.title,
-    },
+    target,
   };
 }
 
@@ -1082,19 +1117,25 @@ export async function removeLabel(
   projectSelector?: { id?: number; title?: string },
 ): Promise<WriteEcho> {
   const taskRef = await resolveTask(client, taskSelector, projectSelector);
-  const labelId = await resolveLabel(client, labelTitle);
+  const target = {
+    id: taskRef.id,
+    index: taskRef.index,
+    identifier: taskRef.identifier,
+    project: taskRef.project,
+    title: taskRef.title,
+  };
+  const appliedLabel = taskRef.labels.find(
+    (label) => label.title.toLowerCase() === labelTitle.toLowerCase(),
+  );
+  if (!appliedLabel) {
+    return { action: 'unchanged', target };
+  }
 
-  await client.request<any>('DELETE', `/tasks/${taskRef.id}/labels/${labelId}`);
+  await client.request<any>('DELETE', `/tasks/${taskRef.id}/labels/${appliedLabel.id}`);
 
   return {
     action: 'updated',
-    target: {
-      id: taskRef.id,
-      index: taskRef.index,
-      identifier: taskRef.identifier,
-      project: taskRef.project,
-      title: taskRef.title,
-    },
+    target,
   };
 }
 

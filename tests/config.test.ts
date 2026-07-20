@@ -45,6 +45,13 @@ describe('Config tests', () => {
       );
     });
 
+    it.each(['ftp://vikunja.example.com', 'file:///tmp/vikunja'])(
+      'should reject non-HTTP API URLs: %s',
+      (url) => {
+        expect(() => normalizeUrl(url)).toThrow('must use http:// or https://');
+      },
+    );
+
     it('should throw on invalid URLs', () => {
       expect(() => normalizeUrl('invalid-url')).toThrow('Invalid VIKUNJA_URL');
     });
@@ -62,6 +69,8 @@ describe('Config tests', () => {
       expect(config.vikunjaToken).toBe(TEST_TOKEN);
       expect(config.vikunjaWebUrl).toBe('https://vikunja-web.example.com/');
       expect(config.responseMode).toBe('compact');
+      expect(config.requestTimeoutMs).toBe(30_000);
+      expect(config.transferTimeoutMs).toBe(60_000);
     });
 
     it('accepts an operator-selected MCP response mode', () => {
@@ -82,6 +91,56 @@ describe('Config tests', () => {
           VIKUNJA_MCP_RESPONSE_MODE: 'verbose',
         }),
       ).toThrow('VIKUNJA_MCP_RESPONSE_MODE');
+    });
+
+    it('accepts an operator-selected request timeout', () => {
+      const config = loadConfig({
+        VIKUNJA_URL: 'https://vikunja.example.com/api/v2',
+        VIKUNJA_API_TOKEN: TEST_TOKEN,
+        VIKUNJA_REQUEST_TIMEOUT_MS: '45000',
+      });
+
+      expect(config.requestTimeoutMs).toBe(45_000);
+    });
+
+    it.each(['0', '-1', 'not-a-number'])('rejects an invalid request timeout: %s', (value) => {
+      expect(() =>
+        loadConfig({
+          VIKUNJA_URL: 'https://vikunja.example.com/api/v2',
+          VIKUNJA_API_TOKEN: TEST_TOKEN,
+          VIKUNJA_REQUEST_TIMEOUT_MS: value,
+        }),
+      ).toThrow('VIKUNJA_REQUEST_TIMEOUT_MS');
+    });
+
+    it('accepts an operator-selected transfer timeout', () => {
+      const config = loadConfig({
+        VIKUNJA_URL: 'https://vikunja.example.com/api/v2',
+        VIKUNJA_API_TOKEN: TEST_TOKEN,
+        VIKUNJA_TRANSFER_TIMEOUT_MS: '90000',
+      });
+
+      expect(config.transferTimeoutMs).toBe(90_000);
+    });
+
+    it.each(['0', '-1', 'not-a-number'])('rejects an invalid transfer timeout: %s', (value) => {
+      expect(() =>
+        loadConfig({
+          VIKUNJA_URL: 'https://vikunja.example.com/api/v2',
+          VIKUNJA_API_TOKEN: TEST_TOKEN,
+          VIKUNJA_TRANSFER_TIMEOUT_MS: value,
+        }),
+      ).toThrow('VIKUNJA_TRANSFER_TIMEOUT_MS');
+    });
+
+    it('rejects a non-HTTP web URL', () => {
+      expect(() =>
+        loadConfig({
+          VIKUNJA_URL: 'https://vikunja.example.com/api/v2',
+          VIKUNJA_API_TOKEN: TEST_TOKEN,
+          VIKUNJA_WEB_URL: 'javascript:alert(1)',
+        }),
+      ).toThrow('VIKUNJA_WEB_URL must use http:// or https://');
     });
 
     it('should fall back to API root base for webUrl if not set', () => {

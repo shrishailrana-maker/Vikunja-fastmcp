@@ -1,17 +1,45 @@
 # Changelog
 
-## Unreleased
+## 2.3.996 - 2026-07-20
 
-- Make `self_check` compact by default and add `detail: "full"` for capability
-  inventories and local diagnostic paths.
-- Paginate comment listings with a 20-item default and a 100-item maximum,
-  returning normalized continuation metadata.
-- Update the packaged agent skill to avoid routine self-check calls and prefer
-  scoped, paginated, count-only reads.
-- Default task list/get responses to compact identity and state fields, with
-  explicit `standard` and `full` modes plus `VIKUNJA_MCP_RESPONSE_MODE`.
-- Reduce the default task page from 25 to 20, hoist project metadata out of
-  compact list items, and omit submitted evidence text from close receipts.
+### Performance And Token Usage
+
+- Make compact task list and get responses the default, with explicit
+  `standard` and `full` modes plus the `VIKUNJA_MCP_RESPONSE_MODE` server
+  default.
+- Reduce the default task page from 25 to 20, cap each project page at 100,
+  hoist project metadata out of compact list items, and retain truthful
+  continuation metadata.
+- Include the creator username in compact task responses without expanding a
+  full user object or requiring a second standard-mode request.
+- Reuse the identity-resolution payload for compact and standard task reads,
+  removing a duplicate task GET from the common read path.
+- Make `self_check` compact by default; `detail: "full"` remains available for
+  capability inventories and local diagnostic paths.
+- Paginate comment listings with a 20-item default and a 100-item ceiling
+  instead of returning unbounded comment history.
+- Omit submitted evidence text from compact close receipts and update the
+  packaged agent skill to prefer scoped, paginated, and count-only reads.
+
+### Correctness And Reliability
+
+- Reject unknown tool arguments and empty update payloads instead of silently
+  discarding fields or issuing meaningless writes.
+- Return honest `unchanged` receipts for no-op task updates, assignments, and
+  label mutations.
+- Make `close_with_evidence` retries process-locally idempotent so evidence
+  comments are not duplicated after a lost response.
+- Add a 30-second timeout for ordinary API requests and a separate 60-second
+  timeout for streamed or multipart transfers. Both are operator-configurable.
+- Recover a valid `dist-old` after interrupted atomic builds.
+- Expand the OpenAPI capability gate to every route used by the public source.
+
+### Security
+
+- Require HTTP(S) API and browser URLs.
+- Prevent download and export sandbox escapes through symlinked or junctioned
+  parent paths.
+- Neutralize spreadsheet formula-leading cells in generated CSV exports.
 
 ## 2.3.995 - 2026-07-12
 

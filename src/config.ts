@@ -25,19 +25,39 @@ export interface Config {
   // Optional so existing Config literals keep compiling; consumers use compact
   // when no explicit mode is supplied.
   responseMode?: ResponseMode;
+  // Per-request timeout for ordinary JSON API calls.
+  requestTimeoutMs?: number;
+  // Longer timeout for streamed responses and multipart transfers.
+  transferTimeoutMs?: number;
 }
 
 // Default single-attachment size ceiling (100 MiB) when the env var is unset.
 export const DEFAULT_MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024;
+export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+export const DEFAULT_TRANSFER_TIMEOUT_MS = 60_000;
+
+function requireHttpUrl(parsed: URL, variableName: string): void {
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`${variableName} must use http:// or https://.`);
+  }
+}
+
+function positiveIntegerEnv(
+  env: NodeJS.ProcessEnv,
+  variableName: string,
+  defaultValue: number,
+): number {
+  if (env[variableName] === undefined) return defaultValue;
+  const parsed = Number(env[variableName]);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${variableName} must be a positive integer.`);
+  }
+  return parsed;
+}
 
 export function normalizeUrl(urlStr: string): { apiUrl: string; webUrl: string } {
   if (!urlStr) {
     throw new Error('VIKUNJA_URL is required but not set.');
-  }
-
-  // Reject v1 URLs
-  if (urlStr.includes('/api/v1')) {
-    throw new Error('Vikunja FastMCP V2 does not support v1 API routes (/api/v1).');
   }
 
   // Parse URL
@@ -45,7 +65,12 @@ export function normalizeUrl(urlStr: string): { apiUrl: string; webUrl: string }
   try {
     parsed = new URL(urlStr);
   } catch {
-    throw new Error(`Invalid VIKUNJA_URL: ${urlStr}`);
+    throw new Error('Invalid VIKUNJA_URL.');
+  }
+  requireHttpUrl(parsed, 'VIKUNJA_URL');
+
+  if (/\/api\/v1(?:\/|$)/i.test(parsed.pathname)) {
+    throw new Error('Vikunja FastMCP V2 does not support v1 API routes (/api/v1).');
   }
 
   let origin = parsed.origin;
@@ -94,14 +119,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 
   let normalizedWebUrl = webUrl;
   if (rawWebUrl) {
+    let parsedWeb: URL;
     try {
-      const parsedWeb = new URL(rawWebUrl);
-      normalizedWebUrl = parsedWeb.toString();
-      if (!normalizedWebUrl.endsWith('/')) {
-        normalizedWebUrl += '/';
-      }
+      parsedWeb = new URL(rawWebUrl);
     } catch {
-      throw new Error(`Invalid VIKUNJA_WEB_URL: ${rawWebUrl}`);
+      throw new Error('Invalid VIKUNJA_WEB_URL.');
+    }
+    requireHttpUrl(parsedWeb, 'VIKUNJA_WEB_URL');
+    normalizedWebUrl = parsedWeb.toString();
+    if (!normalizedWebUrl.endsWith('/')) {
+      normalizedWebUrl += '/';
     }
   }
 
@@ -123,6 +150,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     responseMode = rawResponseMode as ResponseMode;
   }
 
+  const requestTimeoutMs = positiveIntegerEnv(
+    env,
+    'VIKUNJA_REQUEST_TIMEOUT_MS',
+    DEFAULT_REQUEST_TIMEOUT_MS,
+  );
+  const transferTimeoutMs = positiveIntegerEnv(
+    env,
+    'VIKUNJA_TRANSFER_TIMEOUT_MS',
+    DEFAULT_TRANSFER_TIMEOUT_MS,
+  );
+
   return {
     vikunjaUrl: apiUrl,
     vikunjaToken: token,
@@ -130,5 +168,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     attachmentDownloadRoot,
     maxAttachmentBytes,
     responseMode,
+    requestTimeoutMs,
+    transferTimeoutMs,
   };
 }

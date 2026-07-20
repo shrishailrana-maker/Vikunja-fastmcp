@@ -104,7 +104,7 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     {
       action: 'close_with_evidence',
       required: ['taskSelector', 'evidenceComment'],
-      optional: taskSelector,
+      optional: [...taskSelector, 'idempotencyKey'],
       execution: 'MCP-composed comment create followed by task close',
     },
     {

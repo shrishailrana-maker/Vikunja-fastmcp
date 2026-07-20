@@ -163,6 +163,7 @@ describe('Identity and Resolution Cache tests', () => {
         project: { id: 101, title: 'Alpha' },
         title: 'My Task',
         labels: [],
+        assignees: [],
       });
     });
 
@@ -262,6 +263,7 @@ describe('Identity and Resolution Cache tests', () => {
         project: { id: 102, title: 'Beta' },
         title: 'Task Title',
         labels: [],
+        assignees: [],
       });
       const lookupUrl = mockFetch.mock.calls[1][0] as string;
       expect(new URL(lookupUrl).searchParams.get('filter')).toBe('index = 305');

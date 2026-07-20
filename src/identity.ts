@@ -25,11 +25,23 @@ export interface TaskRef {
   project: ProjectRef;
   title: string;
   labels: { id: number; title: string }[];
+  assignees: { id: number; username: string }[];
+  rawTask?: any;
+}
+
+interface ResolveTaskOptions {
+  includeRawTask?: boolean;
 }
 
 function taskLabels(task: any): { id: number; title: string }[] {
   return Array.isArray(task.labels)
     ? task.labels.map((label: any) => ({ id: label.id, title: label.title }))
+    : [];
+}
+
+function taskAssignees(task: any): { id: number; username: string }[] {
+  return Array.isArray(task.assignees)
+    ? task.assignees.map((user: any) => ({ id: user.id, username: user.username }))
     : [];
 }
 
@@ -206,6 +218,7 @@ export async function resolveTask(
   client: VikunjaApiClient,
   taskSelector: string | number,
   projectSelector?: { id?: number; title?: string },
+  options: ResolveTaskOptions = {},
 ): Promise<TaskRef> {
   const selectorStr = String(taskSelector).trim();
   const isDigits = /^\d+$/.test(selectorStr);
@@ -253,6 +266,8 @@ export async function resolveTask(
         project,
         title: task.title,
         labels: taskLabels(task),
+        assignees: taskAssignees(task),
+        ...(options.includeRawTask ? { rawTask: task } : {}),
       };
     } catch (err: any) {
       if (err instanceof VikunjaError && err.status === 404) {
@@ -363,6 +378,8 @@ export async function resolveTask(
       project: { id: task.project_id, title: project.title },
       title: task.title,
       labels: taskLabels(task),
+      assignees: taskAssignees(task),
+      ...(options.includeRawTask ? { rawTask: task } : {}),
     };
   } catch (err: any) {
     if (err instanceof VikunjaError && err.status === 404) {

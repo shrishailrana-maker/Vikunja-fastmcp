@@ -18,7 +18,9 @@ import {
   getTask,
   updateTask,
   deleteTask,
+  closeWithEvidence,
 } from '../src/tasks.js';
+import { idempotency } from '../src/idempotency.js';
 
 describe('Tasks List and Scoping tests', () => {
   const config = {
@@ -34,6 +36,7 @@ describe('Tasks List and Scoping tests', () => {
   beforeEach(() => {
     client = new VikunjaApiClient(config);
     mockFetch = jest.spyOn(global, 'fetch');
+    idempotency.clear();
   });
 
   afterEach(() => {
@@ -237,6 +240,7 @@ describe('Tasks List and Scoping tests', () => {
         title: 'Example task 1 with a realistic concise title',
         done: false,
         priority: 1,
+        creator: 'example-tester',
       });
       expect(compact.truncated).toBe(true);
       expect(JSON.stringify(compact).length).toBeLessThan(JSON.stringify(standard).length * 0.4);
@@ -476,37 +480,25 @@ describe('Tasks List and Scoping tests', () => {
     });
 
     it('defaults to a compact task without fetching comments or attachments', async () => {
-      mockFetch
-        .mockResolvedValueOnce({
-          ok: true,
-          status: 200,
-          text: async () =>
-            JSON.stringify({
-              id: 9005,
-              index: 305,
-              identifier: 'ALPHA-305',
-              title: 'Task Title',
-              project_id: 101,
-              project: { title: 'Alpha' },
-            }),
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          status: 200,
-          text: async () =>
-            JSON.stringify({
-              id: 9005,
-              index: 305,
-              identifier: 'ALPHA-305',
-              title: 'Task Title',
-              project_id: 101,
-              description: '<p>Large evidence body.</p>',
-              done: false,
-              priority: 4,
-              labels: [{ id: 9, title: 'bug' }],
-              assignees: [{ id: 8, username: 'developer' }],
-            }),
-        } as Response);
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            id: 9005,
+            index: 305,
+            identifier: 'ALPHA-305',
+            title: 'Task Title',
+            project_id: 101,
+            project: { title: 'Alpha' },
+            description: '<p>Large evidence body.</p>',
+            done: false,
+            priority: 4,
+            created_by: { id: 7, username: 'example-tester' },
+            labels: [{ id: 9, title: 'bug' }],
+            assignees: [{ id: 8, username: 'developer' }],
+          }),
+      } as Response);
 
       const details = await getTask(client, 9005);
 
@@ -518,10 +510,11 @@ describe('Tasks List and Scoping tests', () => {
           title: 'Task Title',
           done: false,
           priority: 4,
+          creator: 'example-tester',
         },
       });
-      expect(mockFetch).toHaveBeenCalledTimes(2);
-      expect(mockFetch.mock.calls[1][0]).not.toContain('expand=comments');
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockFetch.mock.calls[0][0]).not.toContain('expand=comments');
     });
 
     it('falls back to the comments endpoint when the server does not embed them', async () => {
@@ -624,6 +617,88 @@ describe('Tasks List and Scoping tests', () => {
       const body = JSON.parse(patchCall[1].body);
       expect(body).toEqual([{ op: 'replace', path: '/title', value: 'New Title' }]);
       expect(body.some((operation: any) => operation.path === '/done')).toBe(false);
+    });
+
+    it('reports an unchanged receipt when an update has no effective changes', async () => {
+      const existing = {
+        id: 9005,
+        index: 305,
+        identifier: 'ALPHA-305',
+        title: 'Already current',
+        project_id: 101,
+        project: { title: 'Alpha' },
+        done: false,
+        priority: 3,
+      };
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify(existing),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify(existing),
+        } as Response);
+
+      const echo = await updateTask(client, 9005, { title: 'Already current', priority: 3 });
+
+      expect(echo.action).toBe('unchanged');
+      expect(mockFetch.mock.calls.some((call: any) => call[1]?.method === 'PATCH')).toBe(false);
+    });
+
+    it('makes close_with_evidence retry-safe and reports only fields actually changed', async () => {
+      const task = {
+        id: 9005,
+        index: 305,
+        identifier: 'ALPHA-305',
+        title: 'Already closed',
+        project_id: 101,
+        project: { title: 'Alpha' },
+        done: true,
+      };
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify(task),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify(task),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 201,
+          text: async () =>
+            JSON.stringify({
+              id: 77,
+              comment: '<p>Verified.</p>',
+              author: { id: 4, username: 'tester' },
+              created: '2026-07-20T00:00:00Z',
+            }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify(task),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify(task),
+        } as Response);
+
+      const first = await closeWithEvidence(client, 9005, 'Verified.', undefined, 'close-once');
+      const callCount = mockFetch.mock.calls.length;
+      const second = await closeWithEvidence(client, 9005, 'Verified.', undefined, 'close-once');
+
+      expect(first.task.action).toBe('unchanged');
+      expect(first.changed).toEqual(['comment']);
+      expect(second).toEqual(first);
+      expect(mockFetch).toHaveBeenCalledTimes(callCount);
     });
 
     it('falls back to a writable-field PUT when Vikunja rejects its own subscription on PATCH', async () => {

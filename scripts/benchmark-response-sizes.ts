@@ -54,7 +54,7 @@ const fullDiagnostic = {
     authenticationState: 'authenticated',
     currentUser: { id: 7, username: 'example-user' },
     apiContractVersion: 'v2',
-    packageVersion: '2.3.995',
+    packageVersion: '2.3.996',
     projectCount: 20,
     projects: Array.from({ length: 20 }, (_, index) => ({
       id: index + 1,
@@ -78,7 +78,7 @@ const basicDiagnostic = {
     authenticationState: 'authenticated',
     currentUser: { id: 7, username: 'example-user' },
     apiContractVersion: 'v2',
-    packageVersion: '2.3.995',
+    packageVersion: '2.3.996',
     projectCount: 20,
     attachmentDownloadRootWritable: true,
   },

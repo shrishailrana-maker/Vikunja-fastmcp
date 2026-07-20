@@ -319,6 +319,47 @@ describe('restored compatibility capabilities', () => {
     }
   });
 
+  it('neutralizes spreadsheet formulas in CSV project exports', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vikunja-project-export-'));
+    const localClient = new VikunjaApiClient({ ...config, attachmentDownloadRoot: root });
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ id: 2, title: 'Alpha' }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            items: [
+              {
+                id: 10,
+                index: 1,
+                identifier: 'ALPHA-1',
+                title: '=HYPERLINK("https://example.invalid")',
+                description: '+SUM(1,1)',
+                project_id: 2,
+              },
+            ],
+            page: 1,
+            per_page: 1000,
+            total: 1,
+            total_pages: 1,
+          }),
+      } as Response);
+
+    try {
+      await exportProject(localClient, { id: 2 }, 'csv', 'tasks.csv');
+      const csv = await fs.readFile(path.join(root, 'tasks.csv'), 'utf8');
+      expect(csv).toContain('"\'=HYPERLINK(""https://example.invalid"")"');
+      expect(csv).toContain('"\'+SUM(1,1)"');
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('enforces the download size ceiling for user exports', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vikunja-user-export-'));
     const limitedClient = new VikunjaApiClient({

@@ -10,7 +10,7 @@ All responses contain a short Markdown summary followed by exactly one fenced JS
 
 Numeric task selectors are global database IDs. A portal reference such as `#305` or `PRJ-305` requires an explicit `projectSelector`. Task lists require exactly one explicit scope: `projectSelector`, `projects`, or `allProjects: true`. Writes echo task title, project title/id, portal index, identifier, and global ID.
 
-Normalized task records include `creator: { id, username }` when Vikunja supplies `created_by`. Project exports always include creator identity; comments are included only when `includeComments: true` is requested.
+Compact task lists include the creator username as `creator` when Vikunja supplies `created_by`; standard and full task records use `creator: { id, username }`. Project exports always include creator identity; comments are included only when `includeComments: true` is requested.
 
 ## Tools
 
@@ -94,7 +94,7 @@ Normalized task records include `creator: { id, username }` when Vikunja supplie
 | `delete` | taskSelector | projectSelector (required for #index or PRJ-index) | Identity preflight then DELETE /tasks/{id} |
 | `close` | taskSelector | projectSelector (required for #index or PRJ-index) | Identity/read preflight then task update transport |
 | `reopen` | taskSelector | projectSelector (required for #index or PRJ-index) | Identity/read preflight then task update transport |
-| `close_with_evidence` | taskSelector, evidenceComment | projectSelector (required for #index or PRJ-index) | MCP-composed comment create followed by task close |
+| `close_with_evidence` | taskSelector, evidenceComment | projectSelector (required for #index or PRJ-index), idempotencyKey | MCP-composed comment create followed by task close |
 | `assign` | taskSelector, userSelector | projectSelector (required for #index or PRJ-index) | Identity preflight then POST assignee |
 | `unassign` | taskSelector, userSelector | projectSelector (required for #index or PRJ-index) | Identity preflight then DELETE assignee |
 | `list-assignees` | taskSelector | projectSelector (required for #index or PRJ-index) | Direct GET after identity resolution |
@@ -344,4 +344,4 @@ Upload local logs with `vikunja_tasks` action `attach`, a global or project-scop
 
 ## Limits And Defaults
 
-Task lists default to open tasks, compact response mode, page 1, and 20 items. Requests above 100 items per project page are safely capped to 100 with truthful pagination metadata. The 100-item ceiling keeps typical compact responses below 100 KB while avoiding the megabyte-scale responses produced by unbounded pages. Use `countOnly` for totals and request later pages for more items. Task get is compact by default; explicit `full` mode includes the latest 5 comments unless `commentLimit` changes that bounded value. Bulk update, create, and delete accept at most 100 tasks per call; composed create/delete are non-atomic, and delete requires `confirm: true`. CSV imports and file downloads use `VIKUNJA_MAX_ATTACHMENT_BYTES` (default 100 MiB); Vikunja controls CSV row limits. Idempotency keys are process-local, expire after five minutes, and do not provide distributed locking.
+Task lists default to open tasks, compact response mode, page 1, and 20 items. Requests above 100 items per project page are safely capped to 100 with truthful pagination metadata. The 100-item ceiling keeps typical compact responses below 100 KB while avoiding the megabyte-scale responses produced by unbounded pages. Use `countOnly` for totals and request later pages for more items. Task get is compact by default; explicit `full` mode includes the latest 5 comments unless `commentLimit` changes that bounded value. Bulk update, create, and delete accept at most 100 tasks per call; composed create/delete are non-atomic, and delete requires `confirm: true`. Ordinary requests time out after 30 seconds; streamed and multipart transfers use a 60-second default. CSV imports and file downloads use `VIKUNJA_MAX_ATTACHMENT_BYTES` (default 100 MiB); Vikunja controls CSV row limits. Idempotency keys are process-local, expire after five minutes, and do not provide distributed locking.

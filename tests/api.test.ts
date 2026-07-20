@@ -149,4 +149,36 @@ describe('VikunjaApiClient tests', () => {
       }),
     );
   });
+
+  it('passes a timeout signal to fetch and reports timeouts as 504', async () => {
+    mockFetch.mockRejectedValue(
+      Object.assign(new Error('The operation was aborted due to timeout'), {
+        name: 'TimeoutError',
+      }),
+    );
+
+    await expect(client.request('GET', '/projects')).rejects.toMatchObject({
+      status: 504,
+      code: 'REQUEST_TIMEOUT',
+      message: 'Vikunja request timed out after 30000 ms.',
+    });
+    expect(mockFetch.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it.each([
+    ['streamed responses', { isStreamResponse: true }],
+    ['multipart transfers', { body: Buffer.from('file'), isMultipart: true }],
+  ])('uses the 60-second transfer timeout for %s', async (_label, options) => {
+    const timeoutSpy = jest.spyOn(AbortSignal, 'timeout');
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ success: [] }),
+    } as Response);
+
+    await client.request('POST', '/transfer', options);
+
+    expect(timeoutSpy).toHaveBeenLastCalledWith(60_000);
+    timeoutSpy.mockRestore();
+  });
 });

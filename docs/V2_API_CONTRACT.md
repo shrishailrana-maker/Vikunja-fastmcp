@@ -43,11 +43,16 @@ https://vikunja.example.com
 https://vikunja.example.com/api/v2
 ```
 
-The MCP verifies `GET /api/v2/info` at startup and uses
-`VIKUNJA_API_TOKEN` as a bearer token. `VIKUNJA_WEB_URL` is optional and is
-used only to build browser links. A token-free `self-check` reports the MCP
-version, build path, normalized API URL, authentication state, and supported
-operations.
+The MCP uses `VIKUNJA_API_TOKEN` as a bearer token. `VIKUNJA_WEB_URL` is
+optional and is used only to build browser links. `self_check` verifies the
+authenticated `/user` and project-list routes; its response never includes the
+token. Basic diagnostics are compact, while explicit full detail adds build
+paths and supported operations.
+
+API and web URLs must use HTTP or HTTPS. Ordinary JSON API requests have a
+30-second timeout by default. Streamed downloads and multipart transfers use a
+separate 60-second default. Operators may change these positive ceilings with
+`VIKUNJA_REQUEST_TIMEOUT_MS` and `VIKUNJA_TRANSFER_TIMEOUT_MS`.
 
 `GET /api/v2/openapi.json` is live-probed. It serves the OpenAPI document but
 need not list itself inside that document's `paths` object, so absence from its
@@ -149,6 +154,9 @@ The limits are part of the public MCP contract rather than hidden truncation:
   requires `confirm: true`;
 * CSV import and file upload/download use `VIKUNJA_MAX_ATTACHMENT_BYTES`, 100
   MiB by default; Vikunja controls CSV row-count limits.
+* ordinary API calls time out after 30 seconds by default through
+  `VIKUNJA_REQUEST_TIMEOUT_MS`; streamed and multipart transfers use the
+  60-second `VIKUNJA_TRANSFER_TIMEOUT_MS` default.
 
 Paging exists because compact data can still overwhelm an agent when hundreds
 of items are serialized. A live 955-task DMS response was about 1 MB before
@@ -288,7 +296,9 @@ Every write echo names the project and task and includes global ID, portal
 index, and full identifier when available. Missing, ambiguous, or mismatched
 targets fail before mutation. `create`,
 comment creation, and attachment upload accept an optional process-local
-`idempotencyKey`. `update` may accept `expectedUpdatedAt`; because v2 does not
+`idempotencyKey`. The compound `close_with_evidence` operation also accepts an
+idempotency key so a retry in the same MCP process does not duplicate the
+evidence comment. `update` may accept `expectedUpdatedAt`; because v2 does not
 advertise an atomic conditional PATCH, this is documented as a best-effort
 pre-write conflict check, not a server-side lock.
 On a detected mismatch it returns `409 CONFLICT`. Success and error wording
@@ -405,10 +415,11 @@ available logs with one MCP call without claiming that Vikunja provides one
 combined HTTP route.
 
 Lists default to compact items containing global ID, portal reference, title,
-done state, and priority; project identity is hoisted to the enclosing result
-group instead of repeated on every task. `responseMode: "standard"` preserves
-creator, labels, and direct links, while explicit `full` includes the complete
-normalized task. Pagination is normalized to `page`, `perPage`,
+done state, priority, and the creator username when available; project identity
+is hoisted to the enclosing result group instead of repeated on every task.
+`responseMode: "standard"` preserves the full creator identity, labels, and
+direct links, while explicit `full` includes the complete normalized task.
+Pagination is normalized to `page`, `perPage`,
 `total`, `totalPages`, `hasMore`, and `nextPage`. There is no hidden ten-item
 truncation and no raw `$schema` or `per_page` wrapper. To prevent oversized
 agent responses, each project page is explicitly capped at 100 items and the
@@ -518,6 +529,11 @@ refuse to overwrite an existing file unless explicitly allowed. Upload is
 followed by metadata readback so the tester and developer can verify the file
 belongs to the intended task.
 
+Download and export destinations are checked after resolving parent-directory
+links, so a symlink or Windows junction inside the sandbox cannot redirect a
+write outside it. CSV exports prefix spreadsheet formula-leading cells with an
+apostrophe before CSV quoting.
+
 ### Tester-To-Developer Log Workflow
 
 ```text
@@ -565,7 +581,8 @@ The first rebuild must support these incidents end to end:
 Mandatory tests cover credential redaction, structural validation, identity
 resolution, write target echo, project scope, real HTTP error preservation,
 compact output, pagination, zero dates, HTML/entity conversion, attachment
-path safety, upload limits, and download limits.
+path and symlink safety, upload limits, download limits, request timeouts,
+strict tool arguments, and the complete source route matrix.
 
 The rebuild does not include time entries, project views, buckets, a local
 task database, generic retries, circuit breakers, client-side filtering, or a

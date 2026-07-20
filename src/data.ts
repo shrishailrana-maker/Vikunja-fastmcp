@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { VikunjaApiClient } from './api.js';
-import { resolveSafePath } from './attachments.js';
+import { openSafeDestination, resolveSafePath } from './attachments.js';
 import { fetchAllCollectionItems, htmlToMarkdown } from './format.js';
 import { resolveProject } from './identity.js';
 import { VikunjaError } from './errors.js';
@@ -153,6 +153,7 @@ function downloadTooLarge(bytes: number, maxBytes: number): VikunjaError {
 
 async function streamResponse(
   response: Response,
+  root: string,
   destination: string,
   maxBytes: number,
 ): Promise<number> {
@@ -160,9 +161,8 @@ async function streamResponse(
   if (Number.isFinite(advertised) && advertised > maxBytes) {
     throw downloadTooLarge(advertised, maxBytes);
   }
-  await fs.mkdir(path.dirname(destination), { recursive: true });
   let size = 0;
-  const handle = await fs.open(destination, 'wx');
+  const { handle } = await openSafeDestination(root, destination);
   try {
     if (!response.body) throw new Error('Download response had no body.');
     for await (const chunk of response.body as any) {
@@ -192,13 +192,26 @@ export async function downloadUserExport(
     isStreamResponse: true,
   });
   const maxBytes = client.getConfig().maxAttachmentBytes ?? 100 * 1024 * 1024;
-  const size = await streamResponse(response, destination, maxBytes);
+  const size = await streamResponse(response, root, destination, maxBytes);
   return { path: destination, size };
 }
 
 function csvCell(value: unknown) {
-  const text = value === null || value === undefined ? '' : String(value);
+  let text = value === null || value === undefined ? '' : String(value);
+  if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
   return `"${text.replace(/"/g, '""')}"`;
+}
+
+async function writeExportFile(root: string, destination: string, content: string): Promise<void> {
+  const { handle } = await openSafeDestination(root, destination);
+  try {
+    await handle.writeFile(content);
+  } catch (error) {
+    await handle.close().catch(() => {});
+    await fs.unlink(destination).catch(() => {});
+    throw error;
+  }
+  await handle.close();
 }
 
 export async function exportProject(
@@ -249,10 +262,10 @@ export async function exportProject(
     }
   }
   const fileName = destinationPath || `project-${project.id}-tasks.${format}`;
-  const destination = resolveSafePath(client.getConfig().attachmentDownloadRoot, fileName);
-  await fs.mkdir(path.dirname(destination), { recursive: true });
+  const exportRoot = client.getConfig().attachmentDownloadRoot;
+  const destination = resolveSafePath(exportRoot, fileName);
   if (format === 'json') {
-    await fs.writeFile(destination, JSON.stringify({ project, tasks }, null, 2), { flag: 'wx' });
+    await writeExportFile(exportRoot, destination, JSON.stringify({ project, tasks }, null, 2));
   } else {
     const header = [
       'id',
@@ -289,7 +302,7 @@ export async function exportProject(
           .join(','),
       ),
     ];
-    await fs.writeFile(destination, `${lines.join('\n')}\n`, { flag: 'wx' });
+    await writeExportFile(exportRoot, destination, `${lines.join('\n')}\n`);
   }
   return { project, format, path: destination, taskCount: tasks.length };
 }

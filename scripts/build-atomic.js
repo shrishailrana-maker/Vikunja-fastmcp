@@ -27,9 +27,15 @@ function cleanDir(dirPath) {
 try {
   console.log('Starting atomic build...');
 
-  // Clean up any stale directories
+  // Recover first if an earlier process stopped after moving dist aside. Never
+  // delete the only known-good build merely because it is named dist-old.
   cleanDir(tempDistPath);
-  cleanDir(oldDistPath);
+  if (!fs.existsSync(distPath) && fs.existsSync(oldDistPath)) {
+    console.log('Recovering interrupted build from dist-old...');
+    fs.renameSync(oldDistPath, distPath);
+  } else {
+    cleanDir(oldDistPath);
+  }
 
   // Compile TS into dist-new
   console.log('Compiling TypeScript...');

@@ -53,7 +53,13 @@ describe('Assignees, Labels and Relations tests', () => {
         ok: true,
         status: 200,
         text: async () =>
-          JSON.stringify({ id: 9005, index: 305, project_id: 101, project: { title: 'Alpha' } }),
+          JSON.stringify({
+            id: 9005,
+            index: 305,
+            project_id: 101,
+            project: { title: 'Alpha' },
+            assignees: [],
+          }),
       } as Response);
 
       // 2. Resolve user by username
@@ -86,7 +92,13 @@ describe('Assignees, Labels and Relations tests', () => {
         ok: true,
         status: 200,
         text: async () =>
-          JSON.stringify({ id: 9005, index: 305, project_id: 101, project: { title: 'Alpha' } }),
+          JSON.stringify({
+            id: 9005,
+            index: 305,
+            project_id: 101,
+            project: { title: 'Alpha' },
+            assignees: [{ id: 42, username: 'bob' }],
+          }),
       } as Response);
 
       // 2. Resolve user by ID directly (digit string)
@@ -103,6 +115,53 @@ describe('Assignees, Labels and Relations tests', () => {
       const deleteCall = mockFetch.mock.calls.find((c: any) => c[1]?.method === 'DELETE');
       expect(deleteCall).toBeDefined();
       expect(deleteCall[0]).toContain('/tasks/9005/assignees/42');
+    });
+
+    it('treats assigning an existing assignee as unchanged', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            id: 9005,
+            index: 305,
+            title: 'Assigned task',
+            project_id: 101,
+            project: { title: 'Alpha' },
+            assignees: [{ id: 42, username: 'bob' }],
+          }),
+      } as Response);
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ items: [{ id: 42, username: 'bob' }] }),
+      } as Response);
+
+      const echo = await assignTask(client, 9005, 'bob');
+
+      expect(echo.action).toBe('unchanged');
+      expect(mockFetch.mock.calls.some((call: any) => call[1]?.method === 'POST')).toBe(false);
+    });
+
+    it('treats removing an absent assignee as unchanged', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            id: 9005,
+            index: 305,
+            title: 'Unassigned task',
+            project_id: 101,
+            project: { title: 'Alpha' },
+            assignees: [],
+          }),
+      } as Response);
+
+      const echo = await unassignTask(client, 9005, 42);
+
+      expect(echo.action).toBe('unchanged');
+      expect(mockFetch.mock.calls.some((call: any) => call[1]?.method === 'DELETE')).toBe(false);
     });
 
     it('should list assignees', async () => {
@@ -213,12 +272,13 @@ describe('Assignees, Labels and Relations tests', () => {
         ok: true,
         status: 200,
         text: async () =>
-          JSON.stringify({ id: 9005, index: 305, project_id: 101, project: { title: 'Alpha' } }),
-      } as Response);
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        text: async () => JSON.stringify({ items: [{ id: 801, title: 'frontend' }] }),
+          JSON.stringify({
+            id: 9005,
+            index: 305,
+            project_id: 101,
+            project: { title: 'Alpha' },
+            labels: [{ id: 801, title: 'frontend' }],
+          }),
       } as Response);
       mockFetch.mockResolvedValueOnce({
         ok: true,
@@ -228,6 +288,27 @@ describe('Assignees, Labels and Relations tests', () => {
 
       const echo = await removeLabel(client, 9005, 'frontend');
       expect(echo.target.id).toBe(9005);
+    });
+
+    it('treats removing an absent label as unchanged without a label lookup', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            id: 9005,
+            index: 305,
+            title: 'Task without label',
+            project_id: 101,
+            project: { title: 'Alpha' },
+            labels: [],
+          }),
+      } as Response);
+
+      const echo = await removeLabel(client, 9005, 'frontend');
+
+      expect(echo.action).toBe('unchanged');
+      expect(mockFetch).toHaveBeenCalledTimes(1);
     });
 
     it('should list labels', async () => {
