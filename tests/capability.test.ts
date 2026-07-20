@@ -164,3 +164,28 @@ describe('V2 OpenAPI Capability Gate', () => {
     // We expect done, priority, description, etc.
   });
 });
+
+describe('README agent update prompt', () => {
+  it('uses the npm installation, global command, and current package version in five lines', () => {
+    const readme = fs.readFileSync(path.join(process.cwd(), 'README.md'), 'utf8');
+    const packageJson = JSON.parse(
+      fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'),
+    );
+    const prompt = readme.match(
+      /### Copy-Paste Agent Update Prompt\s+```text\r?\n([\s\S]*?)\r?\n```/,
+    )?.[1];
+
+    expect(prompt).toBeDefined();
+    expect(prompt?.split(/\r?\n/)).toHaveLength(5);
+    expect(prompt).toContain('npm install -g vikunja-fastmcp@latest');
+    expect(prompt).toContain('Get-Command vikunja-mcp');
+    expect(prompt).toContain('command -v vikunja-mcp');
+    expect(prompt).not.toContain('where.exe');
+    expect(prompt).toContain('command "vikunja-mcp"');
+    expect(prompt).toContain('npm root -g');
+    expect(prompt).toContain("agent's user-wide skill directory");
+    expect(prompt).toContain('~/.codex/skills/vikunja-fastmcp');
+    expect(prompt).toContain('~/.claude/skills/vikunja-fastmcp');
+    expect(prompt).toContain(`expected latest is ${packageJson.version}`);
+  });
+});
