@@ -33,6 +33,8 @@ requests or legacy tracker scripts while the MCP is available.
 - Use `assignee: "username"` for assignee lists. Vikunja list filters require
   usernames; numeric user IDs are only for operations that explicitly accept IDs.
 - Prefer `countOnly: true` when only a total is needed.
+- Task list/get responses are compact by default. Request `standard` or `full`
+  only when the omitted fields are required for the current operation.
 - Paginate large results and follow each project's independent `nextPage` value.
 - Comment lists default to 20 items; request only the `page` and `perPage` needed.
 - Keep searches scoped. Avoid `allProjects` when a project subset is known.

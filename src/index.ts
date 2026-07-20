@@ -440,6 +440,7 @@ export const TOOLS: McpToolDefinition[] = [
       q: z.string().optional(),
       countOnly: z.boolean().optional(),
       filter: z.string().optional(),
+      responseMode: z.enum(['compact', 'standard', 'full']).optional(),
       fields: z
         .object({
           title: z.string().trim().min(1).optional(),
@@ -488,6 +489,7 @@ export const TOOLS: McpToolDefinition[] = [
             q: args.q,
             countOnly: args.countOnly,
             filter: args.filter,
+            responseMode: args.responseMode,
           });
         case 'create':
           if (!args.projectSelector) throw badRequest('projectSelector is required for create.');
@@ -523,7 +525,13 @@ export const TOOLS: McpToolDefinition[] = [
           );
         case 'get':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
-          return getTask(client, args.taskSelector, args.projectSelector, args.commentLimit ?? 5);
+          return getTask(
+            client,
+            args.taskSelector,
+            args.projectSelector,
+            args.commentLimit ?? 5,
+            args.responseMode,
+          );
         case 'update':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
           if (!args.fields) throw badRequest('fields object is required for update.');

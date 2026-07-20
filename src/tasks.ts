@@ -10,6 +10,7 @@
  */
 
 import { VikunjaApiClient } from './api.js';
+import type { ResponseMode } from './config.js';
 import { resolveProject, resolveTask, ProjectRef, cache, listAllLabels } from './identity.js';
 import { VikunjaError } from './errors.js';
 import {
@@ -58,6 +59,18 @@ export type TaskListItem = Pick<
   | 'taskUrl'
   | 'projectUrl'
 >;
+
+export interface CompactTaskListItem {
+  id: number;
+  portalRef: string;
+  title: string;
+  done: boolean;
+  priority: number;
+}
+
+export interface CompactTask extends CompactTaskListItem {
+  project: { id: number; title: string };
+}
 
 export interface WriteEcho {
   action: 'created' | 'exists' | 'updated' | 'unchanged' | 'deleted' | 'closed' | 'reopened';
@@ -112,6 +125,7 @@ export interface ListTasksOptions {
   q?: string;
   countOnly?: boolean;
   filter?: string;
+  responseMode?: ResponseMode;
 }
 
 function escapeFilterString(val: string): string {
@@ -205,6 +219,35 @@ function normalizeTaskListItem(task: any, projectRef: ProjectRef, webUrl: string
   };
 }
 
+function normalizeCompactTask(task: any, projectRef: ProjectRef): CompactTask {
+  return {
+    id: task.id,
+    portalRef: task.identifier || `#${task.index}`,
+    project: { id: projectRef.id, title: projectRef.title },
+    title: task.title,
+    done: !!task.done,
+    priority: task.priority || 0,
+  };
+}
+
+function normalizeCompactTaskListItem(task: any, projectRef: ProjectRef): CompactTaskListItem {
+  const compact = normalizeCompactTask(task, projectRef);
+  return {
+    id: compact.id,
+    portalRef: compact.portalRef,
+    title: compact.title,
+    done: compact.done,
+    priority: compact.priority,
+  };
+}
+
+function selectedResponseMode(
+  client: VikunjaApiClient,
+  requested: ResponseMode | undefined,
+): ResponseMode {
+  return requested ?? client.getConfig().responseMode ?? 'compact';
+}
+
 async function listProjectTasksInternal(
   client: VikunjaApiClient,
   project: ProjectRef,
@@ -213,8 +256,8 @@ async function listProjectTasksInternal(
   const queryParams: Record<string, string> = {
     page: String(options.page || 1),
     // For a count-only request we only need the total from the pagination
-    // metadata, so fetch the smallest possible page instead of 25 task bodies.
-    per_page: String(options.countOnly ? 1 : Math.min(options.perPage || 25, MAX_AGENT_PAGE_SIZE)),
+    // metadata, so fetch the smallest possible page instead of 20 task bodies.
+    per_page: String(options.countOnly ? 1 : Math.min(options.perPage || 20, MAX_AGENT_PAGE_SIZE)),
   };
 
   if (options.q) {
@@ -238,6 +281,7 @@ async function listProjectTasksInternal(
 
 export async function listTasks(client: VikunjaApiClient, options: ListTasksOptions): Promise<any> {
   const webUrl = client.getConfig().vikunjaWebUrl;
+  const responseMode = selectedResponseMode(client, options.responseMode);
   const effectiveOptions =
     options.label !== undefined
       ? { ...options, label: await resolveLabel(client, options.label) }
@@ -302,11 +346,20 @@ export async function listTasks(client: VikunjaApiClient, options: ListTasksOpti
       });
     } else {
       const rawTasks = toItemArray(rawRes);
-      const tasks = rawTasks.map((t: any) => normalizeTaskListItem(t, proj, webUrl));
+      const tasks = rawTasks.map((task: any) => {
+        if (responseMode === 'compact') {
+          return normalizeCompactTaskListItem(task, proj);
+        }
+        if (responseMode === 'full') {
+          return normalizeTask(task, proj, webUrl);
+        }
+        return normalizeTaskListItem(task, proj, webUrl);
+      });
       results.push({
         project: { id: proj.id, title: proj.title },
         tasks,
         pagination,
+        truncated: pagination.hasMore,
       });
     }
   }
@@ -482,22 +535,71 @@ export interface ConsolidatedTaskDetails {
   composedCalls: string[];
 }
 
+export interface CompactTaskDetails {
+  task: CompactTask;
+}
+
+export interface StandardTaskDetails {
+  task: Task;
+}
+
+export function getTask(
+  client: VikunjaApiClient,
+  taskSelector: string | number,
+  projectSelector: { id?: number; title?: string } | undefined,
+  commentLimit: number,
+  requestedResponseMode: 'compact',
+): Promise<CompactTaskDetails>;
+export function getTask(
+  client: VikunjaApiClient,
+  taskSelector: string | number,
+  projectSelector: { id?: number; title?: string } | undefined,
+  commentLimit: number,
+  requestedResponseMode: 'standard',
+): Promise<StandardTaskDetails>;
+export function getTask(
+  client: VikunjaApiClient,
+  taskSelector: string | number,
+  projectSelector: { id?: number; title?: string } | undefined,
+  commentLimit: number,
+  requestedResponseMode: 'full',
+): Promise<ConsolidatedTaskDetails>;
+export function getTask(
+  client: VikunjaApiClient,
+  taskSelector: string | number,
+  projectSelector?: { id?: number; title?: string },
+  commentLimit?: number,
+  requestedResponseMode?: ResponseMode,
+): Promise<ConsolidatedTaskDetails | StandardTaskDetails | CompactTaskDetails>;
 export async function getTask(
   client: VikunjaApiClient,
   taskSelector: string | number,
   projectSelector?: { id?: number; title?: string },
   commentLimit = 5,
-): Promise<ConsolidatedTaskDetails> {
+  requestedResponseMode?: ResponseMode,
+): Promise<ConsolidatedTaskDetails | StandardTaskDetails | CompactTaskDetails> {
   const taskRef = await resolveTask(client, taskSelector, projectSelector);
   const webUrl = client.getConfig().vikunjaWebUrl;
+  const responseMode = selectedResponseMode(client, requestedResponseMode);
 
-  // Fetch the task with comments embedded (`expand=comments`) so we don't make a
-  // second round-trip just for comments. Attachments cannot be expanded, so they
-  // remain a separate call.
-  const rawTask = await client.request<any>('GET', `/tasks/${taskRef.id}?expand=comments`);
+  const includeBundledDetails = responseMode === 'full';
+  const taskPath =
+    includeBundledDetails && commentLimit > 0
+      ? `/tasks/${taskRef.id}?expand=comments`
+      : `/tasks/${taskRef.id}`;
+  const rawTask = await client.request<any>('GET', taskPath);
+
+  if (responseMode === 'compact') {
+    return { task: normalizeCompactTask(rawTask, taskRef.project) };
+  }
+
   const task = normalizeTask(rawTask, taskRef.project, webUrl);
 
-  const composedCalls = [`GET /tasks/${task.id}?expand=comments`];
+  if (responseMode === 'standard') {
+    return { task };
+  }
+
+  const composedCalls = [`GET ${taskPath}`];
   let comments: any[] = [];
   let attachments: any[] = [];
 
@@ -720,8 +822,9 @@ export async function deleteTask(
 }
 
 export interface CloseWithEvidenceResult {
-  comment: any;
+  comment: { id: number; author: { id?: number; username?: string }; created?: string };
   task: WriteEcho;
+  changed: ['comment', 'done'];
   composedCalls: string[];
 }
 
@@ -743,8 +846,13 @@ export async function closeWithEvidence(
   const taskEcho = await updateTask(client, taskRef.id, { done: true });
 
   return {
-    comment,
+    comment: {
+      id: comment.id,
+      author: comment.author,
+      created: comment.created,
+    },
     task: taskEcho,
+    changed: ['comment', 'done'],
     composedCalls,
   };
 }

@@ -89,6 +89,10 @@ describe('MCP Server Registration and Dispatching tests', () => {
     });
 
     const taskTool = response.tools.find((t: any) => t.name === 'vikunja_tasks');
+    expect(taskTool.inputSchema.properties.responseMode).toMatchObject({
+      type: 'string',
+      enum: ['compact', 'standard', 'full'],
+    });
     const applyLabelBranch = taskTool.inputSchema.oneOf.find(
       (branch: any) => branch.properties.action.const === 'apply-label',
     );
@@ -174,9 +178,20 @@ describe('MCP Server Registration and Dispatching tests', () => {
     const envelope = JSON.parse(jsonMatch![1]);
     expect(envelope.ok).toBe(true);
     expect(envelope.data.diagnostics.vikunjaUrl).toBe('https://vikunja.example.com/api/v2');
-    expect(envelope.data.diagnostics.projects).toEqual([]);
+    expect(envelope.data.diagnostics.projectCount).toBe(0);
+    expect(envelope.data.diagnostics).not.toHaveProperty('projects');
     expect(envelope.data.diagnostics).not.toHaveProperty('supportedSubcommands');
     expect(envelope.data.diagnostics).not.toHaveProperty('operationalNotes');
+    expect(
+      mockFetch.mock.calls.some(([url]: [string]) => {
+        const requestUrl = new URL(url);
+        return (
+          requestUrl.pathname.endsWith('/projects') &&
+          requestUrl.searchParams.get('page') === '1' &&
+          requestUrl.searchParams.get('per_page') === '1'
+        );
+      }),
+    ).toBe(true);
   });
 
   it('returns the complete token-free self-check contract', async () => {
@@ -221,6 +236,7 @@ describe('MCP Server Registration and Dispatching tests', () => {
       apiContractVersion: 'v2',
       authenticationState: 'authenticated',
       currentUser: { id: 7, username: 'example-user' },
+      projectCount: 1,
       projects: [{ id: 101, title: 'Alpha', archived: false }],
     });
     expect(diagnostics.packageVersion).toEqual(expect.any(String));

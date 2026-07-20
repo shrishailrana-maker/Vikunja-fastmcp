@@ -8,6 +8,10 @@
   returning normalized continuation metadata.
 - Update the packaged agent skill to avoid routine self-check calls and prefer
   scoped, paginated, count-only reads.
+- Default task list/get responses to compact identity and state fields, with
+  explicit `standard` and `full` modes plus `VIKUNJA_MCP_RESPONSE_MODE`.
+- Reduce the default task page from 25 to 20, hoist project metadata out of
+  compact list items, and omit submitted evidence text from close receipts.
 
 ## 2.3.995 - 2026-07-12
 

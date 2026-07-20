@@ -11,7 +11,7 @@
 
 import { loadConfig } from './config.js';
 import { VikunjaApiClient } from './api.js';
-import { fetchAllCollectionItems } from './format.js';
+import { fetchAllCollectionItems, normalizePagination } from './format.js';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -48,7 +48,8 @@ export interface DiagnosticResult {
     apiContractVersion: 'v2';
     packageVersion: string;
     attachmentDownloadRootWritable: boolean;
-    projects: { id: number; title: string; archived: boolean }[];
+    projectCount: number;
+    projects?: { id: number; title: string; archived: boolean }[];
     tokenPresent?: boolean;
     buildPath?: string;
     apiDocumentPath?: string;
@@ -89,7 +90,7 @@ export async function runSelfCheck(
     apiContractVersion: 'v2',
     packageVersion,
     attachmentDownloadRootWritable: false,
-    projects: [],
+    projectCount: 0,
   };
   if (detail === 'full') {
     Object.assign(diagnostics, {
@@ -98,6 +99,7 @@ export async function runSelfCheck(
       apiDocumentPath: path.join(packageRoot, 'MCP_API.md'),
       agentSkillPath: path.join(packageRoot, 'skills', 'vikunja-fastmcp', 'SKILL.md'),
       attachmentDownloadRoot: 'unknown',
+      projects: [],
       supportedTools: toolManifest.map((tool) => tool.name),
       supportedSubcommands: Object.fromEntries(
         toolManifest.map((tool) => [tool.name, tool.subcommands]),
@@ -147,15 +149,22 @@ export async function runSelfCheck(
     diagnostics.currentUser = { id: user.id, username: user.username };
     diagnostics.authenticationState = 'authenticated';
     diagnostics.connectionStatus = 'online';
-    const projects = await fetchAllCollectionItems<any>(
-      async (requestPath) => client.request<any>('GET', requestPath),
-      '/projects',
-    );
-    diagnostics.projects = projects.map((project) => ({
-      id: project.id,
-      title: project.title,
-      archived: !!project.is_archived,
-    }));
+    if (detail === 'full') {
+      const projects = await fetchAllCollectionItems<any>(
+        async (requestPath) => client.request<any>('GET', requestPath),
+        '/projects',
+      );
+      const projectSummaries = projects.map((project) => ({
+        id: project.id,
+        title: project.title,
+        archived: !!project.is_archived,
+      }));
+      diagnostics.projectCount = projectSummaries.length;
+      diagnostics.projects = projectSummaries;
+    } else {
+      const projectPage = await client.request<any>('GET', '/projects?page=1&per_page=1');
+      diagnostics.projectCount = normalizePagination(projectPage).total;
+    }
   } catch (err: any) {
     diagnostics.authenticationState = err?.status === 401 ? 'unauthenticated' : 'unknown';
     diagnostics.connectionStatus = err?.code === 'NETWORK_ERROR' ? 'offline' : 'online';

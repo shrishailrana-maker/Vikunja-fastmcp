@@ -27,6 +27,7 @@
     "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\" \"scripts/**/*.ts\"",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "build": "node scripts/build-atomic.js",
+    "benchmark:responses": "tsx scripts/benchmark-response-sizes.ts",
     "docs:api": "tsx scripts/generate-mcp-api.ts",
     "docs:api:check": "tsx scripts/generate-mcp-api.ts --check"
   },

@@ -12,6 +12,8 @@
 import os from 'os';
 import path from 'path';
 
+export type ResponseMode = 'compact' | 'standard' | 'full';
+
 export interface Config {
   vikunjaUrl: string; // e.g. "https://vikunja.example.com/api/v2"
   vikunjaToken: string;
@@ -20,6 +22,9 @@ export interface Config {
   // Upper bound (bytes) for a single attachment upload or download. Optional so
   // existing Config literals keep compiling; consumers fall back to a default.
   maxAttachmentBytes?: number;
+  // Optional so existing Config literals keep compiling; consumers use compact
+  // when no explicit mode is supplied.
+  responseMode?: ResponseMode;
 }
 
 // Default single-attachment size ceiling (100 MiB) when the env var is unset.
@@ -76,6 +81,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const rawUrl = env.VIKUNJA_URL || '';
   const token = env.VIKUNJA_API_TOKEN || '';
   const rawWebUrl = env.VIKUNJA_WEB_URL || '';
+  const rawResponseMode = env.VIKUNJA_MCP_RESPONSE_MODE?.trim();
 
   if (!rawUrl) {
     throw new Error('VIKUNJA_URL environment variable is not set.');
@@ -109,11 +115,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const maxAttachmentBytes =
     Number.isFinite(rawMax) && rawMax > 0 ? rawMax : DEFAULT_MAX_ATTACHMENT_BYTES;
 
+  let responseMode: ResponseMode = 'compact';
+  if (rawResponseMode) {
+    if (!['compact', 'standard', 'full'].includes(rawResponseMode)) {
+      throw new Error('VIKUNJA_MCP_RESPONSE_MODE must be one of: compact, standard, full.');
+    }
+    responseMode = rawResponseMode as ResponseMode;
+  }
+
   return {
     vikunjaUrl: apiUrl,
     vikunjaToken: token,
     vikunjaWebUrl: normalizedWebUrl,
     attachmentDownloadRoot,
     maxAttachmentBytes,
+    responseMode,
   };
 }

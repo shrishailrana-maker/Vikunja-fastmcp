@@ -51,15 +51,19 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     {
       action: 'get',
       required: ['taskSelector'],
-      optional: [...taskSelector, 'commentLimit (default 5, max 100)'],
-      execution: 'MCP-composed task, recent comments, and attachment metadata',
+      optional: [
+        ...taskSelector,
+        'commentLimit (full mode only; default 5, max 100)',
+        'responseMode (compact default; standard task; full bundled detail)',
+      ],
+      execution: 'Direct compact/standard GET; full mode composes comments and attachments',
     },
     {
       action: 'list',
       optional: [
         'exactly one of projectSelector, projects, allProjects',
         'page (default 1)',
-        'perPage (default 25; requests above 100 are safely capped to 100)',
+        'perPage (default 20; requests above 100 are safely capped to 100)',
         'done',
         'allStates',
         'priority (0-5)',
@@ -68,6 +72,7 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
         'q',
         'filter',
         'countOnly',
+        'responseMode (compact default; standard/full explicit)',
       ],
       execution: 'Direct per project; grouped subsets/allProjects are MCP-composed',
       note: 'Defaults to done=false unless done or allStates is supplied.',

@@ -122,7 +122,10 @@ describe('Tasks List and Scoping tests', () => {
         text: async () => JSON.stringify(mockTasksResponse),
       } as Response);
 
-      const result = await listTasks(client, { project: { id: 101 } });
+      const result = await listTasks(client, {
+        project: { id: 101 },
+        responseMode: 'standard',
+      });
       expect(result.project).toEqual({ id: 101, title: 'Alpha' });
       expect(result.tasks.length).toBe(1);
       expect(result.tasks[0].title).toBe('Task 1');
@@ -172,6 +175,71 @@ describe('Tasks List and Scoping tests', () => {
         hasMore: true,
         nextPage: 2,
       });
+    });
+
+    it('offers a compact 100-task response at least 60 percent smaller than standard', async () => {
+      const items = Array.from({ length: 100 }, (_, offset) => ({
+        id: 9000 + offset,
+        index: 300 + offset,
+        identifier: `ALPHA-${300 + offset}`,
+        title: `Example task ${offset + 1} with a realistic concise title`,
+        done: false,
+        priority: (offset % 5) + 1,
+        created_by: { id: 7, username: 'example-tester' },
+        labels: [
+          { id: 9, title: 'bug' },
+          { id: 12, title: 'open' },
+        ],
+      }));
+      const listResponse = {
+        items,
+        page: 1,
+        per_page: 100,
+        total: 225,
+        total_pages: 3,
+      };
+
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: 101, title: 'Alpha' }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify(listResponse),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: 101, title: 'Alpha' }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify(listResponse),
+        } as Response);
+
+      const standard = await listTasks(client, {
+        project: { id: 101 },
+        perPage: 100,
+        responseMode: 'standard',
+      });
+      const compact = await listTasks(client, {
+        project: { id: 101 },
+        perPage: 100,
+      });
+
+      expect(compact.tasks[0]).toEqual({
+        id: 9000,
+        portalRef: 'ALPHA-300',
+        title: 'Example task 1 with a realistic concise title',
+        done: false,
+        priority: 1,
+      });
+      expect(compact.truncated).toBe(true);
+      expect(JSON.stringify(compact).length).toBeLessThan(JSON.stringify(standard).length * 0.4);
     });
 
     it('should group subset query results by project with independent pagination', async () => {
@@ -389,7 +457,7 @@ describe('Tasks List and Scoping tests', () => {
           ]),
       } as Response);
 
-      const details = await getTask(client, 9005);
+      const details = await getTask(client, 9005, undefined, 5, 'full');
       expect(details.task.id).toBe(9005);
       expect(details.task.description).toBe('hello');
       expect(details.task.creator).toEqual({ id: 7, username: 'example-tester' });
@@ -405,6 +473,55 @@ describe('Tasks List and Scoping tests', () => {
       const urls = mockFetch.mock.calls.map((c: any) => c[0]);
       expect(urls.some((u: string) => u.includes('expand=comments'))).toBe(true);
       expect(urls.some((u: string) => /\/comments$/.test(u))).toBe(false);
+    });
+
+    it('defaults to a compact task without fetching comments or attachments', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              id: 9005,
+              index: 305,
+              identifier: 'ALPHA-305',
+              title: 'Task Title',
+              project_id: 101,
+              project: { title: 'Alpha' },
+            }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              id: 9005,
+              index: 305,
+              identifier: 'ALPHA-305',
+              title: 'Task Title',
+              project_id: 101,
+              description: '<p>Large evidence body.</p>',
+              done: false,
+              priority: 4,
+              labels: [{ id: 9, title: 'bug' }],
+              assignees: [{ id: 8, username: 'developer' }],
+            }),
+        } as Response);
+
+      const details = await getTask(client, 9005);
+
+      expect(details).toEqual({
+        task: {
+          id: 9005,
+          portalRef: 'ALPHA-305',
+          project: { id: 101, title: 'Alpha' },
+          title: 'Task Title',
+          done: false,
+          priority: 4,
+        },
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockFetch.mock.calls[1][0]).not.toContain('expand=comments');
     });
 
     it('falls back to the comments endpoint when the server does not embed them', async () => {
@@ -441,7 +558,7 @@ describe('Tasks List and Scoping tests', () => {
         text: async () => JSON.stringify({ items: [] }),
       } as Response);
 
-      const details = await getTask(client, 9005);
+      const details = await getTask(client, 9005, undefined, 5, 'full');
       expect(details.comments.length).toBe(1);
       expect(details.comments[0].comment).toBe('hi');
       expect(details.composedCalls).toContain('GET /tasks/9005/comments');
@@ -656,7 +773,9 @@ describe('Tasks List and Scoping tests', () => {
           text: async () => JSON.stringify({ detail: 'Comments are forbidden' }),
         } as Response);
 
-      await expect(getTask(client, 9005)).rejects.toMatchObject({ status: 403 });
+      await expect(getTask(client, 9005, undefined, 5, 'full')).rejects.toMatchObject({
+        status: 403,
+      });
     });
 
     it('should throw 409 CONFLICT on expectedUpdatedAt mismatch', async () => {

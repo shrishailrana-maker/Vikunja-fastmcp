@@ -56,6 +56,7 @@ installing or updating the skill.
 | `VIKUNJA_ATTACHMENT_DOWNLOAD_ROOT` | no | Sandboxed download root (defaults under the OS temp directory) |
 | `VIKUNJA_MAX_ATTACHMENT_BYTES` | no | Upload/download size ceiling (default 100 MiB) |
 | `VIKUNJA_TEMPLATE_FILE` | no | Machine-local template JSON path (defaults under the user home directory) |
+| `VIKUNJA_MCP_RESPONSE_MODE` | no | Default task response size: `compact` (default), `standard`, or `full` |
 
 Never commit tokens. Rejects `/api/v1` URLs.
 
@@ -127,8 +128,11 @@ JWT/local-password authentication for user-data export routes; the MCP
 preserves the real `401` instead of presenting false JWT advice.
 
 See generated `MCP_API.md` for inputs. Responses are Markdown summary + one JSON envelope (`ok` / `error`).
-Task lists default to 25 items and cap each project page at 100; use `countOnly`
-for totals and pagination for larger result sets.
+Task lists default to 20 compact items and cap each project page at 100; use
+`countOnly` for totals and pagination for larger result sets. Compact task
+responses retain global ID, portal reference, project identity where needed,
+title, done state, and priority. Request `responseMode: "standard"` for ordinary
+expanded task fields or `responseMode: "full"` for explicit bundled detail.
 
 ### Operational Limits
 

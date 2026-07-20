@@ -142,7 +142,7 @@ other task wrapper.
 
 The limits are part of the public MCP contract rather than hidden truncation:
 
-* task pages default to 25 and are capped at 100 items per project page;
+* task pages default to 20 and are capped at 100 items per project page;
 * bulk update/close accepts at most 100 global task IDs;
 * composed bulk create accepts at most 100 tasks and is non-atomic;
 * composed bulk delete accepts at most 100 global task IDs, is non-atomic, and
@@ -382,7 +382,10 @@ that responsibility becomes independently substantial. This is a justified
 cohesion split, not a return to nested architecture. No runtime dependency is
 added. Empty dates and Vikunja's `0001-01-01T00:00:00Z` sentinel become `null`.
 
-A single `vikunja_tasks get` returns a consolidated detail bundle:
+`vikunja_tasks get` is compact by default and returns only safe task identity,
+project identity, title, done state, and priority. `responseMode: "standard"`
+returns the normalized task without comment or attachment calls. An explicit
+`responseMode: "full"` returns the consolidated detail bundle:
 
 * the normalized task, including its assignees and labels from task fields or
   supported v2 `expand` values;
@@ -401,8 +404,11 @@ This lets an agent answer task state, ownership, labels, reviewed evidence, and
 available logs with one MCP call without claiming that Vikunja provides one
 combined HTTP route.
 
-Lists omit descriptions by default and return compact identity, title, state,
-priority, and label data. Pagination is normalized to `page`, `perPage`,
+Lists default to compact items containing global ID, portal reference, title,
+done state, and priority; project identity is hoisted to the enclosing result
+group instead of repeated on every task. `responseMode: "standard"` preserves
+creator, labels, and direct links, while explicit `full` includes the complete
+normalized task. Pagination is normalized to `page`, `perPage`,
 `total`, `totalPages`, `hasMore`, and `nextPage`. There is no hidden ten-item
 truncation and no raw `$schema` or `per_page` wrapper. To prevent oversized
 agent responses, each project page is explicitly capped at 100 items and the
@@ -424,7 +430,7 @@ reimplementing them locally.
 * `title` search is the default. `exactTitle`, `fullText`, and portal-reference
   modes are explicit so a word buried in a description does not become an
   accidental match.
-* `page` and `perPage` are applied once by Vikunja. Default `perPage` is 25;
+* `page` and `perPage` are applied once by Vikunja. Default `perPage` is 20;
   requests above 100 are capped to 100 without hiding the remaining total.
 * Every list states displayed count, total, and exact continuation metadata.
 * Explicit `projects: [...]` and deliberate `allProjects: true` results are

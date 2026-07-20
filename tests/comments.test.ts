@@ -425,7 +425,9 @@ describe('Comments and Compound Operations tests', () => {
 
       const res = await closeWithEvidence(client, 9005, 'evidence text');
       expect(res.comment.id).toBe(2001);
+      expect(res.comment).not.toHaveProperty('comment');
       expect(res.task.action).toBe('closed');
+      expect(res.changed).toEqual(['comment', 'done']);
       expect(res.composedCalls).toEqual(['POST /tasks/9005/comments', 'PATCH /tasks/9005']);
     });
 

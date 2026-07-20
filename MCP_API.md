@@ -64,6 +64,7 @@ Normalized task records include `creator: { id, username }` when Vikunja supplie
   * `q`: string (optional)
   * `countOnly`: boolean (optional)
   * `filter`: string (optional)
+  * `responseMode`: enum ["compact", "standard", "full"] (optional)
   * `fields`: object (optional)
   * `expectedUpdatedAt`: string (optional)
   * `evidenceComment`: string (optional); min 1
@@ -87,8 +88,8 @@ Normalized task records include `creator: { id, username }` when Vikunja supplie
 | --- | --- | --- | --- |
 | `create` | projectSelector, fields.title | fields, idempotencyKey, attachments | Direct POST; MCP-composed when attachments are supplied |
 | `create_if_absent` | projectSelector, fields.title | fields, idempotencyKey, attachments | MCP-composed exact-title search then optional create/attach. Best-effort duplicate prevention, not a distributed lock. |
-| `get` | taskSelector | projectSelector (required for #index or PRJ-index), commentLimit (default 5, max 100) | MCP-composed task, recent comments, and attachment metadata |
-| `list` | none | exactly one of projectSelector, projects, allProjects, page (default 1), perPage (default 25; requests above 100 are safely capped to 100), done, allStates, priority (0-5), label, assignee (exact username; numeric user IDs are not valid Vikunja list filters), q, filter, countOnly | Direct per project; grouped subsets/allProjects are MCP-composed. Defaults to done=false unless done or allStates is supplied. |
+| `get` | taskSelector | projectSelector (required for #index or PRJ-index), commentLimit (full mode only; default 5, max 100), responseMode (compact default; standard task; full bundled detail) | Direct compact/standard GET; full mode composes comments and attachments |
+| `list` | none | exactly one of projectSelector, projects, allProjects, page (default 1), perPage (default 20; requests above 100 are safely capped to 100), done, allStates, priority (0-5), label, assignee (exact username; numeric user IDs are not valid Vikunja list filters), q, filter, countOnly, responseMode (compact default; standard/full explicit) | Direct per project; grouped subsets/allProjects are MCP-composed. Defaults to done=false unless done or allStates is supplied. |
 | `update` | taskSelector, fields | projectSelector (required for #index or PRJ-index), expectedUpdatedAt | Identity/read preflight, RFC 6902 PATCH, guarded writable-field PUT fallback |
 | `delete` | taskSelector | projectSelector (required for #index or PRJ-index) | Identity preflight then DELETE /tasks/{id} |
 | `close` | taskSelector | projectSelector (required for #index or PRJ-index) | Identity/read preflight then task update transport |
@@ -343,4 +344,4 @@ Upload local logs with `vikunja_tasks` action `attach`, a global or project-scop
 
 ## Limits And Defaults
 
-Task lists default to open tasks, page 1, and 25 items. Requests above 100 items per project page are safely capped to 100 with truthful pagination metadata. The 100-item ceiling keeps typical compact responses below 100 KB while avoiding the megabyte-scale responses produced by unbounded pages. Use `countOnly` for totals and request later pages for more items. Bulk update, create, and delete accept at most 100 tasks per call; composed create/delete are non-atomic, and delete requires `confirm: true`. CSV imports and file downloads use `VIKUNJA_MAX_ATTACHMENT_BYTES` (default 100 MiB); Vikunja controls CSV row limits. Consolidated get defaults to the latest 5 comments; `commentLimit` is limited to 100. Idempotency keys are process-local, expire after five minutes, and do not provide distributed locking.
+Task lists default to open tasks, compact response mode, page 1, and 20 items. Requests above 100 items per project page are safely capped to 100 with truthful pagination metadata. The 100-item ceiling keeps typical compact responses below 100 KB while avoiding the megabyte-scale responses produced by unbounded pages. Use `countOnly` for totals and request later pages for more items. Task get is compact by default; explicit `full` mode includes the latest 5 comments unless `commentLimit` changes that bounded value. Bulk update, create, and delete accept at most 100 tasks per call; composed create/delete are non-atomic, and delete requires `confirm: true`. CSV imports and file downloads use `VIKUNJA_MAX_ATTACHMENT_BYTES` (default 100 MiB); Vikunja controls CSV row limits. Idempotency keys are process-local, expire after five minutes, and do not provide distributed locking.
