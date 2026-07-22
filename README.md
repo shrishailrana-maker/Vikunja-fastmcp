@@ -26,6 +26,22 @@ npm install -g vikunja-fastmcp
 
 Restart the MCP client after installing or updating so it starts the new process.
 
+### Copy-Paste Agent Install Prompt
+
+Paste this into any coding agent (Claude, Codex, or another MCP-capable
+client) to have it install and configure the server. Replace nothing; the
+agent asks you for the two values it needs.
+
+```text
+Install the Vikunja MCP server for this user:
+1. Run npm install -g vikunja-fastmcp (requires Node.js 24+). Verify with npm list -g vikunja-fastmcp --depth=0 and locate the executable with (Get-Command vikunja-mcp).Source on Windows or command -v vikunja-mcp on macOS/Linux.
+2. Ask me for my Vikunja server URL and API token (created in Vikunja under Settings -> API Tokens). Never print or log the token.
+3. Register the server in this client's MCP configuration: stdio server named "vikunja", command "vikunja-mcp" (no args, never a checkout/dist path), env VIKUNJA_URL and VIKUNJA_API_TOKEN.
+4. Optional: use npm root -g to copy the bundled skills/vikunja-fastmcp folder to this client's user-wide skill directory; if this client has no skill folders, add the contents of its SKILL.md to persistent agent instructions.
+5. Restart the MCP client, then call the self_check tool and confirm it reports ok with connectionStatus online.
+6. Report the installed version, executable path, and config file you edited, without showing secrets.
+```
+
 ### Copy-Paste Agent Update Prompt
 
 ```text
