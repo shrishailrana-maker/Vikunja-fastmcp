@@ -457,6 +457,9 @@ describe('Assignees, Labels and Relations tests', () => {
       expect(relations.length).toBe(1);
       expect(relations[0].relationKind).toBe('subtask');
       expect(relations[0].task.id).toBe(9006);
+      // Compact by default: portal reference kept, task body fields dropped.
+      expect(relations[0].task.portalRef).toBe('#306');
+      expect(relations[0].task).not.toHaveProperty('description');
     });
 
     it('should remove a task relation', async () => {

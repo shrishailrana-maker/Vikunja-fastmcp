@@ -3,26 +3,24 @@
 This file is generated from the sanitized local OpenAPI snapshot.
 
 - Raw specification: [`vikunja-v2-openapi.json`](vikunja-v2-openapi.json)
-- Saved interactive-doc entry: [`vikunja-v2-docs.html`](vikunja-v2-docs.html)
-- Upstream general API documentation: https://vikunja.io/docs/api-documentation/
-- API generation: live Vikunja v2 service
-- Snapshot date: 2026-07-11
+- Upstream API documentation: https://vikunja.io/docs/api-documentation/
+- Official Vikunja release: https://github.com/go-vikunja/vikunja/releases/tag/v2.4.0
+- Official tag commit: `907850feae3866ae9b16ea1c7b84a4d77273415a`
+- API generation: live Vikunja 2.4.0 service
+- Snapshot date: 2026-07-22
 - OpenAPI version: 3.1.0
 - API title: Vikunja API
-- API version: v2.3.0-991-b6f6ac354a
+- API version: v2.4.0
 
-The saved v2 OpenAPI is authoritative for this rebuild. The upstream general
-documentation may still describe v1. Re-download and review this snapshot when
-the server is upgraded. Instance hostnames are replaced with
+Vikunja generates this OpenAPI document at runtime. The checked-in copy is
+the latest-only HTTP authority for this MCP and must be refreshed when the
+minimum supported Vikunja release changes. Instance URLs are replaced with
 `https://vikunja.example.com`; no credential is stored.
 
 ## Operations
 
 | Method | Path | Operation | Summary |
 | --- | --- | --- | --- |
-| GET | `/{entitykind}/{entityid}/reactions` | `reactions-list` | List reactions for an entity |
-| POST | `/{entitykind}/{entityid}/reactions` | `reactions-create` | React to an entity |
-| POST | `/{entitykind}/{entityid}/reactions/delete` | `reactions-delete` | Remove a reaction from an entity |
 | GET | `/admin/overview` | `admin-overview` | Admin overview |
 | GET | `/admin/projects` | `admin-projects-list` | List all projects (admin) |
 | PATCH | `/admin/projects/{id}/owner` | `admin-projects-patch-owner` | Reassign a project's owner (admin) |
@@ -71,6 +69,7 @@ the server is upgraded. Instance hostnames are replaced with
 | PATCH | `/projects/{id}` | `patch-projects-read` | Update a project (partial) |
 | DELETE | `/projects/{id}` | `projects-delete` | Delete a project |
 | GET | `/projects/{project_id}/time-entries` | `project-time-entries-list` | List a project's time entries |
+| POST | `/projects/{projectid}/duplicate` | `projects-duplicate` | Duplicate a project |
 | GET | `/projects/{project}/background` | `projects-background-get` | Get a project background |
 | DELETE | `/projects/{project}/background` | `projects-background-delete` | Remove a project background |
 | PUT | `/projects/{project}/backgrounds/upload` | `projects-background-upload` | Upload a project background |
@@ -87,9 +86,9 @@ the server is upgraded. Instance hostnames are replaced with
 | DELETE | `/projects/{project}/teams/{team}` | `project-teams-delete` | Remove a team from a project |
 | GET | `/projects/{project}/users` | `project-users-list` | List the users a project is shared with |
 | POST | `/projects/{project}/users` | `project-users-create` | Share a project with a user |
+| GET | `/projects/{project}/users/search` | `projects-users-search` | Search users with access to a project |
 | PUT | `/projects/{project}/users/{user}` | `project-users-update` | Update a user's permission on a project |
 | DELETE | `/projects/{project}/users/{user}` | `project-users-delete` | Remove a user's access to a project |
-| GET | `/projects/{project}/users/search` | `projects-users-search` | Search users with access to a project |
 | GET | `/projects/{project}/views` | `project-views-list` | List the views of a project |
 | POST | `/projects/{project}/views` | `project-views-create` | Create a view in a project |
 | GET | `/projects/{project}/views/{view}` | `project-views-read` | Get a single view of a project |
@@ -98,35 +97,35 @@ the server is upgraded. Instance hostnames are replaced with
 | DELETE | `/projects/{project}/views/{view}` | `project-views-delete` | Delete a view of a project |
 | GET | `/projects/{project}/views/{view}/buckets` | `buckets-list` | List the buckets of a kanban view |
 | POST | `/projects/{project}/views/{view}/buckets` | `buckets-create` | Create a bucket in a kanban view |
+| GET | `/projects/{project}/views/{view}/buckets/tasks` | `project-view-buckets-tasks-list` | List a kanban view's buckets with their tasks |
 | PUT | `/projects/{project}/views/{view}/buckets/{bucket}` | `buckets-update` | Update a bucket of a kanban view |
 | DELETE | `/projects/{project}/views/{view}/buckets/{bucket}` | `buckets-delete` | Delete a bucket of a kanban view |
 | PUT | `/projects/{project}/views/{view}/buckets/{bucket}/tasks` | `task-bucket-update` | Place a task in a kanban bucket |
-| GET | `/projects/{project}/views/{view}/buckets/tasks` | `project-view-buckets-tasks-list` | List a kanban view's buckets with their tasks |
 | GET | `/projects/{project}/views/{view}/tasks` | `project-view-tasks-list` | List tasks in a project view |
 | GET | `/projects/{project}/webhooks` | `webhooks-list` | List a project's webhooks |
 | POST | `/projects/{project}/webhooks` | `webhooks-create` | Create a webhook target in a project |
 | PUT | `/projects/{project}/webhooks/{webhook}` | `webhooks-update` | Update a webhook target's events |
 | DELETE | `/projects/{project}/webhooks/{webhook}` | `webhooks-delete` | Delete a webhook target |
-| POST | `/projects/{projectid}/duplicate` | `projects-duplicate` | Duplicate a project |
 | POST | `/register` | `auth-register` | Register |
 | GET | `/routes` | `token-routes` | List API token routes |
 | POST | `/shares/{share}/auth` | `auth-link-share` | Get an auth token for a link share |
 | POST | `/subscriptions/{entity}/{entityID}` | `subscriptions-create` | Subscribe to an entity |
 | DELETE | `/subscriptions/{entity}/{entityID}` | `subscriptions-delete` | Unsubscribe from an entity |
 | GET | `/tasks` | `tasks-list` | List tasks across all projects |
+| PUT | `/tasks/bulk` | `tasks-bulk-update` | Bulk update tasks |
 | GET | `/tasks/{projecttask}` | `tasks-read` | Get a task |
 | PUT | `/tasks/{projecttask}` | `tasks-update` | Update a task |
 | PATCH | `/tasks/{projecttask}` | `patch-tasks-read` | Update a task (partial) |
 | DELETE | `/tasks/{projecttask}` | `tasks-delete` | Delete a task |
 | GET | `/tasks/{projecttask}/assignees` | `task-assignees-list` | List the assignees of a task |
 | POST | `/tasks/{projecttask}/assignees` | `task-assignees-create` | Assign a user to a task |
-| DELETE | `/tasks/{projecttask}/assignees/{user}` | `task-assignees-delete` | Remove an assignee from a task |
 | PUT | `/tasks/{projecttask}/assignees/bulk` | `task-assignees-bulk` | Replace all assignees of a task |
+| DELETE | `/tasks/{projecttask}/assignees/{user}` | `task-assignees-delete` | Remove an assignee from a task |
 | POST | `/tasks/{projecttask}/duplicate` | `tasks-duplicate` | Duplicate a task |
 | GET | `/tasks/{projecttask}/labels` | `task-labels-list` | List the labels on a task |
 | POST | `/tasks/{projecttask}/labels` | `task-labels-create` | Add a label to a task |
-| DELETE | `/tasks/{projecttask}/labels/{label}` | `task-labels-delete` | Remove a label from a task |
 | PUT | `/tasks/{projecttask}/labels/bulk` | `task-labels-bulk-replace` | Replace all labels on a task |
+| DELETE | `/tasks/{projecttask}/labels/{label}` | `task-labels-delete` | Remove a label from a task |
 | PUT | `/tasks/{projecttask}/read` | `tasks-mark-read` | Mark a task as read |
 | GET | `/tasks/{task_id}/time-entries` | `task-time-entries-list` | List a task's time entries |
 | GET | `/tasks/{task}/attachments` | `task-attachments-list` | List a task's attachments |
@@ -142,7 +141,6 @@ the server is upgraded. Instance hostnames are replaced with
 | PUT | `/tasks/{task}/position` | `tasks-position-update` | Set a task's position in a view |
 | POST | `/tasks/{task}/relations` | `tasks-relations-create` | Create a task relation |
 | DELETE | `/tasks/{task}/relations/{relationKind}/{otherTask}` | `tasks-relations-delete` | Delete a task relation |
-| PUT | `/tasks/bulk` | `tasks-bulk-update` | Bulk update tasks |
 | GET | `/teams` | `teams-list` | List teams |
 | POST | `/teams` | `teams-create` | Create a team |
 | GET | `/teams/{id}` | `teams-read` | Get a team |
@@ -154,11 +152,11 @@ the server is upgraded. Instance hostnames are replaced with
 | POST | `/teams/{team}/members/{user}/admin` | `teams-members-toggle-admin` | Toggle a team member's admin status |
 | GET | `/time-entries` | `time-entries-list` | List time entries |
 | POST | `/time-entries` | `time-entries-create` | Create a time entry |
+| POST | `/time-entries/timer/stop` | `time-entries-timer-stop` | Stop the running timer |
 | GET | `/time-entries/{id}` | `time-entries-read` | Get a time entry |
 | PUT | `/time-entries/{id}` | `time-entries-update` | Update a time entry |
 | PATCH | `/time-entries/{id}` | `patch-time-entries-read` | Update a time entry (partial) |
 | DELETE | `/time-entries/{id}` | `time-entries-delete` | Delete a time entry |
-| POST | `/time-entries/timer/stop` | `time-entries-timer-stop` | Stop the running timer |
 | GET | `/token/test` | `token-test` | Test a token |
 | POST | `/token/test` | `token-check` | Check a token |
 | GET | `/tokens` | `tokens-list` | List api tokens |
@@ -199,30 +197,33 @@ the server is upgraded. Instance hostnames are replaced with
 | GET | `/user/settings/totp/qrcode` | `totp-qrcode` | Get the totp enrollment qr code |
 | GET | `/user/settings/webhooks` | `user-webhooks-list` | List the current user's webhooks |
 | POST | `/user/settings/webhooks` | `user-webhooks-create` | Create a webhook for the current user |
+| GET | `/user/settings/webhooks/events` | `user-webhooks-events` | List available user-directed webhook events |
 | PUT | `/user/settings/webhooks/{webhook}` | `user-webhooks-update` | Update a user webhook's events |
 | DELETE | `/user/settings/webhooks/{webhook}` | `user-webhooks-delete` | Delete a user webhook |
-| GET | `/user/settings/webhooks/events` | `user-webhooks-events` | List available user-directed webhook events |
 | GET | `/user/timezones` | `user-timezones` | List available time zones |
 | POST | `/user/token` | `token-renew` | Renew a link-share token |
 | POST | `/user/token/refresh` | `auth-refresh-token` | Refresh user token |
 | GET | `/users` | `users-search` | Search users |
 | GET | `/webhooks/events` | `webhooks-events-list` | List available webhook events |
+| GET | `/{entitykind}/{entityid}/reactions` | `reactions-list` | List reactions for an entity |
+| POST | `/{entitykind}/{entityid}/reactions` | `reactions-create` | React to an entity |
+| POST | `/{entitykind}/{entityid}/reactions/delete` | `reactions-delete` | Remove a reaction from an entity |
 
 ## Component Schemas
 
+- `APIToken`
 - `AdminIsAdminPatchBody`
 - `AdminOwnerPatchBody`
 - `AdminSetPasswordBody`
 - `AdminStatusPatchBody`
 - `AdminUser`
-- `APIToken`
 - `AttachmentUploadError`
 - `AttachmentUploadResult`
 - `Auth-link-shareRequest`
 - `AuthInfo`
+- `AuthTokenBodyBody`
 - `AuthorizeRequest`
 - `AuthorizeResponse`
-- `AuthTokenBodyBody`
 - `BotUser`
 - `BotUserReadBody`
 - `Bucket`
@@ -237,7 +238,6 @@ the server is upgraded. Instance hostnames are replaced with
 - `EmailConfirm`
 - `ErrorDetail`
 - `File`
-- `FormFile`
 - `HealthBodyBody`
 - `Info`
 - `JsonPatchOp`
@@ -301,6 +301,7 @@ the server is upgraded. Instance hostnames are replaced with
 - `ShareCounts`
 - `Status`
 - `Subscription`
+- `TOTP`
 - `Task`
 - `TaskAssginee`
 - `TaskAttachment`
@@ -326,7 +327,6 @@ the server is upgraded. Instance hostnames are replaced with
 - `TokenRequest`
 - `TokenResponse`
 - `TokenTestBodyBody`
-- `TOTP`
 - `TotpDisableBodyBody`
 - `TotpEnableBodyBody`
 - `User`

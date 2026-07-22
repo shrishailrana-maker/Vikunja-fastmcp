@@ -29,6 +29,10 @@ requests or legacy tracker scripts while the MCP is available.
   `projectSelector`, such as `{ title: "Example Project" }`.
 - Before update, close, reopen, unassign, unlabel, unrelate, or delete, get the
   task and verify its global ID, project, and title.
+- Pass `projectSelector` on mutations even when using a global task ID. The
+  server rejects unscoped global-ID mutations by default
+  (`PROJECT_SCOPE_REQUIRED`); only deployments configured with `warn` or `off`
+  allow them.
 - Never parse a `#N` prefix inside task title text as task identity.
 
 ## Lists And Searches
@@ -40,8 +44,11 @@ requests or legacy tracker scripts while the MCP is available.
 - Use `assignee: "username"` for assignee lists. Vikunja list filters require
   usernames; numeric user IDs are only for operations that explicitly accept IDs.
 - Prefer `countOnly: true` when only a total is needed.
-- Task list/get responses are compact by default. Request `standard` or `full`
-  only when the omitted fields are required for the current operation.
+- Use `vikunja_tasks` `summary` for one-project counts by done state, priority,
+  labels, and configured status labels without listing task bodies.
+- Task list, get, and list-relations responses are compact by default. Request
+  `standard` or `full` only when the omitted fields are required for the
+  current operation.
 - Task-list `perPage` must not exceed 100. Paginate larger results and follow
   each project's independent `nextPage` value.
 - Comment lists default to 20 items; request only the `page` and `perPage` needed.
@@ -52,7 +59,14 @@ requests or legacy tracker scripts while the MCP is available.
 - Prefer `create_if_absent` for duplicate-sensitive creation, while remembering
   it is best-effort rather than a distributed lock.
 - Add verification evidence before closing work. Use `close_with_evidence` when appropriate.
-- Make comments and important writes identify the actual agent or user acting.
+- Pass `actor` on create, comment, evidence-close, and idempotent import so the
+  MCP appends durable attribution once.
+- Use `set_status` to replace all labels in the configured status-prefix group
+  in one request. Keep `createIfMissing: false` unless label creation is
+  explicitly intended.
+- Use CSV `mode: "idempotent"` plus a stable `idempotencyKey` for retry-safe
+  row-by-row imports; use `mode: "native"` only when speed matters more than
+  retry deduplication. Preview either mode before importing.
 - Wrap file paths, commands, and code identifiers in inline backticks in task
   descriptions and comments so Markdown does not reinterpret underscores.
 - Treat composed bulk create/delete operations as bounded and non-atomic.

@@ -16,6 +16,7 @@ import { VikunjaError } from './errors.js';
 import {
   normalizePagination,
   normalizeDatesAndNulls,
+  normalizeZeroDate,
   htmlToMarkdown,
   markdownToHtml,
   toItemArray,
@@ -24,6 +25,7 @@ import {
 import { idempotency } from './idempotency.js';
 import { createComment } from './comments.js';
 import { attachFiles, AttachmentInfo } from './attachments.js';
+import { withActorAttribution } from './mutation-policy.js';
 
 const MAX_AGENT_PAGE_SIZE = 100;
 
@@ -374,6 +376,67 @@ export async function listTasks(client: VikunjaApiClient, options: ListTasksOpti
   }
 }
 
+interface LabelAggregate {
+  label: string;
+  total: number;
+  open: number;
+  done: number;
+}
+
+function incrementLabelAggregate(
+  aggregates: Map<string, LabelAggregate>,
+  label: string,
+  done: boolean,
+): void {
+  const key = label.toLowerCase();
+  const current = aggregates.get(key) ?? { label, total: 0, open: 0, done: 0 };
+  current.total += 1;
+  current[done ? 'done' : 'open'] += 1;
+  aggregates.set(key, current);
+}
+
+export async function projectSummary(
+  client: VikunjaApiClient,
+  projectSelector: { id?: number; title?: string },
+) {
+  const project = await resolveProject(client, projectSelector);
+  const tasks = await fetchAllCollectionItems<any>(
+    (requestPath) => client.request('GET', requestPath),
+    `/projects/${project.id}/tasks`,
+  );
+  const byPriority: Record<string, number> = {};
+  const labels = new Map<string, LabelAggregate>();
+  let done = 0;
+
+  for (const task of tasks) {
+    const isDone = Boolean(task.done);
+    if (isDone) done += 1;
+    const priority = String(Number.isInteger(task.priority) ? task.priority : 0);
+    byPriority[priority] = (byPriority[priority] ?? 0) + 1;
+    for (const label of Array.isArray(task.labels) ? task.labels : []) {
+      if (label?.title) incrementLabelAggregate(labels, String(label.title), isDone);
+    }
+  }
+
+  const byLabel = [...labels.values()].sort((left, right) =>
+    left.label.localeCompare(right.label, undefined, { sensitivity: 'base' }),
+  );
+  const statusPrefix = client.getConfig().statusLabelPrefix ?? 'status:';
+
+  return {
+    project,
+    total: tasks.length,
+    open: tasks.length - done,
+    done,
+    byPriority,
+    statusPrefix,
+    byStatusLabel: byLabel.filter((item) =>
+      item.label.toLowerCase().startsWith(statusPrefix.toLowerCase()),
+    ),
+    byLabel,
+  };
+}
+
 export async function createTask(
   client: VikunjaApiClient,
   projectSelector: { id?: number; title?: string },
@@ -386,6 +449,7 @@ export async function createTask(
   },
   idempotencyKey?: string,
   attachments?: string[],
+  actor?: string,
 ): Promise<WriteEcho> {
   const projectKey = projectSelector.id ?? projectSelector.title?.toLowerCase() ?? 'missing';
   const cacheKey = idempotencyKey ? `task-create:${projectKey}:${idempotencyKey}` : '';
@@ -400,8 +464,9 @@ export async function createTask(
   const body: Record<string, any> = {
     title: fields.title,
   };
-  if (fields.description !== undefined) {
-    body.description = markdownToHtml(fields.description);
+  const attributedDescription = withActorAttribution(fields.description, actor);
+  if (attributedDescription !== undefined) {
+    body.description = markdownToHtml(attributedDescription);
   }
   if (fields.done !== undefined) {
     body.done = fields.done;
@@ -451,6 +516,7 @@ export async function createIfAbsent(
   },
   idempotencyKey?: string,
   attachments?: string[],
+  actor?: string,
 ): Promise<WriteEcho> {
   const projectKey = projectSelector.id ?? projectSelector.title?.toLowerCase() ?? 'missing';
   const cacheKey = idempotencyKey ? `task-create-absent:${projectKey}:${idempotencyKey}` : '';
@@ -521,7 +587,7 @@ export async function createIfAbsent(
     // Do not re-upload attachments when the task already exists.
   } else {
     // Create with attachments only on the create path (not on exists).
-    echo = await createTask(client, { id: project.id }, fields, idempotencyKey, attachments);
+    echo = await createTask(client, { id: project.id }, fields, idempotencyKey, attachments, actor);
   }
 
   if (cacheKey) {
@@ -700,7 +766,9 @@ export async function updateTask(
   }
   if (fields.dueDate !== undefined) {
     const apiDueDate = fields.dueDate === null ? null : fields.dueDate;
-    if (apiDueDate !== (currentRaw.due_date || null)) {
+    // Treat the server's zero date as "no due date" so clearing an already
+    // empty due date reports unchanged instead of issuing a no-op PATCH.
+    if (apiDueDate !== (normalizeZeroDate(currentRaw.due_date) || null)) {
       body.due_date = apiDueDate;
     }
   }
@@ -711,7 +779,7 @@ export async function updateTask(
       path: `/${field}`,
       value,
     }));
-    const rawUpdated = await patchTaskFields(client, taskRef.id, currentRaw, patchOperations, body);
+    const rawUpdated = await patchTaskFields(client, taskRef.id, patchOperations);
     const task = normalizeTask(rawUpdated, taskRef.project, webUrl);
     const action =
       fields.done === true && !currentTask.done
@@ -744,68 +812,15 @@ export async function updateTask(
   };
 }
 
-const WRITABLE_TASK_FIELDS = [
-  'bucket_id',
-  'cover_image_attachment_id',
-  'description',
-  'done',
-  'due_date',
-  'end_date',
-  'hex_color',
-  'is_favorite',
-  'percent_done',
-  'priority',
-  'project_id',
-  'reminders',
-  'repeat_after',
-  'repeat_mode',
-  'start_date',
-  'title',
-] as const;
-
-function buildWritableTaskSnapshot(
-  currentTask: Record<string, any>,
-  changes: Record<string, any>,
-): Record<string, any> {
-  const snapshot: Record<string, any> = {};
-  for (const field of WRITABLE_TASK_FIELDS) {
-    if (currentTask[field] !== undefined) snapshot[field] = currentTask[field];
-  }
-  return { ...snapshot, ...changes };
-}
-
 export async function patchTaskFields(
   client: VikunjaApiClient,
   taskId: number,
-  currentTask: Record<string, any>,
   patchOperations: { op: string; path: string; value: unknown }[],
-  changes: Record<string, unknown>,
 ): Promise<any> {
-  try {
-    return await client.request<any>('PATCH', `/tasks/${taskId}`, {
-      body: patchOperations,
-      headers: { 'Content-Type': 'application/json-patch+json' },
-    });
-  } catch (error) {
-    if (!isSubscriptionValidationDefect(error)) throw error;
-
-    // Vikunja v2.3 can reject its own read-only subscription object after assignment.
-    // PUT clears omitted fields, so preserve all writable task fields and exclude read-only data.
-    return client.request<any>('PUT', `/tasks/${taskId}`, {
-      body: buildWritableTaskSnapshot(currentTask, changes),
-    });
-  }
-}
-
-function isSubscriptionValidationDefect(error: unknown): error is VikunjaError {
-  return (
-    error instanceof VikunjaError &&
-    error.status === 422 &&
-    error.fieldErrors.some(
-      ({ location, message }) =>
-        location === 'body.subscription.entity' && /expected integer/i.test(message),
-    )
-  );
+  return client.request<any>('PATCH', `/tasks/${taskId}`, {
+    body: patchOperations,
+    headers: { 'Content-Type': 'application/json-patch+json' },
+  });
 }
 
 export async function deleteTask(
@@ -842,6 +857,7 @@ export async function closeWithEvidence(
   evidenceComment: string,
   projectSelector?: { id?: number; title?: string },
   idempotencyKey?: string,
+  actor?: string,
 ): Promise<CloseWithEvidenceResult> {
   const projectKey = projectSelector?.id ?? projectSelector?.title?.toLowerCase() ?? 'global';
   const cacheKey = idempotencyKey
@@ -862,6 +878,7 @@ export async function closeWithEvidence(
     evidenceComment,
     undefined,
     idempotencyKey ? `close-with-evidence:${idempotencyKey}` : undefined,
+    actor,
   );
 
   // 2. Close task (if comment succeeds)
@@ -1152,6 +1169,77 @@ export async function listLabels(
   }));
 }
 
+export interface SetStatusResult extends WriteEcho {
+  statusLabel: string;
+  removedStatusLabels: string[];
+  repaired: boolean;
+}
+
+export async function setTaskStatus(
+  client: VikunjaApiClient,
+  taskSelector: string | number,
+  statusLabel: string,
+  projectSelector?: { id?: number; title?: string },
+  createIfMissing = false,
+): Promise<SetStatusResult> {
+  const prefix = client.getConfig().statusLabelPrefix ?? 'status:';
+  if (!statusLabel.toLowerCase().startsWith(prefix.toLowerCase())) {
+    throw new VikunjaError({
+      status: 400,
+      code: 'INVALID_STATUS_LABEL',
+      method: 'TOOLS_CALL',
+      path: 'statusLabel',
+      message: `Status label must start with the configured prefix "${prefix}".`,
+      fieldErrors: [],
+    });
+  }
+
+  const taskRef = await resolveTask(client, taskSelector, projectSelector);
+  const target = {
+    id: taskRef.id,
+    index: taskRef.index,
+    identifier: taskRef.identifier,
+    project: taskRef.project,
+    title: taskRef.title,
+  };
+  const currentStatusLabels = taskRef.labels.filter((label) =>
+    label.title.toLowerCase().startsWith(prefix.toLowerCase()),
+  );
+  const requestedCurrent = currentStatusLabels.find(
+    (label) => label.title.toLowerCase() === statusLabel.toLowerCase(),
+  );
+
+  if (currentStatusLabels.length === 1 && requestedCurrent) {
+    return {
+      action: 'unchanged',
+      target,
+      statusLabel: requestedCurrent.title,
+      removedStatusLabels: [],
+      repaired: false,
+    };
+  }
+
+  const labelId =
+    requestedCurrent?.id ?? (await resolveOrCreateLabel(client, statusLabel, { createIfMissing }));
+  const retained = taskRef.labels
+    .filter((label) => !label.title.toLowerCase().startsWith(prefix.toLowerCase()))
+    .map((label) => ({ id: label.id, title: label.title }));
+
+  await client.request<any>('PUT', `/tasks/${taskRef.id}/labels/bulk`, {
+    body: { labels: [...retained, { id: labelId, title: statusLabel }] },
+  });
+
+  return {
+    action: 'updated',
+    target,
+    statusLabel: requestedCurrent?.title ?? statusLabel,
+    removedStatusLabels: currentStatusLabels
+      .filter((label) => label.id !== labelId)
+      .map((label) => label.title),
+    repaired: currentStatusLabels.length > 1,
+  };
+}
+
 const VALID_RELATION_KINDS = [
   'subtask',
   'parenttask',
@@ -1268,9 +1356,11 @@ export async function listRelations(
   client: VikunjaApiClient,
   taskSelector: string | number,
   projectSelector?: { id?: number; title?: string },
+  requestedResponseMode?: ResponseMode,
 ): Promise<any[]> {
   const taskRef = await resolveTask(client, taskSelector, projectSelector);
   const webUrl = client.getConfig().vikunjaWebUrl;
+  const responseMode = selectedResponseMode(client, requestedResponseMode);
 
   const rawTask = await client.request<any>('GET', `/tasks/${taskRef.id}`);
   const related = rawTask.related_tasks || {};
@@ -1293,7 +1383,12 @@ export async function listRelations(
         }
         relations.push({
           relationKind: kind,
-          task: normalizeTask(t, project, webUrl),
+          task:
+            responseMode === 'compact'
+              ? normalizeCompactTask(t, project)
+              : responseMode === 'full'
+                ? normalizeTask(t, project, webUrl)
+                : normalizeTaskListItem(t, project, webUrl),
         });
       }
     }

@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased
+
+### Vikunja 2.4.0
+
+- Refresh the checked-in API contract from Vikunja 2.4.0 and require that
+  latest v2 surface instead of retaining older API compatibility behavior.
+- Remove the Vikunja 2.3 task-update PATCH-to-PUT workaround; task and reminder
+  updates now use the documented RFC 6902 PATCH route directly.
+
+### Workflow Safety And Efficiency
+
+- Add configurable mutation project enforcement. Global-ID writes without
+  `projectSelector` are rejected under the default
+  `VIKUNJA_MUTATION_SCOPE_MODE=require`; `warn` and `off` remain available as
+  temporary migration aids.
+- Bound streamed attachment and user-export downloads by inactivity instead of
+  total duration, so a healthy large transfer is no longer cut off at the
+  transfer timeout while a stalled stream still fails with `REQUEST_TIMEOUT`.
+- Report `unchanged` instead of issuing a no-op PATCH when clearing the due
+  date of a task that has none.
+- Return compact related-task summaries from `list-relations` by default;
+  `responseMode: "standard"` or `"full"` restores the larger task bodies.
+- Add optional actor attribution to task creation, comment creation,
+  evidence-close, and idempotent CSV import workflows.
+- Add compact project summaries grouped by done state, priority, labels, and
+  the configured status-label prefix without returning task bodies.
+- Add `set_status`, which replaces all labels in the configured status group
+  in one request, repairs multiple-status tasks, and does not create a missing
+  label unless explicitly requested.
+- Add a bounded process-local idempotent CSV mode with preview, deterministic
+  row hashes, same-key rerun skipping, and honest created/skipped/failed counts.
+  Native CSV migration remains the fast non-idempotent path.
+
 ## 2.3.997 - 2026-07-22
 
 ### Agent Search And Guidance

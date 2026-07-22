@@ -38,13 +38,13 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     {
       action: 'create',
       required: ['projectSelector', 'fields.title'],
-      optional: ['fields', 'idempotencyKey', 'attachments'],
+      optional: ['fields', 'idempotencyKey', 'attachments', 'actor'],
       execution: 'Direct POST; MCP-composed when attachments are supplied',
     },
     {
       action: 'create_if_absent',
       required: ['projectSelector', 'fields.title'],
-      optional: ['fields', 'idempotencyKey', 'attachments'],
+      optional: ['fields', 'idempotencyKey', 'attachments', 'actor'],
       execution: 'MCP-composed exact-title search then optional create/attach',
       note: 'Best-effort duplicate prevention, not a distributed lock.',
     },
@@ -79,10 +79,15 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
       note: 'Defaults to done=false unless done or allStates is supplied.',
     },
     {
+      action: 'summary',
+      required: ['projectSelector'],
+      execution: 'MCP-composed paginated counts by state, priority, and label',
+    },
+    {
       action: 'update',
       required: ['taskSelector', 'fields'],
       optional: [...taskSelector, ...writeOptions],
-      execution: 'Identity/read preflight, RFC 6902 PATCH, guarded writable-field PUT fallback',
+      execution: 'Identity/read preflight followed by RFC 6902 PATCH',
     },
     {
       action: 'delete',
@@ -105,7 +110,7 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     {
       action: 'close_with_evidence',
       required: ['taskSelector', 'evidenceComment'],
-      optional: [...taskSelector, 'idempotencyKey'],
+      optional: [...taskSelector, 'idempotencyKey', 'actor'],
       execution: 'MCP-composed comment create followed by task close',
     },
     {
@@ -146,6 +151,13 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
       execution: 'Direct GET after identity resolution',
     },
     {
+      action: 'set_status',
+      required: ['taskSelector', 'statusLabel'],
+      optional: [...taskSelector, 'createIfMissing (default false)'],
+      execution: 'Identity preflight then one bulk label-set replacement',
+      note: 'Preserves non-status labels and repairs multiple configured-prefix labels.',
+    },
+    {
       action: 'relate',
       required: ['taskSelector', 'otherTaskSelector', 'relationKind'],
       optional: taskSelector,
@@ -160,7 +172,7 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     {
       action: 'list-relations',
       required: ['taskSelector'],
-      optional: taskSelector,
+      optional: [...taskSelector, 'responseMode (compact default; standard/full explicit)'],
       execution: 'MCP-composed from task related_tasks data',
     },
     {
@@ -186,7 +198,7 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     {
       action: 'create',
       required: ['taskSelector', 'comment'],
-      optional: [...taskSelector, 'idempotencyKey'],
+      optional: [...taskSelector, 'idempotencyKey', 'actor'],
       execution: 'Direct POST after identity resolution',
     },
     {
@@ -315,14 +327,29 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     {
       action: 'preview',
       required: ['filePath', 'config'],
-      execution: 'Direct multipart CSV preview',
+      optional: ['mode (native default or idempotent)', 'projectSelector'],
+      execution: 'Direct multipart native preview or MCP-local idempotent preview',
     },
     {
       action: 'import',
       required: ['filePath', 'config'],
-      execution: 'Direct multipart CSV migration',
+      optional: [
+        'mode (native default or idempotent)',
+        'idempotencyKey (required in idempotent mode)',
+        'projectSelector',
+        'actor',
+      ],
+      execution: 'Direct native migration or MCP-composed row-by-row task creation',
+      note: 'Native mode is fast and non-idempotent; idempotent mode uses a process-local ledger.',
     },
-    { action: 'status', execution: 'Direct GET /migration/csv/status' },
+    {
+      action: 'status',
+      optional: [
+        'mode (native default or idempotent)',
+        'idempotencyKey (required in idempotent mode)',
+      ],
+      execution: 'Direct native GET or compact process-local ledger status',
+    },
   ],
   vikunja_export_project: [
     {

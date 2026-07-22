@@ -131,68 +131,6 @@ describe('restored compatibility capabilities', () => {
     ]);
   });
 
-  it('preserves task fields when Vikunja rejects reminder PATCH after assignment', async () => {
-    mockFetch
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        text: async () =>
-          JSON.stringify({
-            id: 10,
-            index: 3,
-            title: 'Assigned task',
-            project_id: 2,
-            project: { title: 'Alpha' },
-          }),
-      } as Response)
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        text: async () =>
-          JSON.stringify({
-            id: 10,
-            title: 'Assigned task',
-            done: false,
-            priority: 3,
-            reminders: [],
-            subscription: { entity: 'task', entity_id: 10 },
-          }),
-      } as Response)
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 422,
-        text: async () =>
-          JSON.stringify({
-            title: 'Validation error',
-            status: 422,
-            detail: 'Invalid task',
-            errors: [
-              {
-                location: 'body.subscription.entity',
-                message: 'Expected integer',
-              },
-            ],
-          }),
-      } as Response)
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        text: async () => JSON.stringify({ id: 10 }),
-      } as Response);
-
-    await addTaskReminder(client, 10, { reminder: '2026-08-03T10:00:00Z' });
-
-    const put = mockFetch.mock.calls.find((call) => (call[1] as RequestInit)?.method === 'PUT');
-    const body = JSON.parse((put![1] as RequestInit).body as string);
-    expect(body).toMatchObject({
-      title: 'Assigned task',
-      done: false,
-      priority: 3,
-      reminders: [{ reminder: '2026-08-03T10:00:00Z' }],
-    });
-    expect(body).not.toHaveProperty('subscription');
-  });
-
   it('uses scoped project webhook routes and never returns write-only secrets', async () => {
     mockFetch
       .mockResolvedValueOnce({

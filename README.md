@@ -13,6 +13,7 @@ wrappers from the original implementation remain in the current tree.
 ## Requirements
 
 - Node.js 24 LTS+
+- Vikunja 2.4.0 with `/api/v2`
 - Vikunja API token with access to the projects you need
 
 ## Install
@@ -58,17 +59,19 @@ installing or updating the skill.
 
 ## Environment
 
-| Variable | Required | Description |
-| --- | --- | --- |
-| `VIKUNJA_URL` | yes | Server root or `…/api/v2` (e.g. `http://host:3456`) |
-| `VIKUNJA_API_TOKEN` | yes | Bearer token (`tk_…`) |
-| `VIKUNJA_WEB_URL` | no | Browser base for task/project links |
-| `VIKUNJA_ATTACHMENT_DOWNLOAD_ROOT` | no | Sandboxed download root (defaults under the OS temp directory) |
-| `VIKUNJA_MAX_ATTACHMENT_BYTES` | no | Upload/download size ceiling (default 100 MiB) |
-| `VIKUNJA_TEMPLATE_FILE` | no | Machine-local template JSON path (defaults under the user home directory) |
-| `VIKUNJA_MCP_RESPONSE_MODE` | no | Default task response size: `compact` (default), `standard`, or `full` |
-| `VIKUNJA_REQUEST_TIMEOUT_MS` | no | Positive per-request timeout in milliseconds (default 30000) |
-| `VIKUNJA_TRANSFER_TIMEOUT_MS` | no | Streamed and multipart transfer timeout in milliseconds (default 60000) |
+| Variable                           | Required | Description                                                                           |
+| ---------------------------------- | -------- | ------------------------------------------------------------------------------------- |
+| `VIKUNJA_URL`                      | yes      | Server root or `…/api/v2` (e.g. `http://host:3456`)                                   |
+| `VIKUNJA_API_TOKEN`                | yes      | Bearer token (`tk_…`)                                                                 |
+| `VIKUNJA_WEB_URL`                  | no       | Browser base for task/project links                                                   |
+| `VIKUNJA_ATTACHMENT_DOWNLOAD_ROOT` | no       | Sandboxed download root (defaults under the OS temp directory)                        |
+| `VIKUNJA_MAX_ATTACHMENT_BYTES`     | no       | Upload/download size ceiling (default 100 MiB)                                        |
+| `VIKUNJA_TEMPLATE_FILE`            | no       | Machine-local template JSON path (defaults under the user home directory)             |
+| `VIKUNJA_MCP_RESPONSE_MODE`        | no       | Default task response size: `compact` (default), `standard`, or `full`                |
+| `VIKUNJA_REQUEST_TIMEOUT_MS`       | no       | Positive per-request timeout in milliseconds (default 30000)                          |
+| `VIKUNJA_TRANSFER_TIMEOUT_MS`      | no       | Streamed and multipart transfer timeout in milliseconds (default 60000)               |
+| `VIKUNJA_MUTATION_SCOPE_MODE`      | no       | Global-ID mutation policy: `require` (default), `warn`, or `off`                      |
+| `VIKUNJA_STATUS_LABEL_PREFIX`      | no       | Prefix whose labels form one mutually exclusive task-status group (default `status:`) |
 
 Never commit tokens. Rejects `/api/v1` URLs.
 API and browser URLs must use `http://` or `https://`.
@@ -116,7 +119,7 @@ as independent tracker writers.
 
 - `self_check` / `vikunja_auth` — compact diagnostics and current user (no email); use `detail: "full"` only for capabilities and local paths
 - `vikunja_projects` — list / get
-- `vikunja_tasks` — CRUD, list (default **open only**), create_if_absent, assignees, labels, relations, attachments
+- `vikunja_tasks` — CRUD, list (default **open only**), project summary, create_if_absent, assignees, labels, mutually exclusive status switching, relations, attachments
 - `vikunja_task_comments` — comment lists default to 20 items per page and accept `page` / `perPage` (max 100)
 - `vikunja_labels` — global labels (title or id)
 - `vikunja_users`
@@ -124,7 +127,7 @@ as independent tracker writers.
 - `vikunja_filters` — create/get/update/delete (**no list**; API has no collection GET)
 - `vikunja_task_bulk` — native bulk update; bounded composed create/delete
 - `vikunja_task_reminders` — list/add/remove task reminders
-- `vikunja_batch_import` — detect/preview/import/status for native CSV migration
+- `vikunja_batch_import` — detect/preview/import/status for native-fast or MCP-idempotent CSV migration
 - `vikunja_export_project` — local JSON/CSV task export
 - `vikunja_request_user_export` / `vikunja_download_user_export`
 - `vikunja_templates` — machine-local templates and task instantiation
@@ -139,6 +142,21 @@ Task updates, assignment changes, and label removal return `unchanged` when the
 requested state already exists. `close_with_evidence` accepts an
 `idempotencyKey` so a process-local retry does not duplicate its evidence
 comment.
+
+Create, comment, evidence-close, and idempotent-import operations accept
+optional `actor` attribution. `summary` returns project counts by done state,
+priority, label, and configured status label without returning task bodies.
+
+`set_status` replaces every task label matching `VIKUNJA_STATUS_LABEL_PREFIX`
+with the requested existing visible label in one bulk-label request. It repairs
+tasks that already have multiple matching labels and reports that repair.
+`createIfMissing` is opt-in; labels are global/visible Vikunja entities rather
+than project-owned records, while the task itself remains project-verified.
+
+Global-ID mutations without `projectSelector` are rejected under the default
+`VIKUNJA_MUTATION_SCOPE_MODE=require`. Set `warn` (log only) or `off` only as a
+temporary migration aid. A supplied project is always checked against the
+resolved task before mutation.
 
 Vikunja permissions still apply per operation. Applying a label may be denied
 even when ordinary task updates are allowed. Some Vikunja builds also require
@@ -159,6 +177,7 @@ title, done state, priority, and the creator username when available. Request
 - Bulk create: 100 tasks per call; composed and non-atomic.
 - Bulk delete: 100 task IDs per call; composed, non-atomic, and requires `confirm: true`.
 - CSV import and file transfer: 100 MiB by default through `VIKUNJA_MAX_ATTACHMENT_BYTES`; Vikunja controls CSV row limits.
+- Idempotent CSV import: 1,000 rows per call and up to 100 process-local import-ledger keys; same-key reruns skip rows already recorded. Native migration remains faster and non-idempotent.
 - Multi-project lists page each project independently. Prefer `countOnly` when only totals are needed.
 
 ## Develop

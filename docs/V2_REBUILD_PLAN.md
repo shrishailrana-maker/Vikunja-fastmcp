@@ -144,6 +144,9 @@ The first release includes only features tied to demonstrated workflows:
   local download for automatic agent parsing.
 * compatibility tools for native bulk update, task reminders, CSV migration,
   user export, and webhooks;
+* mutation-scope policy with a warn-to-require compatibility transition,
+  actor-attributed writes, compact project summaries, mutually exclusive
+  status-label switching, and bounded idempotent CSV import;
 * bounded non-atomic bulk create/delete, composed project JSON/CSV export, and
   machine-local task templates without restoring the legacy service tower.
 
@@ -222,6 +225,14 @@ must survive operating-system temporary-file cleanup.
   or deliberate read-only `allProjects`; keep pagination grouped per project.
 * Resolve task identity once and use the global ID for all child operations.
 * Read and echo project, title, portal reference, and global ID on every write.
+* Warn or reject global-ID mutations without explicit project scope according
+  to `VIKUNJA_MUTATION_SCOPE_MODE`; always reject a supplied project mismatch.
+* Keep actor attribution additive and idempotent, and never echo submitted
+  evidence in compact write receipts.
+* Replace configured status labels in one bulk request while preserving every
+  unrelated label; never create the target label unless explicitly requested.
+* Bound process-local import ledgers and make ledger loss degrade only to
+  duplicate risk, never task deletion or overwrite.
 * Preserve 401, 403, 404, 405, and 409 meanings and safe server details.
 * Redact credentials before logs or responses are constructed.
 * Support process-local idempotency for create, comment, and attachment retry.

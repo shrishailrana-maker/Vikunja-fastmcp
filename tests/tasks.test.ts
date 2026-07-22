@@ -648,6 +648,35 @@ describe('Tasks List and Scoping tests', () => {
       expect(mockFetch.mock.calls.some((call: any) => call[1]?.method === 'PATCH')).toBe(false);
     });
 
+    it('treats clearing an already-empty (zero-date) due date as unchanged', async () => {
+      const existing = {
+        id: 9005,
+        index: 305,
+        identifier: 'ALPHA-305',
+        title: 'No due date',
+        project_id: 101,
+        project: { title: 'Alpha' },
+        done: false,
+        due_date: '0001-01-01T00:00:00Z',
+      };
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify(existing),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify(existing),
+        } as Response);
+
+      const echo = await updateTask(client, 9005, { dueDate: null });
+
+      expect(echo.action).toBe('unchanged');
+      expect(mockFetch.mock.calls.some((call: any) => call[1]?.method === 'PATCH')).toBe(false);
+    });
+
     it('makes close_with_evidence retry-safe and reports only fields actually changed', async () => {
       const task = {
         id: 9005,
@@ -699,85 +728,6 @@ describe('Tasks List and Scoping tests', () => {
       expect(first.changed).toEqual(['comment']);
       expect(second).toEqual(first);
       expect(mockFetch).toHaveBeenCalledTimes(callCount);
-    });
-
-    it('falls back to a writable-field PUT when Vikunja rejects its own subscription on PATCH', async () => {
-      mockFetch
-        .mockResolvedValueOnce({
-          ok: true,
-          status: 200,
-          text: async () =>
-            JSON.stringify({
-              id: 9005,
-              index: 305,
-              title: 'Assigned task',
-              project_id: 101,
-              project: { title: 'Alpha' },
-            }),
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          status: 200,
-          text: async () =>
-            JSON.stringify({
-              id: 9005,
-              index: 305,
-              title: 'Assigned task',
-              description: '<p>Keep this evidence.</p>',
-              project_id: 101,
-              priority: 4,
-              done: false,
-              subscription: { entity: 'task', entity_id: 9005 },
-            }),
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: false,
-          status: 422,
-          statusText: 'Unprocessable Entity',
-          text: async () =>
-            JSON.stringify({
-              title: 'Validation Error',
-              status: 422,
-              detail: 'validation failed',
-              errors: [
-                {
-                  location: 'body.subscription.entity',
-                  message: 'expected integer',
-                  value: 'task',
-                },
-              ],
-            }),
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          status: 200,
-          text: async () =>
-            JSON.stringify({
-              id: 9005,
-              index: 305,
-              title: 'Assigned task',
-              description: '<p>Keep this evidence.</p>',
-              project_id: 101,
-              priority: 4,
-              done: true,
-            }),
-        } as Response);
-
-      const echo = await updateTask(client, 9005, { done: true });
-
-      expect(echo.action).toBe('closed');
-      const putCall = mockFetch.mock.calls.find((call: any) => call[1]?.method === 'PUT');
-      expect(putCall).toBeDefined();
-      expect(JSON.parse(putCall[1].body)).toEqual(
-        expect.objectContaining({
-          title: 'Assigned task',
-          description: '<p>Keep this evidence.</p>',
-          project_id: 101,
-          priority: 4,
-          done: true,
-        }),
-      );
-      expect(JSON.parse(putCall[1].body)).not.toHaveProperty('subscription');
     });
 
     it('clears a due date by sending an explicit null in PATCH', async () => {

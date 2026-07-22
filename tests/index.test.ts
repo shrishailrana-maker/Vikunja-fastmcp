@@ -28,6 +28,7 @@ describe('MCP Server Registration and Dispatching tests', () => {
     mockFetch.mockRestore();
     delete process.env.VIKUNJA_URL;
     delete process.env.VIKUNJA_API_TOKEN;
+    delete process.env.VIKUNJA_MUTATION_SCOPE_MODE;
   });
 
   it('recognizes an entry point reached through a junction or symlink', () => {
@@ -109,6 +110,16 @@ describe('MCP Server Registration and Dispatching tests', () => {
       type: 'string',
       description: expect.stringContaining('alias for q'),
     });
+    expect(
+      taskTool.inputSchema.oneOf.some(
+        (branch: any) => branch.properties.action.const === 'summary',
+      ),
+    ).toBe(true);
+    expect(
+      taskTool.inputSchema.oneOf.some(
+        (branch: any) => branch.properties.action.const === 'set_status',
+      ),
+    ).toBe(true);
 
     const webhookTool = response.tools.find((t: any) => t.name === 'vikunja_webhooks');
     const eventBranch = webhookTool.inputSchema.oneOf.find(
@@ -202,6 +213,22 @@ describe('MCP Server Registration and Dispatching tests', () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
+  it('enforces required project scope by default before dispatching a global-id mutation', async () => {
+    const handler = (server as any)._requestHandlers.get('tools/call');
+
+    const response = await handler({
+      method: 'tools/call',
+      params: {
+        name: 'vikunja_tasks',
+        arguments: { action: 'update', taskSelector: 99, fields: { done: true } },
+      },
+    });
+
+    expect(response.isError).toBe(true);
+    expect(response.content[0].text).toContain('PROJECT_SCOPE_REQUIRED');
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
   it('should dispatch call to self_check diagnostic successfully', async () => {
     const handler = (server as any)._requestHandlers.get('tools/call');
 
@@ -278,7 +305,7 @@ describe('MCP Server Registration and Dispatching tests', () => {
       return {
         ok: true,
         status: 200,
-        text: async () => JSON.stringify({ version: 'v2.3.0-test' }),
+        text: async () => JSON.stringify({ version: 'v2.4.0-test' }),
       } as Response;
     });
 
@@ -374,7 +401,7 @@ describe('MCP Server Registration and Dispatching tests', () => {
   });
 
   it.each([
-    ['vikunja_tasks', { action: 'update', taskSelector: 99, fields: {} }],
+    ['vikunja_tasks', { action: 'update', taskSelector: 99, projectSelector: { id: 101 }, fields: {} }],
     ['vikunja_labels', { action: 'update', labelSelector: 9 }],
     ['vikunja_filters', { action: 'update', filterId: 7 }],
   ])('rejects empty write payloads for %s', async (name, arguments_) => {
@@ -417,6 +444,7 @@ describe('MCP Server Registration and Dispatching tests', () => {
   });
 
   it('preserves a real upstream 401 instead of rewriting it to 403', async () => {
+    process.env.VIKUNJA_MUTATION_SCOPE_MODE = 'warn';
     const handler = (server as any)._requestHandlers.get('tools/call');
     mockFetch.mockResolvedValueOnce({
       ok: false,
@@ -438,6 +466,7 @@ describe('MCP Server Registration and Dispatching tests', () => {
   });
 
   it('preserves an explicit null due date through MCP dispatch', async () => {
+    process.env.VIKUNJA_MUTATION_SCOPE_MODE = 'warn';
     const handler = (server as any)._requestHandlers.get('tools/call');
     mockFetch
       .mockResolvedValueOnce({

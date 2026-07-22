@@ -13,6 +13,7 @@ import { VikunjaApiClient } from './api.js';
 import { resolveTask } from './identity.js';
 import { htmlToMarkdown, markdownToHtml, normalizePagination, toItemArray } from './format.js';
 import { idempotency } from './idempotency.js';
+import { withActorAttribution } from './mutation-policy.js';
 
 export interface Comment {
   id: number;
@@ -30,6 +31,7 @@ export async function createComment(
   comment: string,
   projectSelector?: { id?: number; title?: string },
   idempotencyKey?: string,
+  actor?: string,
 ): Promise<Comment> {
   const projectKey = projectSelector?.id ?? projectSelector?.title?.toLowerCase() ?? 'global';
   const cacheKey = idempotencyKey
@@ -43,7 +45,7 @@ export async function createComment(
 
   const task = await resolveTask(client, taskSelector, projectSelector);
 
-  const htmlComment = markdownToHtml(comment);
+  const htmlComment = markdownToHtml(withActorAttribution(comment, actor)!);
   const path = `/tasks/${task.id}/comments`;
   const rawComment = await client.request<any>('POST', path, {
     body: { comment: htmlComment },

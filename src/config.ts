@@ -13,6 +13,7 @@ import os from 'os';
 import path from 'path';
 
 export type ResponseMode = 'compact' | 'standard' | 'full';
+export type MutationScopeMode = 'off' | 'warn' | 'require';
 
 export interface Config {
   vikunjaUrl: string; // e.g. "https://vikunja.example.com/api/v2"
@@ -29,6 +30,10 @@ export interface Config {
   requestTimeoutMs?: number;
   // Longer timeout for streamed responses and multipart transfers.
   transferTimeoutMs?: number;
+  // Controls global task-id writes that omit an explicit project selector.
+  mutationScopeMode?: MutationScopeMode;
+  // Labels with this prefix form the mutually exclusive task-status group.
+  statusLabelPrefix?: string;
 }
 
 // Default single-attachment size ceiling (100 MiB) when the env var is unset.
@@ -107,6 +112,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const token = env.VIKUNJA_API_TOKEN || '';
   const rawWebUrl = env.VIKUNJA_WEB_URL || '';
   const rawResponseMode = env.VIKUNJA_MCP_RESPONSE_MODE?.trim();
+  const rawMutationScopeMode = env.VIKUNJA_MUTATION_SCOPE_MODE?.trim().toLowerCase();
+  const statusLabelPrefix = env.VIKUNJA_STATUS_LABEL_PREFIX?.trim() || 'status:';
 
   if (!rawUrl) {
     throw new Error('VIKUNJA_URL environment variable is not set.');
@@ -150,6 +157,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     responseMode = rawResponseMode as ResponseMode;
   }
 
+  let mutationScopeMode: MutationScopeMode = 'require';
+  if (rawMutationScopeMode) {
+    if (!['off', 'warn', 'require'].includes(rawMutationScopeMode)) {
+      throw new Error('VIKUNJA_MUTATION_SCOPE_MODE must be one of: off, warn, require.');
+    }
+    mutationScopeMode = rawMutationScopeMode as MutationScopeMode;
+  }
+  if (statusLabelPrefix.length > 50) {
+    throw new Error('VIKUNJA_STATUS_LABEL_PREFIX must not exceed 50 characters.');
+  }
+
   const requestTimeoutMs = positiveIntegerEnv(
     env,
     'VIKUNJA_REQUEST_TIMEOUT_MS',
@@ -170,5 +188,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     responseMode,
     requestTimeoutMs,
     transferTimeoutMs,
+    mutationScopeMode,
+    statusLabelPrefix,
   };
 }

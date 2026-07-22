@@ -11,9 +11,10 @@ Local API references for agents:
   snapshot downloaded from the configured v2 service.
 * [`VIKUNJA_V2_API_REFERENCE.md`](VIKUNJA_V2_API_REFERENCE.md): generated method,
   path, operation, and schema index.
-* [`vikunja-v2-docs.html`](vikunja-v2-docs.html): saved v2 interactive-doc entry
-  page.
 
+The current contract targets the official Vikunja
+[`v2.4.0`](https://github.com/go-vikunja/vikunja/releases/tag/v2.4.0) release
+at tag commit `907850feae3866ae9b16ea1c7b84a4d77273415a`.
 The JSON snapshot is the local HTTP authority. Re-download and review it when
 the Vikunja service is upgraded; never substitute the old SDK or v1 docs.
 
@@ -62,12 +63,9 @@ own path map is not treated as a missing capability.
 
 All paths below are relative to `/api/v2`. Creates use `POST`; partial updates
 prefer `PATCH`. Task updates use RFC 6902 JSON Patch and other partial resource
-updates use JSON Merge Patch. Vikunja v2.3 may reject its own read-only
-`subscription` object after an assignee is added; only for that exact 422
-validation signature, the MCP retries with a full `PUT` containing the current
-writable task fields plus the requested changes. Other validation failures are
-returned unchanged. `PUT` is otherwise reserved for a documented full
-replacement or bulk replacement body.
+updates use JSON Merge Patch. The MCP targets Vikunja 2.4.0 and does not carry
+older API workarounds. `PUT` is reserved for a documented full replacement or
+bulk replacement body.
 
 | Capability | Method and path | Contract |
 | --- | --- | --- |
@@ -76,7 +74,7 @@ replacement or bulk replacement body.
 | Projects | `GET /projects`, `GET /projects/{id}` | Direct |
 | Task list | `GET /projects/{project}/tasks`, `GET /tasks` | Direct |
 | Task get/create | `GET /tasks/{projecttask}`, `POST /projects/{project}/tasks` | Direct |
-| Task update/delete | `PATCH` or full `PUT`, `DELETE /tasks/{projecttask}` | Direct |
+| Task update/delete | `PATCH`, `DELETE /tasks/{projecttask}` | Direct |
 | Assignees | `GET`, `POST`, bulk `PUT`, and member `DELETE` below `/tasks/{projecttask}/assignees` | Direct |
 | Task labels | `GET`, `POST`, bulk `PUT`, and label `DELETE` below `/tasks/{projecttask}/labels` | Direct |
 | Labels | `GET`/`POST /labels`; item `GET`/`PATCH`/`PUT`/`DELETE` | Direct |
@@ -107,10 +105,11 @@ expected success status class from the configured server's OpenAPI. No caller
 guesses fields such as assignee ID, label ID, or relation kind. A missing or
 ambiguous required schema blocks that operation and is named by `self-check`.
 
-The exact-title server filter required by `create_if_absent` must also be
-proven during this gate. If the configured v2 server cannot express it,
-`create_if_absent` is reported unsupported; the MCP does not replace it with a
-multi-page client-side task scan.
+`create_if_absent` prefers the server-side exact-title filter when the title is
+filter-safe. Titles the filter DSL cannot express fall back to a paginated `q`
+search with exact-title matching that fails closed
+(`EXACT_TITLE_SEARCH_INCOMPLETE`) when absence cannot be proven, rather than
+creating a possible duplicate.
 
 Agents inspect the saved OpenAPI and generated reference before adding an HTTP
 call. The live capability gate still revalidates them because the installed
@@ -122,7 +121,7 @@ server may be newer than the committed snapshot.
 | --- | --- |
 | `vikunja_auth` | `status`, `self-check` |
 | `vikunja_projects` | `list`, `get` |
-| `vikunja_tasks` | `create`, `create_if_absent`, `get`, `list`, `update`, `delete`, `close`, `reopen`, `close_with_evidence`, `assign`, `unassign`, `list-assignees`, `apply-label`, `remove-label`, `list-labels`, `relate`, `unrelate`, `list-relations`, `attach`, `list-attachments`, `download-attachment` |
+| `vikunja_tasks` | `create`, `create_if_absent`, `get`, `list`, `summary`, `update`, `delete`, `close`, `reopen`, `close_with_evidence`, `assign`, `unassign`, `list-assignees`, `apply-label`, `remove-label`, `list-labels`, `set_status`, `relate`, `unrelate`, `list-relations`, `attach`, `list-attachments`, `download-attachment` |
 | `vikunja_task_comments` | `create`, `list`, `get`, `update`, `delete`; list defaults to page 1 with 20 comments and caps `perPage` at 100 |
 | `vikunja_labels` | `list`, `get`, `create`, `update`, `delete` |
 | `vikunja_users` | `current`, `search` |
@@ -153,7 +152,8 @@ The limits are part of the public MCP contract rather than hidden truncation:
 * composed bulk delete accepts at most 100 global task IDs, is non-atomic, and
   requires `confirm: true`;
 * CSV import and file upload/download use `VIKUNJA_MAX_ATTACHMENT_BYTES`, 100
-  MiB by default; Vikunja controls CSV row-count limits.
+  MiB by default; native migration uses Vikunja's row limits, while MCP
+  idempotent import is capped at 1,000 rows and 100 process-local ledger keys;
 * ordinary API calls time out after 30 seconds by default through
   `VIKUNJA_REQUEST_TIMEOUT_MS`; streamed and multipart transfers use the
   60-second `VIKUNJA_TRANSFER_TIMEOUT_MS` default.
@@ -229,10 +229,11 @@ is also read-only; it uses the same grouped response shape.
 
 `projects: [...]` cannot be used for create, update, delete, or a project-local
 `#index` reference. Task creation and project-local references always require
-one `project`. A write using a global task ID may omit project because the
-global ID is unique, but the MCP still reads and echoes the resolved project
-before reporting success. When the caller supplies project, a mismatch fails
-before mutation. Comments, labels, assignments, relations, and attachments
+one `project`. A global task ID is unambiguous, but omitting project scope on a
+mutation is rejected before dispatch under the default
+`VIKUNJA_MUTATION_SCOPE_MODE=require`; `warn` logs the unscoped write instead,
+and `off` disables the check. When the caller supplies project, a mismatch
+fails before mutation. Comments, labels, assignments, relations, and attachments
 inherit scope from the resolved task. They do not invent separate identity
 rules.
 
@@ -298,7 +299,10 @@ targets fail before mutation. `create`,
 comment creation, and attachment upload accept an optional process-local
 `idempotencyKey`. The compound `close_with_evidence` operation also accepts an
 idempotency key so a retry in the same MCP process does not duplicate the
-evidence comment. `update` may accept `expectedUpdatedAt`; because v2 does not
+evidence comment. Task creation, comment creation, `close_with_evidence`, and
+idempotent CSV import also accept an optional `actor`; the MCP appends `(by
+Actor)` once without echoing submitted evidence in compact receipts. `update`
+may accept `expectedUpdatedAt`; because v2 does not
 advertise an atomic conditional PATCH, this is documented as a best-effort
 pre-write conflict check, not a server-side lock.
 On a detected mismatch it returns `409 CONFLICT`. Success and error wording
@@ -451,6 +455,9 @@ reimplementing them locally.
   single-project response contains one total; subset and all-project responses
   contain one total per project. The MCP may request the smallest valid page
   needed to obtain `total`, but it does not infer a count by scanning tasks.
+* `summary` is a single-project MCP-composed aggregate over paged task data. It
+  returns counts by done state, priority, all labels, and labels matching the
+  configured status prefix, but no task bodies.
 
 Count-only success example:
 
@@ -478,6 +485,22 @@ locking.
 `close_with_evidence` resolves and verifies the task, creates the audit or
 verification comment, then closes it. The result reports both steps. A comment
 failure prevents the close.
+
+`set_status` resolves and project-verifies the task, preserves non-status
+labels, removes every label sharing `VIKUNJA_STATUS_LABEL_PREFIX` (default
+`status:`), and sends one bulk-label replacement containing exactly one target
+status label. Zero prior status labels is a normal add; multiple prior status
+labels are repaired and reported. The target must be an existing visible
+Vikunja label unless `createIfMissing: true` is explicit. Vikunja labels are
+server-visible entities rather than project-owned records.
+
+CSV import has two explicit modes. Native migration is the fast server path
+and is not idempotent. MCP idempotent mode validates and creates rows through
+normal task APIs, hashes normalized project/title/description, and stores
+`idempotencyKey -> row hash -> task id` in a bounded process-local ledger. A
+same-key rerun skips recorded rows and reports created/skipped/failed counts.
+Losing process state can permit duplicates but cannot delete or overwrite
+tasks. Preview performs validation without writes in both modes.
 
 These are MCP workflows, not new Vikunja endpoints.
 
@@ -575,6 +598,10 @@ The first rebuild must support these incidents end to end:
 8. Assign or unassign a user without replacing unrelated assignees.
 9. Mark duplicate or blocking relationships between tasks.
 10. Maintain the retained team and saved-filter workflows.
+11. Summarize a project without returning task bodies and switch one task's
+    configured status-label group to exactly one existing label.
+12. Preview native or idempotent CSV import and safely rerun the idempotent mode
+    with the same key.
 
 ## Security And Release Invariants
 

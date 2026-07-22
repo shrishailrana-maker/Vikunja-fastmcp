@@ -268,7 +268,7 @@ describe('Comments and Compound Operations tests', () => {
     });
 
     it('handles a title with parentheses/brackets via q (not filter DSL)', async () => {
-      const title = '[MCP] Login bug (v2.3.0-991)';
+      const title = '[MCP] Login bug (v2.4.0)';
       mockFetch.mockResolvedValueOnce({
         ok: true,
         status: 200,

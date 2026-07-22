@@ -47,6 +47,8 @@ import {
   relateTask,
   unrelateTask,
   listRelations,
+  projectSummary,
+  setTaskStatus,
 } from './tasks.js';
 import {
   createComment,
@@ -90,6 +92,12 @@ import {
   requestUserExport,
   startCsvImport,
 } from './data.js';
+import {
+  getIdempotentImportStatus,
+  importCsvIdempotently,
+  previewIdempotentCsvImport,
+} from './csv-import.js';
+import { enforceMutationProjectScope } from './mutation-policy.js';
 import {
   createWebhook,
   deleteWebhook,
@@ -253,6 +261,9 @@ function summaryFor(toolName: string, args: any, result: any): string {
   if (result?.count !== undefined && result?.project) {
     return `Count ${result.count} in **${safeSummaryText(result.project.title)}**.`;
   }
+  if (result?.total !== undefined && result?.byPriority && result?.project) {
+    return `Summarized ${result.total} tasks in **${safeSummaryText(result.project.title)}**.`;
+  }
   if (result?.pagination?.total !== undefined && result?.project) {
     const continuation = result.pagination.nextPage
       ? ` Next page: ${result.pagination.nextPage}.`
@@ -292,6 +303,14 @@ function badRequest(message: string): VikunjaError {
 function hasDefinedValue(value: Record<string, unknown> | undefined): boolean {
   return !!value && Object.values(value).some((field) => field !== undefined);
 }
+
+const actorSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(80)
+  .regex(/^[\p{L}\p{N} ._-]+$/u, 'actor contains unsupported characters')
+  .optional();
 
 export interface McpToolDefinition {
   name: string;
@@ -396,6 +415,7 @@ export const TOOLS: McpToolDefinition[] = [
         'create_if_absent',
         'get',
         'list',
+        'summary',
         'update',
         'delete',
         'close',
@@ -407,6 +427,7 @@ export const TOOLS: McpToolDefinition[] = [
         'apply-label',
         'remove-label',
         'list-labels',
+        'set_status',
         'relate',
         'unrelate',
         'list-relations',
@@ -467,8 +488,11 @@ export const TOOLS: McpToolDefinition[] = [
         .optional(),
       expectedUpdatedAt: z.string().optional(),
       evidenceComment: z.string().trim().min(1).optional(),
+      actor: actorSchema,
       userSelector: z.union([z.string().trim().min(1), z.number().int().positive()]).optional(),
       labelTitle: z.string().trim().min(1).optional(),
+      statusLabel: z.string().trim().min(1).optional(),
+      createIfMissing: z.boolean().optional(),
       otherTaskSelector: z
         .union([z.string().trim().min(1), z.number().int().positive()])
         .optional(),
@@ -509,6 +533,9 @@ export const TOOLS: McpToolDefinition[] = [
             filter: args.filter,
             responseMode: args.responseMode,
           });
+        case 'summary':
+          if (!args.projectSelector) throw badRequest('projectSelector is required for summary.');
+          return projectSummary(client, args.projectSelector);
         case 'create':
           if (!args.projectSelector) throw badRequest('projectSelector is required for create.');
           if (!args.fields?.title) throw badRequest('fields.title is required for create.');
@@ -524,6 +551,7 @@ export const TOOLS: McpToolDefinition[] = [
             },
             args.idempotencyKey,
             args.attachments,
+            args.actor,
           );
         case 'create_if_absent':
           if (!args.projectSelector) throw badRequest('projectSelector is required.');
@@ -540,6 +568,7 @@ export const TOOLS: McpToolDefinition[] = [
             },
             args.idempotencyKey,
             args.attachments,
+            args.actor,
           );
         case 'get':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
@@ -586,6 +615,7 @@ export const TOOLS: McpToolDefinition[] = [
             args.evidenceComment,
             args.projectSelector,
             args.idempotencyKey,
+            args.actor,
           );
         case 'assign':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
@@ -609,6 +639,16 @@ export const TOOLS: McpToolDefinition[] = [
         case 'list-labels':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
           return listLabels(client, args.taskSelector, args.projectSelector);
+        case 'set_status':
+          if (!args.taskSelector) throw badRequest('taskSelector is required.');
+          if (!args.statusLabel) throw badRequest('statusLabel is required.');
+          return setTaskStatus(
+            client,
+            args.taskSelector,
+            args.statusLabel,
+            args.projectSelector,
+            args.createIfMissing,
+          );
         case 'relate':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
           if (!args.otherTaskSelector) throw badRequest('otherTaskSelector is required.');
@@ -633,7 +673,7 @@ export const TOOLS: McpToolDefinition[] = [
           );
         case 'list-relations':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
-          return listRelations(client, args.taskSelector, args.projectSelector);
+          return listRelations(client, args.taskSelector, args.projectSelector, args.responseMode);
         case 'attach': {
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
           const files: AttachFileSpec[] = [];
@@ -689,6 +729,7 @@ export const TOOLS: McpToolDefinition[] = [
       commentId: z.number().int().positive().optional(),
       comment: z.string().trim().min(1).optional(),
       idempotencyKey: z.string().trim().min(1).max(200).optional(),
+      actor: actorSchema,
       page: z.number().int().positive().optional(),
       perPage: z.number().int().min(1).max(100).optional(),
     }),
@@ -702,6 +743,7 @@ export const TOOLS: McpToolDefinition[] = [
             args.comment,
             args.projectSelector,
             args.idempotencyKey,
+            args.actor,
           );
         case 'list':
           return listComments(
@@ -991,7 +1033,7 @@ export const TOOLS: McpToolDefinition[] = [
         case 'update':
           if (!args.taskIds) throw badRequest('taskIds is required for bulk update.');
           if (!args.fields) throw badRequest('fields is required for bulk update.');
-          return bulkUpdateTasks(client, args.taskIds, args.fields);
+          return bulkUpdateTasks(client, args.taskIds, args.fields, args.projectSelector);
         case 'create':
           if (!args.projectSelector) {
             throw badRequest('projectSelector is required for bulk create.');
@@ -1001,7 +1043,7 @@ export const TOOLS: McpToolDefinition[] = [
         case 'delete':
           if (!args.taskIds) throw badRequest('taskIds is required for bulk delete.');
           if (args.confirm !== true) throw badRequest('confirm=true is required for bulk delete.');
-          return bulkDeleteTasks(client, args.taskIds);
+          return bulkDeleteTasks(client, args.taskIds, args.projectSelector);
         default:
           throw badRequest(`Unknown bulk action: ${args.action}`);
       }
@@ -1054,19 +1096,62 @@ export const TOOLS: McpToolDefinition[] = [
   },
   {
     name: 'vikunja_batch_import',
-    description: 'Detect, preview, start, or inspect a native Vikunja v2 CSV import.',
+    description:
+      'Detect, preview, import, or inspect CSV data through native-fast or MCP-idempotent mode.',
     inputSchema: z.object({
       action: z.enum(['detect', 'preview', 'import', 'status']),
+      mode: z.enum(['native', 'idempotent']).optional(),
       filePath: z.string().trim().min(1).optional(),
       config: z.record(z.unknown()).optional(),
+      projectSelector: z
+        .object({
+          id: z.number().int().positive().optional(),
+          title: z.string().trim().min(1).optional(),
+        })
+        .optional(),
+      idempotencyKey: z.string().trim().min(1).max(200).optional(),
+      actor: actorSchema,
     }),
     handler: async (args, client) => {
-      if (args.action === 'status') return getCsvImportStatus(client);
+      const mode = args.mode ?? 'native';
+      if (args.action === 'status') {
+        if (mode === 'native') return getCsvImportStatus(client);
+        if (!args.idempotencyKey) {
+          throw badRequest('idempotencyKey is required for idempotent import status.');
+        }
+        return getIdempotentImportStatus(args.idempotencyKey);
+      }
       if (!args.filePath) throw badRequest('filePath is required.');
       if (args.action === 'detect') return detectCsvImport(client, args.filePath);
       if (!args.config) throw badRequest('config is required for preview and import.');
-      if (args.action === 'preview') return previewCsvImport(client, args.filePath, args.config);
-      return startCsvImport(client, args.filePath, args.config);
+      if (args.action === 'preview') {
+        return mode === 'idempotent'
+          ? previewIdempotentCsvImport(
+              args.filePath,
+              args.config,
+              args.projectSelector,
+              client.getConfig().maxAttachmentBytes,
+            )
+          : previewCsvImport(client, args.filePath, args.config);
+      }
+      if (mode === 'idempotent') {
+        if (!args.idempotencyKey) {
+          throw badRequest('idempotencyKey is required for idempotent import mode.');
+        }
+        return importCsvIdempotently(
+          client,
+          args.filePath,
+          args.config,
+          args.idempotencyKey,
+          args.projectSelector,
+          args.actor,
+        );
+      }
+      return {
+        mode: 'native',
+        idempotent: false,
+        ...(await startCsvImport(client, args.filePath, args.config)),
+      };
     },
   },
   {
@@ -1227,6 +1312,67 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   };
 });
 
+const TASK_MUTATIONS = new Set([
+  'update',
+  'delete',
+  'close',
+  'reopen',
+  'close_with_evidence',
+  'assign',
+  'unassign',
+  'apply-label',
+  'remove-label',
+  'set_status',
+  'relate',
+  'unrelate',
+  'attach',
+]);
+
+function enforceToolMutationScope(
+  name: string,
+  args: Record<string, any>,
+  client: VikunjaApiClient,
+): void {
+  const mode = client.getConfig().mutationScopeMode ?? 'require';
+  if (name === 'vikunja_tasks' && TASK_MUTATIONS.has(args.action)) {
+    enforceMutationProjectScope(
+      mode,
+      `${name}.${args.action}`,
+      args.taskSelector,
+      args.projectSelector,
+    );
+  } else if (
+    name === 'vikunja_task_comments' &&
+    ['create', 'update', 'delete'].includes(args.action)
+  ) {
+    enforceMutationProjectScope(
+      mode,
+      `${name}.${args.action}`,
+      args.taskSelector,
+      args.projectSelector,
+    );
+  } else if (name === 'vikunja_task_reminders' && ['add', 'remove'].includes(args.action)) {
+    enforceMutationProjectScope(
+      mode,
+      `${name}.${args.action}`,
+      args.taskSelector,
+      args.projectSelector,
+    );
+  } else if (
+    name === 'vikunja_task_bulk' &&
+    ['update', 'delete'].includes(args.action) &&
+    Array.isArray(args.taskIds) &&
+    args.taskIds.length > 0
+  ) {
+    enforceMutationProjectScope(
+      mode,
+      `${name}.${args.action} (${args.taskIds.length} tasks)`,
+      args.taskIds[0],
+      args.projectSelector,
+    );
+  }
+}
+
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
   const tool = TOOLS.find((t) => t.name === name);
@@ -1290,6 +1436,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 
   try {
+    enforceToolMutationScope(name, parsedArgs, client);
     const result = await tool.handler(parsedArgs, client);
     const summary = summaryFor(name, parsedArgs, result);
     // Diagnostics carry their own `ok`. A failed self-check must surface as an

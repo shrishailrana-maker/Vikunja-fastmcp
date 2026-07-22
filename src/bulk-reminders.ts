@@ -43,6 +43,7 @@ export async function bulkUpdateTasks(
   client: VikunjaApiClient,
   taskIds: number[],
   fields: BulkTaskFields,
+  project?: { id?: number; title?: string },
 ): Promise<{ requested: number; updated: unknown[] }> {
   const values = apiFields(fields);
   if (taskIds.length === 0 || Object.keys(values).length === 0) {
@@ -54,6 +55,9 @@ export async function bulkUpdateTasks(
       message: 'Bulk update requires taskIds and at least one field.',
       fieldErrors: [],
     });
+  }
+  if (project) {
+    for (const taskId of taskIds) await resolveTask(client, taskId, project);
   }
   const response = await client.request<any>('PUT', '/tasks/bulk', {
     body: { task_ids: taskIds, fields: Object.keys(values), values },
@@ -95,11 +99,12 @@ export async function bulkCreateTasks(
 export async function bulkDeleteTasks(
   client: VikunjaApiClient,
   taskIds: number[],
+  project?: { id?: number; title?: string },
 ): Promise<unknown[]> {
   if (taskIds.length === 0 || taskIds.length > 100)
     throw validationError('Bulk delete requires 1-100 task IDs.');
   const deleted = [];
-  for (const id of taskIds) deleted.push(await deleteTask(client, id));
+  for (const id of taskIds) deleted.push(await deleteTask(client, id, project));
   return deleted;
 }
 
@@ -130,19 +135,8 @@ export async function listTaskReminders(
   return reminders.map(normalizeReminder);
 }
 
-async function replaceReminders(
-  client: VikunjaApiClient,
-  taskId: number,
-  currentTask: Record<string, any>,
-  reminders: any[],
-) {
-  await patchTaskFields(
-    client,
-    taskId,
-    currentTask,
-    [{ op: 'replace', path: '/reminders', value: reminders }],
-    { reminders },
-  );
+async function replaceReminders(client: VikunjaApiClient, taskId: number, reminders: any[]) {
+  await patchTaskFields(client, taskId, [{ op: 'replace', path: '/reminders', value: reminders }]);
   return reminders.map(normalizeReminder);
 }
 
@@ -160,7 +154,7 @@ export async function addTaskReminder(
     ...(reminder.relativePeriod !== undefined ? { relative_period: reminder.relativePeriod } : {}),
     ...(reminder.relativeTo ? { relative_to: reminder.relativeTo } : {}),
   };
-  return replaceReminders(client, state.task.id, state.raw, [...state.reminders, raw]);
+  return replaceReminders(client, state.task.id, [...state.reminders, raw]);
 }
 
 export async function removeTaskReminder(
@@ -175,7 +169,6 @@ export async function removeTaskReminder(
   return replaceReminders(
     client,
     state.task.id,
-    state.raw,
     state.reminders.filter((_reminder: unknown, current: number) => current !== index),
   );
 }

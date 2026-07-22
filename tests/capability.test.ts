@@ -16,14 +16,27 @@ describe('V2 OpenAPI Capability Gate', () => {
   let openapi: any;
 
   beforeAll(() => {
-    // Prefer live openapi if it exists, fallback to saved snapshot
-    const livePath = path.join(process.cwd(), 'docs/vikunja-v2-openapi-live.json');
-    const savedPath = path.join(process.cwd(), 'docs/vikunja-v2-openapi.json');
-    const targetPath = fs.existsSync(livePath) ? livePath : savedPath;
+    const targetPath = path.join(process.cwd(), 'docs/vikunja-v2-openapi.json');
 
     expect(fs.existsSync(targetPath)).toBe(true);
     const content = fs.readFileSync(targetPath, 'utf8');
     openapi = JSON.parse(content);
+  });
+
+  it('pins the sanitized contract to Vikunja 2.4.0', () => {
+    expect(openapi.info?.version).toBe('v2.4.0');
+    expect(openapi.openapi).toBe('3.1.0');
+    expect(openapi.servers).toEqual([
+      { url: '/api/v2' },
+      { url: 'https://vikunja.example.com/api/v2' },
+    ]);
+    expect(openapi.components?.schemas?.FormFile).toBeUndefined();
+    expect(openapi.components?.schemas?.VikunjaErrorModel?.properties?.i18n_params).toBeDefined();
+    expect(
+      openapi.paths?.['/tasks/{projecttask}']?.patch?.requestBody?.content?.[
+        'application/json-patch+json'
+      ],
+    ).toBeDefined();
   });
 
   const expectedRoutes = [

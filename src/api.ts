@@ -56,12 +56,30 @@ export class VikunjaApiClient {
         ? (this.config.transferTimeoutMs ?? DEFAULT_TRANSFER_TIMEOUT_MS)
         : (this.config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
 
+    // Streamed bodies are consumed by the caller after this method returns, so
+    // the transfer timeout must bound inactivity (time to headers, then gaps
+    // between chunks) rather than total duration; a healthy large download may
+    // legitimately outlive the transfer window. Ordinary requests keep the
+    // fixed total cap.
+    const controller = options.isStreamResponse ? new AbortController() : undefined;
+    let inactivityTimer: ReturnType<typeof setTimeout> | undefined;
+    const restartInactivityTimer = () => {
+      if (!controller) return;
+      if (inactivityTimer) clearTimeout(inactivityTimer);
+      inactivityTimer = setTimeout(() => controller.abort(), timeoutMs);
+      inactivityTimer.unref?.();
+    };
+    const stopInactivityTimer = () => {
+      if (inactivityTimer) clearTimeout(inactivityTimer);
+    };
+
     try {
+      restartInactivityTimer();
       const response = await fetch(url, {
         method,
         headers,
         body,
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: controller ? controller.signal : AbortSignal.timeout(timeoutMs),
       });
 
       if (!response.ok) {
@@ -97,7 +115,15 @@ export class VikunjaApiClient {
       }
 
       if (options.isStreamResponse) {
-        return response as unknown as T;
+        restartInactivityTimer();
+        return wrapStreamedBody(
+          response,
+          restartInactivityTimer,
+          stopInactivityTimer,
+          method,
+          path,
+          timeoutMs,
+        ) as unknown as T;
       }
 
       if (response.status === 204) {
@@ -122,6 +148,7 @@ export class VikunjaApiClient {
         });
       }
     } catch (err: any) {
+      stopInactivityTimer();
       if (err instanceof VikunjaError) {
         throw err;
       }
@@ -146,4 +173,48 @@ export class VikunjaApiClient {
       });
     }
   }
+}
+
+// Refresh the inactivity timer on every chunk the caller reads, stop it when
+// the stream ends (or the caller exits early), and surface an abort as the
+// standard REQUEST_TIMEOUT error instead of a raw AbortError.
+function wrapStreamedBody(
+  response: Response,
+  restartTimer: () => void,
+  stopTimer: () => void,
+  method: string,
+  path: string,
+  timeoutMs: number,
+): Response {
+  const original = response.body as any;
+  if (!original || typeof original[Symbol.asyncIterator] !== 'function') {
+    // Non-iterable bodies (mocks, buffered fallbacks) are consumed in one call;
+    // the fixed timer would only misfire later, so stop it here.
+    stopTimer();
+    return response;
+  }
+  const wrapped = (async function* () {
+    try {
+      for await (const chunk of original) {
+        restartTimer();
+        yield chunk;
+      }
+    } catch (err: any) {
+      if (err?.name === 'AbortError' || err?.name === 'TimeoutError') {
+        throw new VikunjaError({
+          status: 504,
+          code: 'REQUEST_TIMEOUT',
+          method,
+          path,
+          message: `Vikunja stream stalled for more than ${timeoutMs} ms.`,
+          fieldErrors: [],
+        });
+      }
+      throw err;
+    } finally {
+      stopTimer();
+    }
+  })();
+  Object.defineProperty(response, 'body', { value: wrapped, configurable: true });
+  return response;
 }

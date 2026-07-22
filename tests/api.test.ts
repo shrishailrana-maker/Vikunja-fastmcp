@@ -165,10 +165,7 @@ describe('VikunjaApiClient tests', () => {
     expect(mockFetch.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
   });
 
-  it.each([
-    ['streamed responses', { isStreamResponse: true }],
-    ['multipart transfers', { body: Buffer.from('file'), isMultipart: true }],
-  ])('uses the 60-second transfer timeout for %s', async (_label, options) => {
+  it('uses the 60-second transfer timeout for multipart transfers', async () => {
     const timeoutSpy = jest.spyOn(AbortSignal, 'timeout');
     mockFetch.mockResolvedValue({
       ok: true,
@@ -176,9 +173,67 @@ describe('VikunjaApiClient tests', () => {
       text: async () => JSON.stringify({ success: [] }),
     } as Response);
 
-    await client.request('POST', '/transfer', options);
+    await client.request('POST', '/transfer', { body: Buffer.from('file'), isMultipart: true });
 
     expect(timeoutSpy).toHaveBeenLastCalledWith(60_000);
     timeoutSpy.mockRestore();
+  });
+
+  it('bounds streamed responses by inactivity, not a total-duration cap', async () => {
+    const timeoutSpy = jest.spyOn(AbortSignal, 'timeout');
+    // Client with a transfer timeout shorter than the total stream duration.
+    const streamClient = new VikunjaApiClient({ ...config, transferTimeoutMs: 150 });
+    const body = (async function* () {
+      for (let i = 0; i < 4; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        yield Buffer.from('x');
+      }
+    })();
+    mockFetch.mockResolvedValue({ ok: true, status: 200, body } as unknown as Response);
+
+    const response = await streamClient.request<Response>('GET', '/stream', {
+      isStreamResponse: true,
+    });
+    let bytes = 0;
+    for await (const chunk of response.body as any) {
+      bytes += (chunk as Buffer).length;
+    }
+
+    // Total time (~240 ms) exceeds the 150 ms window, but every gap is shorter,
+    // so an active stream completes; no fixed AbortSignal.timeout is used.
+    expect(bytes).toBe(4);
+    expect(timeoutSpy).not.toHaveBeenCalled();
+    timeoutSpy.mockRestore();
+  });
+
+  it('fails a stalled stream with REQUEST_TIMEOUT once the inactivity window passes', async () => {
+    const streamClient = new VikunjaApiClient({ ...config, transferTimeoutMs: 60 });
+    mockFetch.mockImplementation(async (_url: any, init: any) => {
+      const signal: AbortSignal = init.signal;
+      const body = (async function* () {
+        yield Buffer.from('x');
+        await new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () =>
+            reject(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+          );
+        });
+      })();
+      return { ok: true, status: 200, body } as unknown as Response;
+    });
+
+    const response = await streamClient.request<Response>('GET', '/stream', {
+      isStreamResponse: true,
+    });
+    const readAll = async () => {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      for await (const _chunk of response.body as any) {
+        // consume until the stall aborts the stream
+      }
+    };
+
+    await expect(readAll()).rejects.toMatchObject({
+      status: 504,
+      code: 'REQUEST_TIMEOUT',
+    });
   });
 });
