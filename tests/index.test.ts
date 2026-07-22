@@ -401,7 +401,10 @@ describe('MCP Server Registration and Dispatching tests', () => {
   });
 
   it.each([
-    ['vikunja_tasks', { action: 'update', taskSelector: 99, projectSelector: { id: 101 }, fields: {} }],
+    [
+      'vikunja_tasks',
+      { action: 'update', taskSelector: 99, projectSelector: { id: 101 }, fields: {} },
+    ],
     ['vikunja_labels', { action: 'update', labelSelector: 9 }],
     ['vikunja_filters', { action: 'update', filterId: 7 }],
   ])('rejects empty write payloads for %s', async (name, arguments_) => {

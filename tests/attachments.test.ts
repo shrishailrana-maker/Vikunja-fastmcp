@@ -259,17 +259,23 @@ describe('Attachment Upload, Verification and Download tests', () => {
         ok: true,
         status: 200,
         text: async () =>
-          JSON.stringify([
-            {
-              id: 3001,
-              created: '2026-07-12T00:00:00Z',
-              file: {
-                name: 'test.txt',
-                mime: 'text/plain',
-                size: 5,
+          JSON.stringify({
+            items: [
+              {
+                id: 3001,
+                created: '2026-07-12T00:00:00Z',
+                file: {
+                  name: 'test.txt',
+                  mime: 'text/plain',
+                  size: 5,
+                },
               },
-            },
-          ]),
+            ],
+            page: 1,
+            per_page: 50,
+            total: 1,
+            total_pages: 1,
+          }),
       } as Response);
 
       const list = await listAttachments(client, 9005);

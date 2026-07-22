@@ -324,6 +324,31 @@ describe('restored compatibility capabilities', () => {
     }
   });
 
+  it('rejects a truncated user export and removes the partial file', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vikunja-user-export-'));
+    const exportClient = new VikunjaApiClient({ ...config, attachmentDownloadRoot: root });
+    try {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'Content-Length': '10', 'Content-Type': 'application/zip' }),
+        body: (async function* () {
+          yield Buffer.from('short');
+        })(),
+      } as unknown as Response);
+
+      await expect(downloadUserExport(exportClient, '', 'export.zip')).rejects.toMatchObject({
+        status: 500,
+        code: 'SIZE_MISMATCH',
+      });
+      await expect(fs.stat(path.join(root, 'export.zip'))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('exports task creators and optionally includes normalized comments', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vikunja-project-export-'));
     const exportClient = new VikunjaApiClient({ ...config, attachmentDownloadRoot: root });

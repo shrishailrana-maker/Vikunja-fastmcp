@@ -28,6 +28,8 @@ class FakeClient:
         response = self.responses.get((method, path))
         if response is None:
             raise AssertionError(f"Unexpected request: {method} {path}")
+        if isinstance(response, BaseException):
+            raise response
         return response
 
 
@@ -80,6 +82,32 @@ class TrackerFallbackTests(unittest.TestCase):
         body = client.calls[0][2]["body"]
         self.assertEqual(body["fields"], ["percent_done"])
         self.assertEqual(body["values"], {"percent_done": 0.5})
+
+    def test_task_patch_does_not_retry_via_obsolete_full_update(self):
+        error = vikunja_cli.VikunjaError(
+            status=422,
+            code="VALIDATION_ERROR",
+            method="PATCH",
+            path="/tasks/10",
+            message="Invalid task update",
+            field_errors=[
+                {
+                    "location": "body.subscription.entity",
+                    "message": "Expected integer",
+                }
+            ],
+        )
+        client = FakeClient({("PATCH", "/tasks/10"): error})
+
+        with self.assertRaises(vikunja_cli.VikunjaError) as raised:
+            vikunja_cli.patch_task_fields(
+                client,
+                10,
+                [{"op": "replace", "path": "/title", "value": "After"}],
+            )
+
+        self.assertIs(raised.exception, error)
+        self.assertEqual([call[:2] for call in client.calls], [("PATCH", "/tasks/10")])
 
     def test_project_export_can_include_creator_and_comments(self):
         with tempfile.TemporaryDirectory() as root:

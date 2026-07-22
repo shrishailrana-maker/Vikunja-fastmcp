@@ -14,7 +14,7 @@ describe('atomic build recovery', () => {
       );
       fs.mkdirSync(path.join(root, 'dist-old'), { recursive: true });
       fs.writeFileSync(path.join(root, 'dist-old', 'index.js'), 'known-good');
-      const fakeTsc = path.join(root, 'node_modules', 'typescript', 'bin', 'tsc');
+      const fakeTsc = path.join(root, 'node_modules', '@typescript', 'native', 'bin', 'tsc');
       fs.mkdirSync(path.dirname(fakeTsc), { recursive: true });
       fs.writeFileSync(fakeTsc, 'process.exit(1);');
 

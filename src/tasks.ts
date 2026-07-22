@@ -685,7 +685,8 @@ export async function getTask(
       composedCalls.push(`GET /tasks/${task.id}/comments`);
       rawComments = await client.request<any>('GET', `/tasks/${task.id}/comments`);
     }
-    comments = normalizeDatesAndNulls(toItemArray(rawComments))
+    const commentItems = Array.isArray(rawComments) ? rawComments : toItemArray(rawComments);
+    comments = normalizeDatesAndNulls(commentItems)
       .map((c: any) => ({
         id: c.id,
         comment: htmlToMarkdown(c.comment),

@@ -2,8 +2,9 @@
 
 `vikunja-cli.py` is a standalone, one-time fallback for machines where the normal
 `vikunja-fastmcp` MCP process cannot be started or repaired promptly. It calls
-the Vikunja `/api/v2` REST API directly and emits the same human summary plus
-one fenced JSON envelope used by the MCP.
+the Vikunja 2.4.0 `/api/v2` REST API directly and emits the same human summary
+plus one fenced JSON envelope used by the MCP. It intentionally carries no
+workarounds for older Vikunja releases.
 
 Use the npm MCP for normal agent work. This CLI is not an MCP server, is not
 started automatically, and must not be configured alongside the MCP as a

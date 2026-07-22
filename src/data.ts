@@ -151,14 +151,26 @@ function downloadTooLarge(bytes: number, maxBytes: number): VikunjaError {
   });
 }
 
+function downloadSizeMismatch(bytes: number, expectedBytes: number): VikunjaError {
+  return new VikunjaError({
+    status: 500,
+    code: 'SIZE_MISMATCH',
+    method: 'POST',
+    path: '/user/export/download',
+    message: `User export verification failed: downloaded ${bytes} of ${expectedBytes} advertised bytes.`,
+    fieldErrors: [],
+  });
+}
+
 async function streamResponse(
   response: Response,
   root: string,
   destination: string,
   maxBytes: number,
 ): Promise<number> {
-  const advertised = Number(response.headers.get('Content-Length'));
-  if (Number.isFinite(advertised) && advertised > maxBytes) {
+  const contentLength = response.headers.get('Content-Length');
+  const advertised = contentLength === null ? undefined : Number(contentLength);
+  if (advertised !== undefined && Number.isFinite(advertised) && advertised > maxBytes) {
     throw downloadTooLarge(advertised, maxBytes);
   }
   let size = 0;
@@ -170,6 +182,9 @@ async function streamResponse(
       size += buffer.length;
       if (size > maxBytes) throw downloadTooLarge(size, maxBytes);
       await handle.write(buffer);
+    }
+    if (advertised !== undefined && Number.isFinite(advertised) && size !== advertised) {
+      throw downloadSizeMismatch(size, advertised);
     }
   } catch (error) {
     await handle.close().catch(() => {});

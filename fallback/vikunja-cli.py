@@ -1025,32 +1025,10 @@ def _build_filter_string(*, done=None, all_states=False, priority=None,
     return " && ".join(parts)
 
 
-def _build_writable_snapshot(current: dict, changes: dict) -> dict:
-    snapshot = {}
-    for field in WRITABLE_TASK_FIELDS:
-        if field in current:
-            snapshot[field] = current[field]
-    snapshot.update(changes)
-    return snapshot
-
-
-def _is_subscription_validation_defect(error: VikunjaError) -> bool:
-    return (error.status == 422 and
-            any(fe.get("location") == "body.subscription.entity"
-                and "expected integer" in (fe.get("message", "")).lower()
-                for fe in error.field_errors))
-
-
 def patch_task_fields(client: VikunjaApiClient, task_id: int,
-                      current_task: dict, patch_ops: list, changes: dict) -> dict:
-    try:
-        return client.request("PATCH", f"/tasks/{task_id}", body=patch_ops,
-                              headers={"Content-Type": "application/json-patch+json"})
-    except VikunjaError as e:
-        if not _is_subscription_validation_defect(e):
-            raise
-        return client.request("PUT", f"/tasks/{task_id}",
-                              body=_build_writable_snapshot(current_task, changes))
+                      patch_ops: list) -> dict:
+    return client.request("PATCH", f"/tasks/{task_id}", body=patch_ops,
+                          headers={"Content-Type": "application/json-patch+json"})
 
 
 # ─── Attachment helpers ───────────────────────────────────────────────────────
@@ -1442,7 +1420,7 @@ def cmd_tasks_update(client: VikunjaApiClient, args) -> Tuple[str, Any]:
     if body:
         patch_ops = [{"op": "replace", "path": f"/{field}", "value": value}
                      for field, value in body.items()]
-        raw_updated = patch_task_fields(client, task_ref["id"], current_raw, patch_ops, body)
+        raw_updated = patch_task_fields(client, task_ref["id"], patch_ops)
         task = normalize_task(raw_updated, task_ref["project"], web_url)
         if fields.get("done") is True and not current_task["done"]:
             action = "closed"
@@ -2311,9 +2289,11 @@ def cmd_reminders_add(client: VikunjaApiClient, args) -> Tuple[str, Any]:
     if rel_to:
         new_r["relative_to"] = rel_to
     reminders.append(new_r)
-    patch_task_fields(client, task_ref["id"], raw,
-                      [{"op": "replace", "path": "/reminders", "value": reminders}],
-                      {"reminders": reminders})
+    patch_task_fields(
+        client,
+        task_ref["id"],
+        [{"op": "replace", "path": "/reminders", "value": reminders}],
+    )
     result = [
         {"reminder": r.get("reminder"), "relativePeriod": r.get("relative_period"),
          "relativeTo": r.get("relative_to")}
@@ -2337,9 +2317,11 @@ def cmd_reminders_remove(client: VikunjaApiClient, args) -> Tuple[str, Any]:
         raise VikunjaError(status=400, code="VALIDATION_ERROR", method="TOOLS_CALL",
                            path="arguments", message="reminderIndex is out of range.")
     reminders = [r for i, r in enumerate(reminders) if i != idx]
-    patch_task_fields(client, task_ref["id"], raw,
-                      [{"op": "replace", "path": "/reminders", "value": reminders}],
-                      {"reminders": reminders})
+    patch_task_fields(
+        client,
+        task_ref["id"],
+        [{"op": "replace", "path": "/reminders", "value": reminders}],
+    )
     result = [
         {"reminder": r.get("reminder"), "relativePeriod": r.get("relative_period"),
          "relativeTo": r.get("relative_to")}

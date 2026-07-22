@@ -71,7 +71,14 @@ describe('Identity and Resolution Cache tests', () => {
       mockFetch.mockResolvedValue({
         ok: true,
         status: 200,
-        text: async () => JSON.stringify(mockProjects),
+        text: async () =>
+          JSON.stringify({
+            items: mockProjects,
+            page: 1,
+            per_page: 100,
+            total: mockProjects.length,
+            total_pages: 1,
+          }),
       } as Response);
 
       const ref1 = await resolveProject(client, { title: 'Beta' });
@@ -109,7 +116,14 @@ describe('Identity and Resolution Cache tests', () => {
       mockFetch.mockResolvedValue({
         ok: true,
         status: 200,
-        text: async () => JSON.stringify([{ id: 1, title: 'Alpha' }]),
+        text: async () =>
+          JSON.stringify({
+            items: [{ id: 1, title: 'Alpha' }],
+            page: 1,
+            per_page: 100,
+            total: 1,
+            total_pages: 1,
+          }),
       } as Response);
 
       await expect(resolveProject(client, { title: 'Beta' })).rejects.toThrow(
@@ -125,10 +139,16 @@ describe('Identity and Resolution Cache tests', () => {
         ok: true,
         status: 200,
         text: async () =>
-          JSON.stringify([
-            { id: 101, title: 'Alpha' },
-            { id: 102, title: 'Alpha' },
-          ]),
+          JSON.stringify({
+            items: [
+              { id: 101, title: 'Alpha' },
+              { id: 102, title: 'Alpha' },
+            ],
+            page: 1,
+            per_page: 100,
+            total: 2,
+            total_pages: 1,
+          }),
       } as Response);
 
       await expect(resolveProject(client, { title: 'Alpha' })).rejects.toThrow(
@@ -231,7 +251,14 @@ describe('Identity and Resolution Cache tests', () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         status: 200,
-        text: async () => JSON.stringify([{ id: 102, title: 'Beta' }]),
+        text: async () =>
+          JSON.stringify({
+            items: [{ id: 102, title: 'Beta' }],
+            page: 1,
+            per_page: 100,
+            total: 1,
+            total_pages: 1,
+          }),
       } as Response);
 
       // Mock task by index fetch

@@ -39,7 +39,7 @@ try {
 
   // Compile TS into dist-new
   console.log('Compiling TypeScript...');
-  const tscPath = path.join(rootDir, 'node_modules', 'typescript', 'bin', 'tsc');
+  const tscPath = path.join(rootDir, 'node_modules', '@typescript', 'native', 'bin', 'tsc');
   execFileSync(process.execPath, [tscPath, '-p', 'tsconfig.json', '--outDir', 'dist-new'], {
     stdio: 'inherit',
   });

@@ -174,7 +174,14 @@ describe('Assignees, Labels and Relations tests', () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         status: 200,
-        text: async () => JSON.stringify([{ id: 42, username: 'bob' }]),
+        text: async () =>
+          JSON.stringify({
+            items: [{ id: 42, username: 'bob' }],
+            page: 1,
+            per_page: 50,
+            total: 1,
+            total_pages: 1,
+          }),
       } as Response);
 
       const list = await listAssignees(client, 9005);
@@ -321,7 +328,14 @@ describe('Assignees, Labels and Relations tests', () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         status: 200,
-        text: async () => JSON.stringify([{ id: 801, title: 'frontend' }]),
+        text: async () =>
+          JSON.stringify({
+            items: [{ id: 801, title: 'frontend' }],
+            page: 1,
+            per_page: 50,
+            total: 1,
+            total_pages: 1,
+          }),
       } as Response);
 
       const list = await listLabels(client, 9005);

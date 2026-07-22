@@ -33,7 +33,9 @@ export function enforceMutationProjectScope(
 
   const message = `${operation} received global task id ${String(taskSelector).trim()} without projectSelector.`;
   if (mode === 'warn') {
-    warn(`${message} Allowed because VIKUNJA_MUTATION_SCOPE_MODE=warn; add explicit project scope.`);
+    warn(
+      `${message} Allowed because VIKUNJA_MUTATION_SCOPE_MODE=warn; add explicit project scope.`,
+    );
     return;
   }
 

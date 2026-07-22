@@ -22,26 +22,33 @@ import {
 } from '../src/format.js';
 
 describe('Format and Markdown tests', () => {
-  describe('toItemArray (list-shape tolerance)', () => {
+  describe('toItemArray (Vikunja 2.4 collection shape)', () => {
     it('unwraps the v2 paginated wrapper', () => {
       expect(toItemArray({ items: [{ id: 1 }, { id: 2 }], total: 2 })).toEqual([
         { id: 1 },
         { id: 2 },
       ]);
     });
-    it('passes through a bare array', () => {
-      expect(toItemArray([{ id: 1 }])).toEqual([{ id: 1 }]);
-    });
-    it('returns [] for null, undefined, or a non-list object', () => {
-      expect(toItemArray(null)).toEqual([]);
-      expect(toItemArray(undefined)).toEqual([]);
-      expect(toItemArray({ message: 'no items' })).toEqual([]);
+    it.each([[{ id: 1 }], null, undefined, { message: 'no items' }])(
+      'rejects non-wrapper collection response %#',
+      (response) => {
+        expect(() => toItemArray(response)).toThrow(
+          expect.objectContaining({ code: 'INVALID_COLLECTION_RESPONSE' }),
+        );
+      },
+    );
+
+    it('rejects bare-array pagination metadata', () => {
+      expect(() => normalizePagination([{ id: 1 }])).toThrow(
+        expect.objectContaining({ code: 'INVALID_COLLECTION_RESPONSE' }),
+      );
     });
   });
 
   describe('Pagination and Date normalization', () => {
     it('should normalize pagination properties', () => {
       const raw = {
+        items: [],
         page: 1,
         per_page: 25,
         total: 50,

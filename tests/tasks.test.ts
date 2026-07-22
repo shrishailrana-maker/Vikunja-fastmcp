@@ -256,7 +256,14 @@ describe('Tasks List and Scoping tests', () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         status: 200,
-        text: async () => JSON.stringify([{ id: 102, title: 'Beta' }]),
+        text: async () =>
+          JSON.stringify({
+            items: [{ id: 102, title: 'Beta' }],
+            page: 1,
+            per_page: 100,
+            total: 1,
+            total_pages: 1,
+          }),
       } as Response);
 
       mockFetch.mockResolvedValueOnce({
@@ -456,9 +463,19 @@ describe('Tasks List and Scoping tests', () => {
         ok: true,
         status: 200,
         text: async () =>
-          JSON.stringify([
-            { id: 3001, created: 't', file: { name: 'log.txt', mime: 'text/plain', size: 100 } },
-          ]),
+          JSON.stringify({
+            items: [
+              {
+                id: 3001,
+                created: 't',
+                file: { name: 'log.txt', mime: 'text/plain', size: 100 },
+              },
+            ],
+            page: 1,
+            per_page: 50,
+            total: 1,
+            total_pages: 1,
+          }),
       } as Response);
 
       const details = await getTask(client, 9005, undefined, 5, 'full');

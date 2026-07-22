@@ -51,29 +51,27 @@ export function normalizeDatesAndNulls<T>(obj: T): T {
   return obj;
 }
 
-// v2 list endpoints return a paginated wrapper `{ items, page, per_page, total,
-// total_pages }`. Some shapes (and older deployments) return a bare array. This
-// tolerates both and always yields an array, so list consumers stay correct
-// regardless of which shape the server sends.
+function invalidCollectionResponse(): VikunjaError {
+  return new VikunjaError({
+    status: 502,
+    code: 'INVALID_COLLECTION_RESPONSE',
+    method: 'GET',
+    path: 'collection',
+    message: 'Vikunja 2.4 returned an invalid collection response; expected an items wrapper.',
+    fieldErrors: [],
+  });
+}
+
+// Vikunja 2.4 list endpoints return `{ items, page, per_page, total,
+// total_pages }`. Reject any other shape so API drift cannot masquerade as an
+// empty result.
 export function toItemArray<T = any>(res: any): T[] {
-  if (Array.isArray(res)) return res;
   if (res && Array.isArray(res.items)) return res.items;
-  return [];
+  throw invalidCollectionResponse();
 }
 
 export function normalizePagination(raw: any): PaginationInfo {
-  // Bare arrays have no wrapper metadata — treat as a single complete page.
-  if (Array.isArray(raw)) {
-    const total = raw.length;
-    return {
-      page: 1,
-      perPage: total || 25,
-      total,
-      totalPages: 1,
-      hasMore: false,
-      nextPage: null,
-    };
-  }
+  if (!raw || Array.isArray(raw) || !Array.isArray(raw.items)) throw invalidCollectionResponse();
 
   const page = Number(raw?.page || 1);
   const perPage = Number(raw?.per_page || raw?.perPage || 25);
@@ -115,9 +113,6 @@ export async function fetchAllCollectionItems<T = any>(
 
   while (page <= maxPages) {
     const raw = await request(`${basePath}${sep}page=${page}&per_page=${perPage}`);
-    if (Array.isArray(raw)) {
-      return raw as T[];
-    }
     const batch = toItemArray<T>(raw);
     const pagination = normalizePagination(raw);
     const batchSignature = JSON.stringify(

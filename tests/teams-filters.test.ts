@@ -72,7 +72,14 @@ describe('Teams and Saved Filters tests', () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         status: 200,
-        text: async () => JSON.stringify([{ id: 1, name: 'Admins' }]),
+        text: async () =>
+          JSON.stringify({
+            items: [{ id: 1, name: 'Admins' }],
+            page: 1,
+            per_page: 100,
+            total: 1,
+            total_pages: 1,
+          }),
       } as Response);
 
       const list = await listTeams(client);

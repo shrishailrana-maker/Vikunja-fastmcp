@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.4.0 - 2026-07-22
 
 ### Vikunja 2.4.0
 
@@ -8,6 +8,20 @@
   latest v2 surface instead of retaining older API compatibility behavior.
 - Remove the Vikunja 2.3 task-update PATCH-to-PUT workaround; task and reminder
   updates now use the documented RFC 6902 PATCH route directly.
+- Remove the same obsolete PATCH-to-PUT workaround from the emergency Python
+  fallback and require Vikunja 2.4.0 there as well.
+- Require the current `requests` 2.34.2 release for new fallback CLI setups.
+- Reject bare-array or malformed collection responses instead of silently
+  treating API drift as an empty result.
+- Verify user-export downloads against `Content-Length` and remove partial ZIP
+  files when a transfer is truncated.
+
+### Development Toolchain
+
+- Compile and type-check with TypeScript 7.0 while retaining the TypeScript 6
+  API package required by ESLint and Jest tooling.
+- Refresh compatible development-tool patch releases without taking the
+  unrelated ESLint 10 or Zod 4 major-version changes.
 
 ### Workflow Safety And Efficiency
 
