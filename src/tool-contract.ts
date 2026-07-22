@@ -70,6 +70,7 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
         'label',
         'assignee (exact username; numeric user IDs are not valid Vikunja list filters)',
         'q',
+        'search (free-text alias for q)',
         'filter',
         'countOnly',
         'responseMode (compact default; standard/full explicit)',

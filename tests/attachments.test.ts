@@ -197,15 +197,19 @@ describe('Attachment Upload, Verification and Download tests', () => {
         }),
         close: jest.fn(async () => {}),
       };
-      jest.spyOn(fs, 'mkdir').mockResolvedValue(undefined);
-      jest.spyOn(fs, 'access').mockRejectedValue(new Error('ENOENT'));
       jest.spyOn(fs, 'open').mockResolvedValue(handle as any);
 
-      const res = await downloadAttachment(client, 9005, 3001, 'streamed.bin');
-      expect(res.size).toBe(5);
-      expect(handle.write).toHaveBeenCalledTimes(2);
-      expect(Buffer.concat(writes).toString()).toBe('hello');
-      expect(res.checksum).toBe(crypto.createHash('sha256').update('hello').digest('hex'));
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vikunja-download-stream-'));
+      const localClient = new VikunjaApiClient({ ...config, attachmentDownloadRoot: root });
+      try {
+        const res = await downloadAttachment(localClient, 9005, 3001, 'streamed.bin');
+        expect(res.size).toBe(5);
+        expect(handle.write).toHaveBeenCalledTimes(2);
+        expect(Buffer.concat(writes).toString()).toBe('hello');
+        expect(res.checksum).toBe(crypto.createHash('sha256').update('hello').digest('hex'));
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
     });
 
     it('should throw SIZE_MISMATCH if downloaded size mismatches Content-Length', async () => {

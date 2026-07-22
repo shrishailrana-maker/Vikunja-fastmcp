@@ -137,35 +137,37 @@ function unwrapZod(schema: z.ZodTypeAny): { schema: z.ZodTypeAny; optional: bool
 
 function zodTypeToJsonSchema(schema: z.ZodTypeAny): any {
   const { schema: current } = unwrapZod(schema);
+  const description = schema.description ?? current.description;
+  const describe = (jsonSchema: any) => (description ? { ...jsonSchema, description } : jsonSchema);
 
   if (current instanceof z.ZodString) {
-    return { type: 'string' };
+    return describe({ type: 'string' });
   }
   if (current instanceof z.ZodNumber) {
-    return { type: 'number' };
+    return describe({ type: 'number' });
   }
   if (current instanceof z.ZodBoolean) {
-    return { type: 'boolean' };
+    return describe({ type: 'boolean' });
   }
   if (current instanceof z.ZodEnum) {
-    return { type: 'string', enum: (current as any)._def.values };
+    return describe({ type: 'string', enum: (current as any)._def.values });
   }
   if (current instanceof z.ZodArray) {
     const inner = (current as any)._def.type;
-    return { type: 'array', items: zodTypeToJsonSchema(inner) };
+    return describe({ type: 'array', items: zodTypeToJsonSchema(inner) });
   }
   if (current instanceof z.ZodUnion) {
     const options = (current as any)._def.options as z.ZodTypeAny[];
-    return { anyOf: options.map((o) => zodTypeToJsonSchema(o)) };
+    return describe({ anyOf: options.map((o) => zodTypeToJsonSchema(o)) });
   }
   if (current instanceof z.ZodObject) {
-    return zodToMcpSchema(current);
+    return describe(zodToMcpSchema(current));
   }
   if (current instanceof z.ZodRecord) {
-    return {
+    return describe({
       type: 'object',
       additionalProperties: zodTypeToJsonSchema((current as any)._def.valueType),
-    };
+    });
   }
   if (current instanceof z.ZodAny || current instanceof z.ZodUnknown) {
     return {};
@@ -180,11 +182,11 @@ function zodToMcpSchema(zodSchema: z.ZodObject<any>): any {
   const required: string[] = [];
 
   for (const [key, value] of Object.entries(shape)) {
-    const { schema: inner, optional } = unwrapZod(value as z.ZodTypeAny);
+    const { optional } = unwrapZod(value as z.ZodTypeAny);
     if (!optional) {
       required.push(key);
     }
-    properties[key] = zodTypeToJsonSchema(inner);
+    properties[key] = zodTypeToJsonSchema(value as z.ZodTypeAny);
   }
 
   return {
@@ -443,7 +445,14 @@ export const TOOLS: McpToolDefinition[] = [
         .describe(
           'Exact assignee username for task lists; Vikunja filters do not accept user IDs.',
         ),
-      q: z.string().optional(),
+      q: z
+        .string()
+        .optional()
+        .describe('Free-text task search. Sent to Vikunja as the q query parameter.'),
+      search: z
+        .string()
+        .optional()
+        .describe('Free-text task search alias for q; no filter DSL lookup is needed.'),
       countOnly: z.boolean().optional(),
       filter: z.string().optional(),
       responseMode: z.enum(['compact', 'standard', 'full']).optional(),
@@ -481,6 +490,9 @@ export const TOOLS: McpToolDefinition[] = [
     handler: async (args, client) => {
       switch (args.action) {
         case 'list':
+          if (args.q !== undefined && args.search !== undefined && args.q !== args.search) {
+            throw badRequest('q and search must match when both are supplied.');
+          }
           return listTasks(client, {
             project: args.projectSelector,
             projects: args.projects,
@@ -492,7 +504,7 @@ export const TOOLS: McpToolDefinition[] = [
             priority: args.priority,
             label: args.label,
             assignee: args.assignee,
-            q: args.q,
+            q: args.q ?? args.search,
             countOnly: args.countOnly,
             filter: args.filter,
             responseMode: args.responseMode,

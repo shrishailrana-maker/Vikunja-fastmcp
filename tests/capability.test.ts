@@ -168,9 +168,6 @@ describe('V2 OpenAPI Capability Gate', () => {
 describe('README agent update prompt', () => {
   it('uses the npm installation, global command, and current package version in five lines', () => {
     const readme = fs.readFileSync(path.join(process.cwd(), 'README.md'), 'utf8');
-    const packageJson = JSON.parse(
-      fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'),
-    );
     const prompt = readme.match(
       /### Copy-Paste Agent Update Prompt\s+```text\r?\n([\s\S]*?)\r?\n```/,
     )?.[1];
@@ -186,6 +183,30 @@ describe('README agent update prompt', () => {
     expect(prompt).toContain("agent's user-wide skill directory");
     expect(prompt).toContain('~/.codex/skills/vikunja-fastmcp');
     expect(prompt).toContain('~/.claude/skills/vikunja-fastmcp');
-    expect(prompt).toContain(`expected latest is ${packageJson.version}`);
+    expect(prompt).toContain('npm view vikunja-fastmcp version');
+    expect(prompt).not.toMatch(/expected latest is \d/);
+  });
+});
+
+describe('packaged Vikunja skill', () => {
+  it('documents safe task identity, search, formatting, and pagination', () => {
+    const skill = fs.readFileSync(
+      path.join(process.cwd(), 'skills', 'vikunja-fastmcp', 'SKILL.md'),
+      'utf8',
+    );
+    const normalizedSkill = skill.replace(/\s+/g, ' ');
+
+    expect(normalizedSkill).toContain('Use `q` for ordinary free-text task search');
+    expect(normalizedSkill).toContain('`search` is an equivalent alias');
+    expect(normalizedSkill).toContain('Do not run `self_check` or probe filter syntax');
+    expect(normalizedSkill).toContain(
+      'A bare numeric selector always means the global database ID',
+    );
+    expect(normalizedSkill).toContain('`taskSelector: 360` targets global task 360');
+    expect(normalizedSkill).toContain('`taskSelector: "#360"` plus an explicit `projectSelector`');
+    expect(normalizedSkill).toContain('Task-list `perPage` must not exceed 100');
+    expect(normalizedSkill).toContain(
+      'Wrap file paths, commands, and code identifiers in inline backticks',
+    );
   });
 });

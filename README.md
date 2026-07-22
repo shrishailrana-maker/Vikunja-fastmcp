@@ -32,7 +32,7 @@ Update Vikunja FastMCP globally for this user: npm install -g vikunja-fastmcp@la
 Verify npm list -g vikunja-fastmcp --depth=0; locate it with (Get-Command vikunja-mcp).Source on Windows or command -v vikunja-mcp on macOS/Linux.
 Ensure the MCP config uses command "vikunja-mcp", never a checkout/dist path; use npm root -g to copy bundled skills/vikunja-fastmcp to the agent's user-wide skill directory (for example ~/.codex/skills/vikunja-fastmcp or ~/.claude/skills/vikunja-fastmcp).
 Preserve existing VIKUNJA_URL and VIKUNJA_API_TOKEN without printing secrets, then restart the agent.
-Report the installed version, executable path, and skill path; expected latest is 2.3.996.
+Report the installed version, executable path, and skill path; confirm the installed version matches npm view vikunja-fastmcp version.
 ```
 
 ### Optional Agent Skill

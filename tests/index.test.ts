@@ -105,6 +105,10 @@ describe('MCP Server Registration and Dispatching tests', () => {
     );
     expect(listBranch.properties).not.toHaveProperty('filePaths');
     expect(listBranch.properties.assignee).toMatchObject({ type: 'string' });
+    expect(listBranch.properties.search).toMatchObject({
+      type: 'string',
+      description: expect.stringContaining('alias for q'),
+    });
 
     const webhookTool = response.tools.find((t: any) => t.name === 'vikunja_webhooks');
     const eventBranch = webhookTool.inputSchema.oneOf.find(
@@ -143,6 +147,59 @@ describe('MCP Server Registration and Dispatching tests', () => {
     });
 
     expect(response.content[0].text).toMatch(/^Listed 0\/955 tasks.*Next page: 2\./);
+  });
+
+  it('accepts search as a free-text alias and sends it to Vikunja as q', async () => {
+    const handler = (server as any)._requestHandlers.get('tools/call');
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ id: 101, title: 'Alpha' }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({ items: [], page: 1, per_page: 20, total: 0, total_pages: 0 }),
+      } as Response);
+
+    const response = await handler({
+      method: 'tools/call',
+      params: {
+        name: 'vikunja_tasks',
+        arguments: {
+          action: 'list',
+          projectSelector: { id: 101 },
+          search: 'duplicate title',
+        },
+      },
+    });
+
+    expect(response.isError).toBeUndefined();
+    const taskListUrl = new URL(mockFetch.mock.calls[1][0] as string);
+    expect(taskListUrl.searchParams.get('q')).toBe('duplicate title');
+  });
+
+  it('rejects conflicting q and search values without calling Vikunja', async () => {
+    const handler = (server as any)._requestHandlers.get('tools/call');
+
+    const response = await handler({
+      method: 'tools/call',
+      params: {
+        name: 'vikunja_tasks',
+        arguments: {
+          action: 'list',
+          projectSelector: { id: 101 },
+          q: 'first query',
+          search: 'second query',
+        },
+      },
+    });
+
+    expect(response.isError).toBe(true);
+    expect(response.content[0].text).toContain('q and search must match');
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it('should dispatch call to self_check diagnostic successfully', async () => {

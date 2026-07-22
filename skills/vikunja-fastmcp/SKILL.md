@@ -23,6 +23,10 @@ requests or legacy tracker scripts while the MCP is available.
   portal-index operation. Use `projects` or `allProjects: true` only deliberately.
 - A portal reference such as `#25` repeats across projects and requires a project.
 - A numeric task ID is globally unique and is used in task URLs.
+- A bare numeric selector always means the global database ID. For example,
+  `taskSelector: 360` targets global task 360, not portal task `#360`. Resolve
+  the portal task with `taskSelector: "#360"` plus an explicit
+  `projectSelector`, such as `{ title: "Example Project" }`.
 - Before update, close, reopen, unassign, unlabel, unrelate, or delete, get the
   task and verify its global ID, project, and title.
 - Never parse a `#N` prefix inside task title text as task identity.
@@ -30,12 +34,16 @@ requests or legacy tracker scripts while the MCP is available.
 ## Lists And Searches
 
 - Lists default to open tasks. Use `allStates: true` for open and closed tasks.
+- Use `q` for ordinary free-text task search; `search` is an equivalent alias.
+  Use `filter` only for an explicitly requested Vikunja filter expression. Do
+  not run `self_check` or probe filter syntax before a routine scoped search.
 - Use `assignee: "username"` for assignee lists. Vikunja list filters require
   usernames; numeric user IDs are only for operations that explicitly accept IDs.
 - Prefer `countOnly: true` when only a total is needed.
 - Task list/get responses are compact by default. Request `standard` or `full`
   only when the omitted fields are required for the current operation.
-- Paginate large results and follow each project's independent `nextPage` value.
+- Task-list `perPage` must not exceed 100. Paginate larger results and follow
+  each project's independent `nextPage` value.
 - Comment lists default to 20 items; request only the `page` and `perPage` needed.
 - Keep searches scoped. Avoid `allProjects` when a project subset is known.
 
@@ -45,6 +53,8 @@ requests or legacy tracker scripts while the MCP is available.
   it is best-effort rather than a distributed lock.
 - Add verification evidence before closing work. Use `close_with_evidence` when appropriate.
 - Make comments and important writes identify the actual agent or user acting.
+- Wrap file paths, commands, and code identifiers in inline backticks in task
+  descriptions and comments so Markdown does not reinterpret underscores.
 - Treat composed bulk create/delete operations as bounded and non-atomic.
 - Use one writer per task when several agents are active.
 

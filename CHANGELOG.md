@@ -1,5 +1,33 @@
 # Changelog
 
+## 2.3.997 - 2026-07-22
+
+### Agent Search And Guidance
+
+- Accept `search` as a backward-compatible task-list alias for Vikunja's native
+  `q` free-text parameter; reject conflicting `q` and `search` values.
+- Preserve Zod field descriptions in the operation-specific MCP JSON Schema so
+  clients can explain aliases and constrained fields without a diagnostic call.
+- Clarify in the packaged skill that bare numeric task selectors are global
+  database IDs, while portal references such as `#360` require explicit project
+  scope.
+- Document direct free-text search, the 100-item page ceiling, and Markdown-safe
+  formatting for file paths and code identifiers.
+- Make the copy-paste update prompt follow npm's `latest` dist-tag instead of a
+  hardcoded release number.
+
+### Test Reliability
+
+- Isolate the streamed-download test with its own temporary directory instead
+  of mocking directory creation and depending on leftover filesystem state.
+
+### Security
+
+- Pin patched transitive `fast-uri` and `@hono/node-server` releases so fresh
+  installations do not retain the published host-confusion and Windows
+  static-path traversal advisories. The MCP remains a stdio-only server and
+  does not expose Hono's static-file transport.
+
 ## 2.3.996 - 2026-07-20
 
 ### Performance And Token Usage
