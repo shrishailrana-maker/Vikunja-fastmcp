@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.5.0 - 2026-07-23
 
 - Add stable-key task `upsert` with `externalKey`, exact marker verification,
   ambiguity protection, optimistic concurrency, and no full-scan fallback.
