@@ -169,7 +169,10 @@ export function buildFilterString(options: ListTasksOptions): string {
     parts.push(`description like ${escapeFilterString(`%${options.descriptionContains}%`)}`);
   }
   if (options.actor !== undefined) {
-    parts.push(`description like ${escapeFilterString(`%(by ${options.actor})%`)}`);
+    // No parentheses in the pattern: Vikunja's filter tokenizer rejects "(" and
+    // ")" inside quoted strings (live-verified 2026-07-23), so match the
+    // attribution text "by <actor>" without the surrounding parens.
+    parts.push(`description like ${escapeFilterString(`%by ${options.actor}%`)}`);
   }
   if (options.filter) {
     parts.push(`(${options.filter})`);

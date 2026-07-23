@@ -96,8 +96,10 @@ describe('Tasks List and Scoping tests', () => {
         descriptionContains: "parser's report",
         actor: 'Example Agent',
       });
+      // No parens in the actor pattern: Vikunja's filter tokenizer rejects
+      // "(" and ")" inside quoted strings.
       expect(filter).toBe(
-        "done = false && description like '%parser''s report%' && description like '%(by Example Agent)%'",
+        "done = false && description like '%parser''s report%' && description like '%by Example Agent%'",
       );
     });
   });
