@@ -178,26 +178,47 @@ describe('V2 OpenAPI Capability Gate', () => {
   });
 });
 
-describe('README agent update prompt', () => {
-  it('uses the npm installation, global command, and current package version in five lines', () => {
+describe('README npm installation', () => {
+  it('uses only the npm latest installation for public install and update instructions', () => {
     const readme = fs.readFileSync(path.join(process.cwd(), 'README.md'), 'utf8');
-    const prompt = readme.match(
+    const installPrompt = readme.match(
+      /### Copy-Paste Agent Install Prompt[\s\S]*?```text\r?\n([\s\S]*?)\r?\n```/,
+    )?.[1];
+    const updatePrompt = readme.match(
       /### Copy-Paste Agent Update Prompt\s+```text\r?\n([\s\S]*?)\r?\n```/,
     )?.[1];
+    const globalInstalls = readme.match(/npm install -g vikunja-fastmcp(?:@latest)?/g) ?? [];
 
-    expect(prompt).toBeDefined();
-    expect(prompt?.split(/\r?\n/)).toHaveLength(5);
-    expect(prompt).toContain('npm install -g vikunja-fastmcp@latest');
-    expect(prompt).toContain('Get-Command vikunja-mcp');
-    expect(prompt).toContain('command -v vikunja-mcp');
-    expect(prompt).not.toContain('where.exe');
-    expect(prompt).toContain('command "vikunja-mcp"');
-    expect(prompt).toContain('npm root -g');
-    expect(prompt).toContain("agent's user-wide skill directory");
-    expect(prompt).toContain('~/.codex/skills/vikunja-fastmcp');
-    expect(prompt).toContain('~/.claude/skills/vikunja-fastmcp');
-    expect(prompt).toContain('npm view vikunja-fastmcp version');
-    expect(prompt).not.toMatch(/expected latest is \d/);
+    expect(installPrompt).toBeDefined();
+    expect(updatePrompt).toBeDefined();
+    if (!installPrompt || !updatePrompt) throw new Error('README agent prompts are missing.');
+    expect(globalInstalls.length).toBeGreaterThanOrEqual(3);
+    expect(globalInstalls.every((command) => command.endsWith('@latest'))).toBe(true);
+    expect(readme).not.toMatch(/npm install -g (?:github:|https?:\/\/github\.com)/);
+    expect(readme).not.toContain('releases/download');
+
+    for (const prompt of [installPrompt, updatePrompt]) {
+      expect(prompt).toContain('npm install -g vikunja-fastmcp@latest');
+      expect(prompt).toContain('npm list -g vikunja-fastmcp --depth=0');
+      expect(prompt).toContain('(Get-Command vikunja-mcp).Source');
+      expect(prompt).toContain('command -v vikunja-mcp');
+      expect(prompt).not.toContain('where.exe');
+      expect(prompt).toContain('command "vikunja-mcp"');
+      expect(prompt).toContain('npm root -g');
+      expect(prompt.toLowerCase()).toContain('restart');
+    }
+    expect(updatePrompt).toContain('npm view vikunja-fastmcp version');
+    expect(updatePrompt).not.toMatch(/expected latest is \d/);
+  });
+
+  it('keeps normal README source lines readable', () => {
+    const readme = fs.readFileSync(path.join(process.cwd(), 'README.md'), 'utf8');
+    const longLines = readme
+      .split(/\r?\n/)
+      .map((line, index) => ({ line: index + 1, length: line.length }))
+      .filter(({ length }) => length > 100);
+
+    expect(longLines).toEqual([]);
   });
 });
 

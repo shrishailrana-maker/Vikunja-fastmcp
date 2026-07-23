@@ -21,6 +21,12 @@
   concurrency and stable-key-marker preservation.
 - Include a compact task-to-attachment mapping in attach responses.
 - Make attachment retries idempotent through the existing process-local cache.
+- Make every bulk mutation retry-safe with payload-fingerprinted process-local
+  idempotency keys while leaving dry runs uncached.
+- Use `vikunja-fastmcp@latest` as the only public installation source and add
+  readable cross-platform verification and MCP configuration guidance.
+- Make actor task filters compatible with Vikunja 2.4 by matching the stored
+  attribution text without tokenizer-rejected parentheses.
 
 ## 2.4.0 - 2026-07-22
 

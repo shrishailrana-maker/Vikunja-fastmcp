@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { VikunjaApiClient } from './api.js';
 import { redactSecrets, VikunjaError } from './errors.js';
 import { resolveTask } from './identity.js';
@@ -51,11 +52,43 @@ function apiFields(fields: BulkTaskFields): Record<string, unknown> {
   return values;
 }
 
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, item]) => item !== undefined)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => [key, canonicalize(item)]),
+    );
+  }
+  return value;
+}
+
+function projectFingerprint(project?: { id?: number; title?: string }): unknown {
+  if (!project) return null;
+  if (project.id !== undefined) return { id: project.id };
+  return { title: project.title?.trim().toLowerCase() };
+}
+
+function bulkCacheKey(
+  action: string,
+  idempotencyKey: string | undefined,
+  payload: unknown,
+): string {
+  if (!idempotencyKey) return '';
+  const fingerprint = createHash('sha256')
+    .update(JSON.stringify(canonicalize(payload)))
+    .digest('hex');
+  return `bulk-${action}:${idempotencyKey}:${fingerprint}`;
+}
+
 export async function bulkUpdateTasks(
   client: VikunjaApiClient,
   taskIds: number[],
   fields: BulkTaskFields,
   project?: { id?: number; title?: string },
+  idempotencyKey?: string,
 ): Promise<{ requested: number; updated: unknown[] }> {
   const values = apiFields(fields);
   if (taskIds.length === 0 || Object.keys(values).length === 0) {
@@ -67,6 +100,15 @@ export async function bulkUpdateTasks(
       message: 'Bulk update requires taskIds and at least one field.',
       fieldErrors: [],
     });
+  }
+  const cacheKey = bulkCacheKey('update', idempotencyKey, {
+    project: projectFingerprint(project),
+    taskIds,
+    values,
+  });
+  if (cacheKey) {
+    const cached = idempotency.get(cacheKey);
+    if (cached) return cached;
   }
   if (project) {
     for (const taskId of taskIds) await resolveTask(client, taskId, project);
@@ -87,10 +129,12 @@ export async function bulkUpdateTasks(
           !task.due_date || String(task.due_date).startsWith('0001-01-01') ? null : task.due_date,
       }))
     : [];
-  return {
+  const result = {
     requested: taskIds.length,
     updated,
   };
+  if (cacheKey) idempotency.set(cacheKey, result);
+  return result;
 }
 
 export async function bulkCreateTasks(
@@ -102,8 +146,10 @@ export async function bulkCreateTasks(
   if (tasks.length === 0 || tasks.length > 100 || tasks.some((task) => !task.title)) {
     throw validationError('Bulk create requires 1-100 tasks, each with a title.');
   }
-  const projectKey = project.id ?? project.title?.toLowerCase() ?? 'missing';
-  const cacheKey = idempotencyKey ? `bulk-create:${projectKey}:${idempotencyKey}` : '';
+  const cacheKey = bulkCacheKey('create', idempotencyKey, {
+    project: projectFingerprint(project),
+    tasks,
+  });
   if (cacheKey) {
     const cached = idempotency.get(cacheKey);
     if (cached) return cached;
@@ -156,9 +202,21 @@ async function bulkChangeAssignee(
   project: { id?: number; title?: string } | undefined,
   dryRun: boolean,
   assign: boolean,
+  idempotencyKey?: string,
 ): Promise<BulkAssignmentResult> {
   if (taskIds.length === 0 || taskIds.length > 100) {
     throw validationError('Bulk assign/unassign requires 1-100 task IDs.');
+  }
+  const cacheKey = dryRun
+    ? ''
+    : bulkCacheKey(assign ? 'assign' : 'unassign', idempotencyKey, {
+        project: projectFingerprint(project),
+        taskIds,
+        userSelector,
+      });
+  if (cacheKey) {
+    const cached = idempotency.get(cacheKey);
+    if (cached) return cached;
   }
   const userId = await resolveUser(client, userSelector);
   const result: BulkAssignmentResult = {
@@ -200,6 +258,7 @@ async function bulkChangeAssignee(
       });
     }
   }
+  if (cacheKey) idempotency.set(cacheKey, result);
   return result;
 }
 
@@ -209,8 +268,9 @@ export function bulkAssignTasks(
   userSelector: string | number,
   project?: { id?: number; title?: string },
   dryRun = false,
+  idempotencyKey?: string,
 ): Promise<BulkAssignmentResult> {
-  return bulkChangeAssignee(client, taskIds, userSelector, project, dryRun, true);
+  return bulkChangeAssignee(client, taskIds, userSelector, project, dryRun, true, idempotencyKey);
 }
 
 export function bulkUnassignTasks(
@@ -219,19 +279,30 @@ export function bulkUnassignTasks(
   userSelector: string | number,
   project?: { id?: number; title?: string },
   dryRun = false,
+  idempotencyKey?: string,
 ): Promise<BulkAssignmentResult> {
-  return bulkChangeAssignee(client, taskIds, userSelector, project, dryRun, false);
+  return bulkChangeAssignee(client, taskIds, userSelector, project, dryRun, false, idempotencyKey);
 }
 
 export async function bulkDeleteTasks(
   client: VikunjaApiClient,
   taskIds: number[],
   project?: { id?: number; title?: string },
+  idempotencyKey?: string,
 ): Promise<unknown[]> {
   if (taskIds.length === 0 || taskIds.length > 100)
     throw validationError('Bulk delete requires 1-100 task IDs.');
+  const cacheKey = bulkCacheKey('delete', idempotencyKey, {
+    project: projectFingerprint(project),
+    taskIds,
+  });
+  if (cacheKey) {
+    const cached = idempotency.get(cacheKey);
+    if (cached) return cached;
+  }
   const deleted = [];
   for (const id of taskIds) deleted.push(await deleteTask(client, id, project));
+  if (cacheKey) idempotency.set(cacheKey, deleted);
   return deleted;
 }
 

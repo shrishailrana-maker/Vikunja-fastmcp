@@ -306,6 +306,7 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     {
       action: 'update',
       required: ['taskIds', 'fields'],
+      optional: ['projectSelector', 'idempotencyKey'],
       execution: 'Direct PUT /tasks/bulk',
     },
     {
@@ -318,18 +319,19 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     {
       action: 'delete',
       required: ['taskIds', 'confirm'],
+      optional: ['projectSelector', 'idempotencyKey'],
       execution: 'MCP-composed verified task deletes; non-atomic',
     },
     {
       action: 'assign',
       required: ['taskIds', 'userSelector'],
-      optional: ['projectSelector', 'dryRun'],
+      optional: ['projectSelector', 'dryRun', 'idempotencyKey'],
       execution: 'Resolve user once, verify each task scope, then compose bounded assignee writes',
     },
     {
       action: 'unassign',
       required: ['taskIds', 'userSelector'],
-      optional: ['projectSelector', 'dryRun'],
+      optional: ['projectSelector', 'dryRun', 'idempotencyKey'],
       execution: 'Resolve user once, verify each task scope, then compose bounded assignee deletes',
     },
   ],

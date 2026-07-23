@@ -1,5 +1,11 @@
 import { jest } from '@jest/globals';
-import { bulkAssignTasks, bulkCreateTasks, bulkUnassignTasks } from '../src/bulk-reminders.js';
+import {
+  bulkAssignTasks,
+  bulkCreateTasks,
+  bulkDeleteTasks,
+  bulkUnassignTasks,
+  bulkUpdateTasks,
+} from '../src/bulk-reminders.js';
 import { idempotency } from '../src/idempotency.js';
 import { VikunjaError } from '../src/errors.js';
 
@@ -82,6 +88,36 @@ describe('bulk task composition', () => {
 
     expect(second).toEqual(first);
     expect(request.mock.calls.filter(([method]) => method === 'POST')).toHaveLength(writes);
+  });
+
+  it('does not collide when one bulk-create idempotency key is reused for different rows', async () => {
+    const request = jest.fn(async (method: string, path: string, options?: any) => {
+      if (method === 'GET' && path === '/projects/101') return { id: 101, title: 'Alpha' };
+      if (method === 'POST' && path === '/projects/101/tasks') {
+        return {
+          id: options.body.title === 'First' ? 9001 : 9002,
+          index: options.body.title === 'First' ? 1 : 2,
+          identifier: options.body.title === 'First' ? 'ALPHA-1' : 'ALPHA-2',
+          title: options.body.title,
+          project_id: 101,
+        };
+      }
+      throw new Error(`Unexpected ${method} ${path}`);
+    });
+    const client = {
+      request,
+      getConfig: () => ({
+        vikunjaWebUrl: 'https://vikunja.example.com/',
+        vikunjaToken: 'test-token',
+      }),
+    } as any;
+
+    const first = await bulkCreateTasks(client, { id: 101 }, [{ title: 'First' }], 'batch-1');
+    const second = await bulkCreateTasks(client, { id: 101 }, [{ title: 'Second' }], 'batch-1');
+
+    expect(first.created[0].id).toBe(9001);
+    expect(second.created[0].id).toBe(9002);
+    expect(request.mock.calls.filter(([method]) => method === 'POST')).toHaveLength(2);
   });
 
   it('bulk assigns a mixed batch and isolates a wrong-project task', async () => {
@@ -174,5 +210,155 @@ describe('bulk task composition', () => {
     expect(request.mock.calls.some(([method]) => method === 'POST' || method === 'DELETE')).toBe(
       false,
     );
+  });
+
+  it('returns cached bulk-assign and bulk-unassign receipts without repeated writes', async () => {
+    const assigned = new Set<number>();
+    const request = jest.fn(async (method: string, path: string) => {
+      if (method === 'GET' && path.startsWith('/users?')) {
+        return { items: [{ id: 42, username: 'developer' }], total: 1, total_pages: 1 };
+      }
+      if (method === 'GET' && path === '/projects/101') return { id: 101, title: 'Alpha' };
+      if (method === 'GET' && path === '/tasks/1') {
+        return {
+          id: 1,
+          index: 1,
+          identifier: 'ALPHA-1',
+          title: 'Assignment target',
+          project_id: 101,
+          assignees: assigned.has(42) ? [{ id: 42, username: 'developer' }] : [],
+        };
+      }
+      if (method === 'POST' && path === '/tasks/1/assignees') {
+        assigned.add(42);
+        return {};
+      }
+      if (method === 'DELETE' && path === '/tasks/1/assignees/42') {
+        assigned.delete(42);
+        return {};
+      }
+      throw new Error(`Unexpected ${method} ${path}`);
+    });
+    const client = { request, getConfig: () => ({ vikunjaToken: 'test-token' }) } as any;
+
+    const assignedFirst = await bulkAssignTasks(
+      client,
+      [1],
+      'developer',
+      { id: 101 },
+      false,
+      'assign-1',
+    );
+    const assignWrites = request.mock.calls.filter(([method]) => method === 'POST').length;
+    const assignedRetry = await bulkAssignTasks(
+      client,
+      [1],
+      'developer',
+      { id: 101 },
+      false,
+      'assign-1',
+    );
+    expect(assignedRetry).toEqual(assignedFirst);
+    expect(request.mock.calls.filter(([method]) => method === 'POST')).toHaveLength(assignWrites);
+
+    const unassignedFirst = await bulkUnassignTasks(
+      client,
+      [1],
+      'developer',
+      { id: 101 },
+      false,
+      'unassign-1',
+    );
+    const unassignWrites = request.mock.calls.filter(([method]) => method === 'DELETE').length;
+    const unassignedRetry = await bulkUnassignTasks(
+      client,
+      [1],
+      'developer',
+      { id: 101 },
+      false,
+      'unassign-1',
+    );
+    expect(unassignedRetry).toEqual(unassignedFirst);
+    expect(request.mock.calls.filter(([method]) => method === 'DELETE')).toHaveLength(
+      unassignWrites,
+    );
+  });
+
+  it('does not cache bulk-assignment dry runs', async () => {
+    const request = jest.fn(async (method: string, path: string) => {
+      if (method === 'GET' && path.startsWith('/users?')) {
+        return { items: [{ id: 42, username: 'developer' }], total: 1, total_pages: 1 };
+      }
+      if (method === 'GET' && path === '/projects/101') return { id: 101, title: 'Alpha' };
+      if (method === 'GET' && path === '/tasks/1') {
+        return {
+          id: 1,
+          index: 1,
+          title: 'Dry-run target',
+          project_id: 101,
+          assignees: [],
+        };
+      }
+      throw new Error(`Unexpected ${method} ${path}`);
+    });
+    const client = { request, getConfig: () => ({ vikunjaToken: 'test-token' }) } as any;
+
+    await bulkAssignTasks(client, [1], 'developer', { id: 101 }, true, 'dry-run-1');
+    const callsAfterFirst = request.mock.calls.length;
+    await bulkAssignTasks(client, [1], 'developer', { id: 101 }, true, 'dry-run-1');
+
+    expect(request.mock.calls.length).toBeGreaterThan(callsAfterFirst);
+  });
+
+  it('returns cached bulk-update and bulk-delete receipts without repeated writes', async () => {
+    const request = jest.fn(async (method: string, path: string) => {
+      if (method === 'PUT' && path === '/tasks/bulk') {
+        return {
+          tasks: [
+            {
+              id: 1,
+              index: 1,
+              identifier: 'ALPHA-1',
+              project_id: 101,
+              title: 'Updated',
+              done: true,
+            },
+          ],
+        };
+      }
+      if (method === 'GET' && path === '/tasks/1') {
+        return {
+          id: 1,
+          index: 1,
+          identifier: 'ALPHA-1',
+          project_id: 101,
+          project: { title: 'Alpha' },
+          title: 'Delete target',
+          labels: [],
+          assignees: [],
+        };
+      }
+      if (method === 'DELETE' && path === '/tasks/1') return {};
+      throw new Error(`Unexpected ${method} ${path}`);
+    });
+    const client = {
+      request,
+      getConfig: () => ({
+        vikunjaWebUrl: 'https://vikunja.example.com/',
+        vikunjaToken: 'test-token',
+      }),
+    } as any;
+
+    const updateFirst = await bulkUpdateTasks(client, [1], { done: true }, undefined, 'update-1');
+    const updateWrites = request.mock.calls.filter(([method]) => method === 'PUT').length;
+    const updateRetry = await bulkUpdateTasks(client, [1], { done: true }, undefined, 'update-1');
+    expect(updateRetry).toEqual(updateFirst);
+    expect(request.mock.calls.filter(([method]) => method === 'PUT')).toHaveLength(updateWrites);
+
+    const deleteFirst = await bulkDeleteTasks(client, [1], undefined, 'delete-1');
+    const deleteWrites = request.mock.calls.filter(([method]) => method === 'DELETE').length;
+    const deleteRetry = await bulkDeleteTasks(client, [1], undefined, 'delete-1');
+    expect(deleteRetry).toEqual(deleteFirst);
+    expect(request.mock.calls.filter(([method]) => method === 'DELETE')).toHaveLength(deleteWrites);
   });
 });

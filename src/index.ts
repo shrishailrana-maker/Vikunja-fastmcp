@@ -1074,7 +1074,13 @@ export const TOOLS: McpToolDefinition[] = [
         case 'update':
           if (!args.taskIds) throw badRequest('taskIds is required for bulk update.');
           if (!args.fields) throw badRequest('fields is required for bulk update.');
-          return bulkUpdateTasks(client, args.taskIds, args.fields, args.projectSelector);
+          return bulkUpdateTasks(
+            client,
+            args.taskIds,
+            args.fields,
+            args.projectSelector,
+            args.idempotencyKey,
+          );
         case 'create':
           if (!args.projectSelector) {
             throw badRequest('projectSelector is required for bulk create.');
@@ -1084,7 +1090,7 @@ export const TOOLS: McpToolDefinition[] = [
         case 'delete':
           if (!args.taskIds) throw badRequest('taskIds is required for bulk delete.');
           if (args.confirm !== true) throw badRequest('confirm=true is required for bulk delete.');
-          return bulkDeleteTasks(client, args.taskIds, args.projectSelector);
+          return bulkDeleteTasks(client, args.taskIds, args.projectSelector, args.idempotencyKey);
         case 'assign':
           if (!args.taskIds) throw badRequest('taskIds is required for bulk assign.');
           if (args.userSelector === undefined) {
@@ -1096,6 +1102,7 @@ export const TOOLS: McpToolDefinition[] = [
             args.userSelector,
             args.projectSelector,
             args.dryRun ?? false,
+            args.idempotencyKey,
           );
         case 'unassign':
           if (!args.taskIds) throw badRequest('taskIds is required for bulk unassign.');
@@ -1108,6 +1115,7 @@ export const TOOLS: McpToolDefinition[] = [
             args.userSelector,
             args.projectSelector,
             args.dryRun ?? false,
+            args.idempotencyKey,
           );
         default:
           throw badRequest(`Unknown bulk action: ${args.action}`);

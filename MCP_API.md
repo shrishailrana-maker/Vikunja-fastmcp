@@ -230,11 +230,11 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 
 | Action | Required | Optional | Execution |
 | --- | --- | --- | --- |
-| `update` | taskIds, fields | none | Direct PUT /tasks/bulk |
+| `update` | taskIds, fields | projectSelector, idempotencyKey | Direct PUT /tasks/bulk |
 | `create` | projectSelector, tasks | idempotencyKey | MCP-composed bounded task creates; non-atomic. Each row may provide externalKey for stable-key upsert; failures do not abort later rows. |
-| `delete` | taskIds, confirm | none | MCP-composed verified task deletes; non-atomic |
-| `assign` | taskIds, userSelector | projectSelector, dryRun | Resolve user once, verify each task scope, then compose bounded assignee writes |
-| `unassign` | taskIds, userSelector | projectSelector, dryRun | Resolve user once, verify each task scope, then compose bounded assignee deletes |
+| `delete` | taskIds, confirm | projectSelector, idempotencyKey | MCP-composed verified task deletes; non-atomic |
+| `assign` | taskIds, userSelector | projectSelector, dryRun, idempotencyKey | Resolve user once, verify each task scope, then compose bounded assignee writes |
+| `unassign` | taskIds, userSelector | projectSelector, dryRun, idempotencyKey | Resolve user once, verify each task scope, then compose bounded assignee deletes |
 
 ### `vikunja_task_reminders`
 * **Description**: List, add, or remove reminders stored on a task.

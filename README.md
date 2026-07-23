@@ -1,6 +1,8 @@
 # Vikunja FastMCP V2
 
-Clean-room **Vikunja `/api/v2` only** Model Context Protocol server. Direct Node 24 LTS `fetch`, runtime deps: `@modelcontextprotocol/sdk` and `zod`.
+Clean-room **Vikunja `/api/v2` only** Model Context Protocol server. It uses
+Node 24 LTS `fetch` with only `@modelcontextprotocol/sdk` and `zod` as runtime
+dependencies.
 
 ## Project History
 
@@ -21,10 +23,11 @@ wrappers from the original implementation remain in the current tree.
 Install the prebuilt public release globally:
 
 ```bash
-npm install -g vikunja-fastmcp
+npm install -g vikunja-fastmcp@latest
 ```
 
-Restart the MCP client after installing or updating so it starts the new process.
+Restart the MCP client after installing or updating so it starts the new
+process.
 
 ### Copy-Paste Agent Install Prompt
 
@@ -34,22 +37,34 @@ agent asks you for the two values it needs.
 
 ```text
 Install the Vikunja MCP server for this user:
-1. Run npm install -g vikunja-fastmcp (requires Node.js 24+). Verify with npm list -g vikunja-fastmcp --depth=0 and locate the executable with (Get-Command vikunja-mcp).Source on Windows or command -v vikunja-mcp on macOS/Linux.
-2. Ask me for my Vikunja server URL and API token (created in Vikunja under Settings -> API Tokens). Never print or log the token.
-3. Register the server in this client's MCP configuration: stdio server named "vikunja", command "vikunja-mcp" (no args, never a checkout/dist path), env VIKUNJA_URL and VIKUNJA_API_TOKEN.
-4. Optional: use npm root -g to copy the bundled skills/vikunja-fastmcp folder to this client's user-wide skill directory; if this client has no skill folders, add the contents of its SKILL.md to persistent agent instructions.
-5. Restart the MCP client, then call the self_check tool and confirm it reports ok with connectionStatus online.
-6. Report the installed version, executable path, and config file you edited, without showing secrets.
+1. Run: npm install -g vikunja-fastmcp@latest
+2. Verify: npm list -g vikunja-fastmcp --depth=0
+   Windows PowerShell: (Get-Command vikunja-mcp).Source
+   macOS/Linux: command -v vikunja-mcp
+3. Ask me for VIKUNJA_URL and VIKUNJA_API_TOKEN. The token comes from
+   Vikunja Settings -> API Tokens. Never print or log it.
+4. Register a stdio MCP server named "vikunja" with command "vikunja-mcp",
+   no args, and those two environment variables. Never use a checkout or
+   dist path.
+5. Optional: use npm root -g to copy skills/vikunja-fastmcp into this
+   agent's user-wide skill directory. Otherwise add SKILL.md to its rules.
+6. Restart the MCP client, call self_check, and report the installed version,
+   executable path, and edited config file without showing secrets.
 ```
 
 ### Copy-Paste Agent Update Prompt
 
 ```text
-Update Vikunja FastMCP globally for this user: npm install -g vikunja-fastmcp@latest
-Verify npm list -g vikunja-fastmcp --depth=0; locate it with (Get-Command vikunja-mcp).Source on Windows or command -v vikunja-mcp on macOS/Linux.
-Ensure the MCP config uses command "vikunja-mcp", never a checkout/dist path; use npm root -g to copy bundled skills/vikunja-fastmcp to the agent's user-wide skill directory (for example ~/.codex/skills/vikunja-fastmcp or ~/.claude/skills/vikunja-fastmcp).
-Preserve existing VIKUNJA_URL and VIKUNJA_API_TOKEN without printing secrets, then restart the agent.
-Report the installed version, executable path, and skill path; confirm the installed version matches npm view vikunja-fastmcp version.
+1. Run: npm install -g vikunja-fastmcp@latest
+2. Verify: npm list -g vikunja-fastmcp --depth=0
+   Windows PowerShell: (Get-Command vikunja-mcp).Source
+   macOS/Linux: command -v vikunja-mcp
+3. Keep command "vikunja-mcp" and preserve VIKUNJA_URL and
+   VIKUNJA_API_TOKEN without printing secrets.
+4. Use npm root -g to refresh skills/vikunja-fastmcp in the agent's
+   user-wide skill directory, then restart the MCP client.
+5. Report the executable and skill paths. Confirm the installed version with
+   npm view vikunja-fastmcp version.
 ```
 
 ### Optional Agent Skill
@@ -75,19 +90,28 @@ installing or updating the skill.
 
 ## Environment
 
-| Variable                           | Required | Description                                                                           |
-| ---------------------------------- | -------- | ------------------------------------------------------------------------------------- |
-| `VIKUNJA_URL`                      | yes      | Server root or `…/api/v2` (e.g. `http://host:3456`)                                   |
-| `VIKUNJA_API_TOKEN`                | yes      | Bearer token (`tk_…`)                                                                 |
-| `VIKUNJA_WEB_URL`                  | no       | Browser base for task/project links                                                   |
-| `VIKUNJA_ATTACHMENT_DOWNLOAD_ROOT` | no       | Sandboxed download root (defaults under the OS temp directory)                        |
-| `VIKUNJA_MAX_ATTACHMENT_BYTES`     | no       | Upload/download size ceiling (default 100 MiB)                                        |
-| `VIKUNJA_TEMPLATE_FILE`            | no       | Machine-local template JSON path (defaults under the user home directory)             |
-| `VIKUNJA_MCP_RESPONSE_MODE`        | no       | Default task response size: `compact` (default), `standard`, or `full`                |
-| `VIKUNJA_REQUEST_TIMEOUT_MS`       | no       | Positive per-request timeout in milliseconds (default 30000)                          |
-| `VIKUNJA_TRANSFER_TIMEOUT_MS`      | no       | Streamed and multipart transfer timeout in milliseconds (default 60000)               |
-| `VIKUNJA_MUTATION_SCOPE_MODE`      | no       | Global-ID mutation policy: `require` (default), `warn`, or `off`                      |
-| `VIKUNJA_STATUS_LABEL_PREFIX`      | no       | Prefix whose labels form one mutually exclusive task-status group (default `status:`) |
+Required:
+
+- `VIKUNJA_URL`: server root or `/api/v2` URL.
+- `VIKUNJA_API_TOKEN`: bearer token created in Vikunja.
+
+Optional:
+
+- `VIKUNJA_WEB_URL`: browser base for task and project links.
+- `VIKUNJA_ATTACHMENT_DOWNLOAD_ROOT`: sandboxed download root. Defaults under
+  the operating-system temp directory.
+- `VIKUNJA_MAX_ATTACHMENT_BYTES`: upload and download size ceiling. Defaults
+  to 100 MiB.
+- `VIKUNJA_TEMPLATE_FILE`: machine-local template JSON path. Defaults under
+  the user home directory.
+- `VIKUNJA_MCP_RESPONSE_MODE`: `compact` (default), `standard`, or `full`.
+- `VIKUNJA_REQUEST_TIMEOUT_MS`: ordinary request timeout. Defaults to 30000.
+- `VIKUNJA_TRANSFER_TIMEOUT_MS`: streamed and multipart inactivity timeout.
+  Defaults to 60000.
+- `VIKUNJA_MUTATION_SCOPE_MODE`: global-ID mutation policy. Defaults to
+  `require`; `warn` and `off` are migration options.
+- `VIKUNJA_STATUS_LABEL_PREFIX`: mutually exclusive task-status prefix.
+  Defaults to `status:`.
 
 Never commit tokens. Rejects `/api/v1` URLs.
 API and browser URLs must use `http://` or `https://`.
@@ -121,7 +145,8 @@ npm run build
 node dist/index.js
 ```
 
-MCP clients should launch `dist/index.js` over stdio with the env vars above.
+For local development only, launch `dist/index.js` over stdio with the
+environment variables above. Public installations use `vikunja-mcp`.
 
 ## Emergency Python Fallback
 
@@ -133,18 +158,25 @@ as independent tracker writers.
 
 ## Tools
 
-- `self_check` / `vikunja_auth` — compact diagnostics and current user (no email); use `detail: "full"` only for capabilities and local paths
+- `self_check` / `vikunja_auth` — compact diagnostics and current user. Use
+  `detail: "full"` only for capabilities and local paths.
 - `vikunja_projects` — list / get
-- `vikunja_tasks` — CRUD, stable-key upsert, list (default **open only**), project summary, create_if_absent, assignees, labels, mutually exclusive status switching, relations, attachments
-- `vikunja_task_comments` — comment lists default to 20 items per page and accept `page` / `perPage` (max 100)
+- `vikunja_tasks` — CRUD, stable-key upsert, open-task lists, project summary,
+  create-if-absent, assignees, labels, status switching, relations, and
+  attachments.
+- `vikunja_task_comments` — paginated comment lists with a 20-item default and
+  100-item maximum.
 - `vikunja_labels` — global labels (title or id)
 - `vikunja_users`
 - `vikunja_teams` — teams/members (`userId` is the Vikunja user id)
 - `vikunja_filters` — create/get/update/delete (**no list**; API has no collection GET)
-- `vikunja_task_bulk` — native bulk update; bounded composed create/upsert, delete, assign, and unassign with dry-run support
+- `vikunja_task_bulk` — native bulk update plus bounded create/upsert, delete,
+  assign, and unassign operations with dry-run and idempotency support.
 - `vikunja_task_reminders` — list/add/remove task reminders
-- `vikunja_batch_import` — detect/preview/import/status for native-fast or MCP-idempotent CSV migration
-- `vikunja_export_project` — local JSON/CSV task export with optional comments, attachments, and relations
+- `vikunja_batch_import` — detect, preview, import, and status for native-fast
+  or MCP-idempotent CSV migration.
+- `vikunja_export_project` — local JSON/CSV export with optional comments,
+  attachments, and relations.
 - `vikunja_request_user_export` / `vikunja_download_user_export`
 - `vikunja_templates` — machine-local templates and task instantiation
 - `vikunja_webhooks` — project/user webhooks and event discovery
@@ -190,7 +222,8 @@ even when ordinary task updates are allowed. Some Vikunja builds also require
 JWT/local-password authentication for user-data export routes; the MCP
 preserves the real `401` instead of presenting false JWT advice.
 
-See generated `MCP_API.md` for inputs. Responses are Markdown summary + one JSON envelope (`ok` / `error`).
+See generated `MCP_API.md` for inputs. Responses contain a Markdown summary
+and one JSON envelope (`ok` or `error`).
 Task write summaries lead with the portal reference and always pair it with the
 global ID, for example `ALPHA-263 (id 451)`; a bare numeric selector still means
 the global ID.
@@ -204,12 +237,17 @@ title, done state, priority, and the creator username when available. Request
 ### Operational Limits
 
 - Bulk update/close: 100 global task IDs per call.
-- Bulk create/upsert: 100 tasks per call; composed, continue-on-error, and non-atomic.
+- Bulk create/upsert: 100 tasks per call; composed, continue-on-error, and
+  non-atomic.
 - Bulk assign/unassign: 100 global task IDs per call, with optional dry-run.
-- Bulk delete: 100 task IDs per call; composed, non-atomic, and requires `confirm: true`.
-- CSV import and file transfer: 100 MiB by default through `VIKUNJA_MAX_ATTACHMENT_BYTES`; Vikunja controls CSV row limits.
-- Idempotent CSV import: 1,000 rows per call and up to 100 process-local import-ledger keys; same-key reruns skip rows already recorded. Native migration remains faster and non-idempotent.
-- Multi-project lists page each project independently. Prefer `countOnly` when only totals are needed.
+- Bulk delete: 100 task IDs per call; composed, non-atomic, and requires
+  `confirm: true`.
+- CSV import and file transfer: 100 MiB by default through
+  `VIKUNJA_MAX_ATTACHMENT_BYTES`. Vikunja controls CSV row limits.
+- Idempotent CSV import: 1,000 rows per call and up to 100 process-local ledger
+  keys. Same-key reruns skip recorded rows. Native migration remains faster.
+- Multi-project lists page each project independently. Prefer `countOnly`
+  when only totals are needed.
 
 ## Develop
 
