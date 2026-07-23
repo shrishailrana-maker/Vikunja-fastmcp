@@ -23,6 +23,7 @@ requests or legacy tracker scripts while the MCP is available.
   portal-index operation. Use `projects` or `allProjects: true` only deliberately.
 - A portal reference such as `#25` repeats across projects and requires a project.
 - A numeric task ID is globally unique and is used in task URLs.
+- Quote tasks as `PROJ-ref (id N)`; never write `#N` for a global ID.
 - A bare numeric selector always means the global database ID. For example,
   `taskSelector: 360` targets global task 360, not portal task `#360`. Resolve
   the portal task with `taskSelector: "#360"` plus an explicit
@@ -56,6 +57,10 @@ requests or legacy tracker scripts while the MCP is available.
 
 ## Writes
 
+- Prefer `vikunja_task_bulk` `create` (or `upsert` with `externalKey`) when
+  filing 3 or more tasks.
+- Use `upsert` with a stable `externalKey`, such as file plus line plus
+  detector, so reruns update the existing finding instead of duplicating it.
 - Prefer `create_if_absent` for duplicate-sensitive creation, while remembering
   it is best-effort rather than a distributed lock.
 - Add verification evidence before closing work. Use `close_with_evidence` when appropriate.
@@ -64,6 +69,7 @@ requests or legacy tracker scripts while the MCP is available.
 - Use `set_status` to replace all labels in the configured status-prefix group
   in one request. Keep `createIfMissing: false` unless label creation is
   explicitly intended.
+- When a label title is ambiguous, pass the numeric label ID.
 - Use CSV `mode: "idempotent"` plus a stable `idempotencyKey` for retry-safe
   row-by-row imports; use `mode: "native"` only when speed matters more than
   retry deduplication. Preview either mode before importing.

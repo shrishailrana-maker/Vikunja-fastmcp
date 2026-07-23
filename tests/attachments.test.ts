@@ -289,7 +289,13 @@ describe('Attachment Upload, Verification and Download tests', () => {
       ok: true,
       status: 200,
       text: async () =>
-        JSON.stringify({ id: 9005, index: 305, project_id: 101, project: { title: 'Alpha' } }),
+        JSON.stringify({
+          id: 9005,
+          index: 305,
+          title: 'Evidence task',
+          project_id: 101,
+          project: { title: 'Alpha' },
+        }),
     } as Response;
 
     const uploadOk = (id: number, name: string) =>
@@ -314,6 +320,36 @@ describe('Attachment Upload, Verification and Download tests', () => {
 
       expect(res.uploaded.map((u) => u.id)).toEqual([3001, 3002]);
       expect(res.failed.length).toBe(0);
+      expect(res.task).toEqual({ id: 9005, portalRef: '#305', title: 'Evidence task' });
+    });
+
+    it('returns the cached task-to-attachment mapping on an idempotent retry', async () => {
+      mockFetch.mockResolvedValueOnce(okTask);
+      mockFetch.mockResolvedValueOnce(uploadOk(3001, 'a.txt'));
+
+      const first = await attachFiles(
+        client,
+        9005,
+        [{ filename: 'a.txt', base64Content: Buffer.from('a').toString('base64') }],
+        undefined,
+        'attach-once',
+      );
+      const calls = mockFetch.mock.calls.length;
+      mockFetch.mockResolvedValueOnce(okTask);
+      const second = await attachFiles(
+        client,
+        9005,
+        [{ filename: 'a.txt', base64Content: Buffer.from('a').toString('base64') }],
+        undefined,
+        'attach-once',
+      );
+
+      expect(second).toEqual(first);
+      expect(second.task).toEqual({ id: 9005, portalRef: '#305', title: 'Evidence task' });
+      expect(mockFetch.mock.calls.filter((call: any) => call[1]?.method === 'POST')).toHaveLength(
+        1,
+      );
+      expect(mockFetch).toHaveBeenCalledTimes(calls + 1);
     });
 
     it('sanitizes filename and mimeType to prevent multipart header injection', async () => {

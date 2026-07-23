@@ -34,6 +34,8 @@ import {
   listTasks,
   createTask,
   createIfAbsent,
+  upsertTask,
+  EXTERNAL_KEY_PATTERN,
   getTask,
   updateTask,
   deleteTask,
@@ -76,8 +78,10 @@ import {
 } from './filters.js';
 import {
   addTaskReminder,
+  bulkAssignTasks,
   bulkCreateTasks,
   bulkDeleteTasks,
+  bulkUnassignTasks,
   bulkUpdateTasks,
   listTaskReminders,
   removeTaskReminder,
@@ -251,7 +255,9 @@ function summaryFor(toolName: string, args: any, result: any): string {
     return result?.ok ? 'Self-check passed.' : 'Self-check reported problems.';
   }
   if (result?.action && result?.target) {
-    return `${result.action} **${safeSummaryText(result.target.title || 'task')}** (#${result.target.index ?? '?'} · id ${result.target.id}) in **${safeSummaryText(result.target.project?.title || 'project')}**.`;
+    const portalRef =
+      result.target.identifier || result.target.portalRef || `#${result.target.index ?? '?'}`;
+    return `${result.action} **${safeSummaryText(result.target.title || 'task')}** (${safeSummaryText(portalRef)} · id ${result.target.id}) in **${safeSummaryText(result.target.project?.title || 'project')}**.`;
   }
   if (result?.task?.title) {
     const portalRef =
@@ -413,6 +419,7 @@ export const TOOLS: McpToolDefinition[] = [
       action: z.enum([
         'create',
         'create_if_absent',
+        'upsert',
         'get',
         'list',
         'summary',
@@ -466,6 +473,7 @@ export const TOOLS: McpToolDefinition[] = [
         .describe(
           'Exact assignee username for task lists; Vikunja filters do not accept user IDs.',
         ),
+      descriptionContains: z.string().optional(),
       q: z
         .string()
         .optional()
@@ -481,6 +489,7 @@ export const TOOLS: McpToolDefinition[] = [
         .object({
           title: z.string().trim().min(1).optional(),
           description: z.string().optional(),
+          appendDescription: z.string().optional(),
           done: z.boolean().optional(),
           priority: z.number().int().min(0).max(5).optional(),
           dueDate: z.string().nullable().optional(),
@@ -490,7 +499,7 @@ export const TOOLS: McpToolDefinition[] = [
       evidenceComment: z.string().trim().min(1).optional(),
       actor: actorSchema,
       userSelector: z.union([z.string().trim().min(1), z.number().int().positive()]).optional(),
-      labelTitle: z.string().trim().min(1).optional(),
+      labelTitle: z.union([z.string().trim().min(1), z.number().int().positive()]).optional(),
       statusLabel: z.string().trim().min(1).optional(),
       createIfMissing: z.boolean().optional(),
       otherTaskSelector: z
@@ -510,6 +519,7 @@ export const TOOLS: McpToolDefinition[] = [
       destinationPath: z.string().optional(),
       overwrite: z.boolean().optional(),
       idempotencyKey: z.string().trim().min(1).max(200).optional(),
+      externalKey: z.string().regex(EXTERNAL_KEY_PATTERN).optional(),
     }),
     handler: async (args, client) => {
       switch (args.action) {
@@ -528,6 +538,8 @@ export const TOOLS: McpToolDefinition[] = [
             priority: args.priority,
             label: args.label,
             assignee: args.assignee,
+            descriptionContains: args.descriptionContains,
+            actor: args.actor,
             q: args.q ?? args.search,
             countOnly: args.countOnly,
             filter: args.filter,
@@ -570,6 +582,24 @@ export const TOOLS: McpToolDefinition[] = [
             args.attachments,
             args.actor,
           );
+        case 'upsert':
+          if (!args.projectSelector) throw badRequest('projectSelector is required for upsert.');
+          if (!args.fields?.title) throw badRequest('fields.title is required for upsert.');
+          if (!args.externalKey) throw badRequest('externalKey is required for upsert.');
+          return upsertTask(
+            client,
+            args.projectSelector,
+            {
+              title: args.fields.title,
+              description: args.fields.description,
+              done: args.fields.done,
+              priority: args.fields.priority,
+              dueDate: args.fields.dueDate,
+            },
+            args.externalKey,
+            args.expectedUpdatedAt,
+            args.actor,
+          );
         case 'get':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
           return getTask(
@@ -590,6 +620,7 @@ export const TOOLS: McpToolDefinition[] = [
             {
               title: args.fields.title,
               description: args.fields.description,
+              appendDescription: args.fields.appendDescription,
               done: args.fields.done,
               priority: args.fields.priority,
               dueDate: args.fields.dueDate,
@@ -693,7 +724,13 @@ export const TOOLS: McpToolDefinition[] = [
           if (files.length === 0) {
             throw badRequest('Provide filePaths[] and/or base64Content with a filename to attach.');
           }
-          return attachFiles(client, args.taskSelector, files, args.projectSelector);
+          return attachFiles(
+            client,
+            args.taskSelector,
+            files,
+            args.projectSelector,
+            args.idempotencyKey,
+          );
         }
         case 'list-attachments':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
@@ -994,9 +1031,9 @@ export const TOOLS: McpToolDefinition[] = [
   {
     name: 'vikunja_task_bulk',
     description:
-      'Update many tasks through the native v2 bulk route, or compose bounded create/delete batches.',
+      'Preferred way to create or upsert several tasks in one call. Also supports bounded update, delete, assign, and unassign batches.',
     inputSchema: z.object({
-      action: z.enum(['update', 'create', 'delete']),
+      action: z.enum(['update', 'create', 'delete', 'assign', 'unassign']),
       taskIds: z.array(z.number().int().positive()).min(1).max(100).optional(),
       projectSelector: z
         .object({
@@ -1021,11 +1058,15 @@ export const TOOLS: McpToolDefinition[] = [
             done: z.boolean().optional(),
             priority: z.number().int().min(0).max(5).optional(),
             dueDate: z.string().nullable().optional(),
+            externalKey: z.string().regex(EXTERNAL_KEY_PATTERN).optional(),
           }),
         )
         .min(1)
         .max(100)
         .optional(),
+      userSelector: z.union([z.string().trim().min(1), z.number().int().positive()]).optional(),
+      dryRun: z.boolean().optional(),
+      idempotencyKey: z.string().trim().min(1).max(200).optional(),
       confirm: z.boolean().optional(),
     }),
     handler: async (args, client) => {
@@ -1039,11 +1080,35 @@ export const TOOLS: McpToolDefinition[] = [
             throw badRequest('projectSelector is required for bulk create.');
           }
           if (!args.tasks) throw badRequest('tasks is required for bulk create.');
-          return bulkCreateTasks(client, args.projectSelector, args.tasks);
+          return bulkCreateTasks(client, args.projectSelector, args.tasks, args.idempotencyKey);
         case 'delete':
           if (!args.taskIds) throw badRequest('taskIds is required for bulk delete.');
           if (args.confirm !== true) throw badRequest('confirm=true is required for bulk delete.');
           return bulkDeleteTasks(client, args.taskIds, args.projectSelector);
+        case 'assign':
+          if (!args.taskIds) throw badRequest('taskIds is required for bulk assign.');
+          if (args.userSelector === undefined) {
+            throw badRequest('userSelector is required for bulk assign.');
+          }
+          return bulkAssignTasks(
+            client,
+            args.taskIds,
+            args.userSelector,
+            args.projectSelector,
+            args.dryRun ?? false,
+          );
+        case 'unassign':
+          if (!args.taskIds) throw badRequest('taskIds is required for bulk unassign.');
+          if (args.userSelector === undefined) {
+            throw badRequest('userSelector is required for bulk unassign.');
+          }
+          return bulkUnassignTasks(
+            client,
+            args.taskIds,
+            args.userSelector,
+            args.projectSelector,
+            args.dryRun ?? false,
+          );
         default:
           throw badRequest(`Unknown bulk action: ${args.action}`);
       }
@@ -1165,6 +1230,8 @@ export const TOOLS: McpToolDefinition[] = [
       format: z.enum(['json', 'csv']).optional(),
       destinationPath: z.string().optional(),
       includeComments: z.boolean().optional(),
+      includeAttachments: z.boolean().optional(),
+      includeRelations: z.boolean().optional(),
     }),
     handler: async (args, client) =>
       exportProject(
@@ -1173,6 +1240,8 @@ export const TOOLS: McpToolDefinition[] = [
         args.format,
         args.destinationPath,
         args.includeComments,
+        args.includeAttachments,
+        args.includeRelations,
       ),
   },
   {
@@ -1360,7 +1429,7 @@ function enforceToolMutationScope(
     );
   } else if (
     name === 'vikunja_task_bulk' &&
-    ['update', 'delete'].includes(args.action) &&
+    ['update', 'delete', 'assign', 'unassign'].includes(args.action) &&
     Array.isArray(args.taskIds) &&
     args.taskIds.length > 0
   ) {
@@ -1371,6 +1440,36 @@ function enforceToolMutationScope(
       args.projectSelector,
     );
   }
+}
+
+function compactWriteTarget(target: any): any {
+  return {
+    id: target.id,
+    portalRef: target.portalRef || target.identifier || `#${target.index}`,
+    title: target.title,
+    project: {
+      id: target.project?.id,
+      title: target.project?.title,
+    },
+  };
+}
+
+function compactWriteEchoes(result: any): any {
+  if (!result || typeof result !== 'object') return result;
+  let compact = result;
+  if (result.action && result.target) {
+    compact = { ...result, target: compactWriteTarget(result.target) };
+  }
+  if (result.task?.action && result.task?.target) {
+    compact = {
+      ...compact,
+      task: {
+        ...result.task,
+        target: compactWriteTarget(result.task.target),
+      },
+    };
+  }
+  return compact;
 }
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -1437,7 +1536,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   try {
     enforceToolMutationScope(name, parsedArgs, client);
-    const result = await tool.handler(parsedArgs, client);
+    const rawResult = await tool.handler(parsedArgs, client);
+    const effectiveResponseMode =
+      parsedArgs.responseMode ?? client.getConfig().responseMode ?? 'compact';
+    const result =
+      ['vikunja_tasks', 'vikunja_task_bulk'].includes(name) && effectiveResponseMode === 'compact'
+        ? compactWriteEchoes(rawResult)
+        : rawResult;
     const summary = summaryFor(name, parsedArgs, result);
     // Diagnostics carry their own `ok`. A failed self-check must surface as an
     // error envelope so an agent checking only the outer `ok` sees the failure.

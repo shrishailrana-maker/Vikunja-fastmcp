@@ -1,8 +1,9 @@
 import { VikunjaApiClient } from './api.js';
-import { VikunjaError } from './errors.js';
+import { redactSecrets, VikunjaError } from './errors.js';
 import { resolveTask } from './identity.js';
-import { createTask, deleteTask, patchTaskFields } from './tasks.js';
+import { createTask, deleteTask, patchTaskFields, resolveUser, upsertTask } from './tasks.js';
 import { markdownToHtml } from './markdown.js';
+import { idempotency } from './idempotency.js';
 
 export interface BulkTaskFields {
   title?: string;
@@ -10,6 +11,17 @@ export interface BulkTaskFields {
   done?: boolean;
   priority?: number;
   dueDate?: string | null;
+}
+
+export interface BulkCreateTaskFields extends BulkTaskFields {
+  title: string;
+  externalKey?: string;
+}
+
+export interface BulkCreateResult {
+  requested: number;
+  created: { id: number; portalRef: string; title: string }[];
+  failed: { row: number; title: string; error: string }[];
 }
 
 export interface TaskReminderInput {
@@ -84,16 +96,131 @@ export async function bulkUpdateTasks(
 export async function bulkCreateTasks(
   client: VikunjaApiClient,
   project: { id?: number; title?: string },
-  tasks: BulkTaskFields[],
-): Promise<unknown[]> {
+  tasks: BulkCreateTaskFields[],
+  idempotencyKey?: string,
+): Promise<BulkCreateResult> {
   if (tasks.length === 0 || tasks.length > 100 || tasks.some((task) => !task.title)) {
     throw validationError('Bulk create requires 1-100 tasks, each with a title.');
   }
-  const created = [];
-  for (const task of tasks) {
-    created.push(await createTask(client, project, task as BulkTaskFields & { title: string }));
+  const projectKey = project.id ?? project.title?.toLowerCase() ?? 'missing';
+  const cacheKey = idempotencyKey ? `bulk-create:${projectKey}:${idempotencyKey}` : '';
+  if (cacheKey) {
+    const cached = idempotency.get(cacheKey);
+    if (cached) return cached;
   }
-  return created;
+
+  const result: BulkCreateResult = {
+    requested: tasks.length,
+    created: [],
+    failed: [],
+  };
+  for (const [index, task] of tasks.entries()) {
+    try {
+      const echo = task.externalKey
+        ? await upsertTask(client, project, task, task.externalKey)
+        : await createTask(client, project, task);
+      result.created.push({
+        id: echo.target.id,
+        portalRef: echo.target.identifier || `#${echo.target.index}`,
+        title: echo.target.title,
+      });
+    } catch (error: any) {
+      result.failed.push({
+        row: index + 1,
+        title: task.title,
+        error: redactSecrets(
+          error?.message || 'Task creation failed',
+          client.getConfig().vikunjaToken,
+        ),
+      });
+    }
+  }
+  if (cacheKey) {
+    idempotency.set(cacheKey, result);
+  }
+  return result;
+}
+
+export interface BulkAssignmentResult {
+  requested: number;
+  changed: number;
+  alreadyCorrect: number;
+  failed: { taskId: number; error: string }[];
+  dryRun: boolean;
+}
+
+async function bulkChangeAssignee(
+  client: VikunjaApiClient,
+  taskIds: number[],
+  userSelector: string | number,
+  project: { id?: number; title?: string } | undefined,
+  dryRun: boolean,
+  assign: boolean,
+): Promise<BulkAssignmentResult> {
+  if (taskIds.length === 0 || taskIds.length > 100) {
+    throw validationError('Bulk assign/unassign requires 1-100 task IDs.');
+  }
+  const userId = await resolveUser(client, userSelector);
+  const result: BulkAssignmentResult = {
+    requested: taskIds.length,
+    changed: 0,
+    alreadyCorrect: 0,
+    failed: [],
+    dryRun,
+  };
+
+  for (const taskId of taskIds) {
+    try {
+      const task = await resolveTask(client, taskId, project);
+      const isAssigned = task.assignees.some((user) => user.id === userId);
+      const alreadyCorrect = assign ? isAssigned : !isAssigned;
+      if (alreadyCorrect) {
+        result.alreadyCorrect += 1;
+        continue;
+      }
+      if (dryRun) {
+        result.changed += 1;
+      } else {
+        if (assign) {
+          await client.request('POST', `/tasks/${task.id}/assignees`, {
+            body: { user_id: userId },
+          });
+        } else {
+          await client.request('DELETE', `/tasks/${task.id}/assignees/${userId}`);
+        }
+        result.changed += 1;
+      }
+    } catch (error: any) {
+      result.failed.push({
+        taskId,
+        error: redactSecrets(
+          error?.message || 'Assignee update failed',
+          client.getConfig().vikunjaToken,
+        ),
+      });
+    }
+  }
+  return result;
+}
+
+export function bulkAssignTasks(
+  client: VikunjaApiClient,
+  taskIds: number[],
+  userSelector: string | number,
+  project?: { id?: number; title?: string },
+  dryRun = false,
+): Promise<BulkAssignmentResult> {
+  return bulkChangeAssignee(client, taskIds, userSelector, project, dryRun, true);
+}
+
+export function bulkUnassignTasks(
+  client: VikunjaApiClient,
+  taskIds: number[],
+  userSelector: string | number,
+  project?: { id?: number; title?: string },
+  dryRun = false,
+): Promise<BulkAssignmentResult> {
+  return bulkChangeAssignee(client, taskIds, userSelector, project, dryRun, false);
 }
 
 export async function bulkDeleteTasks(

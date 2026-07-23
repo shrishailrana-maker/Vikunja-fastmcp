@@ -15,6 +15,7 @@ import {
   listTasks,
   buildFilterString,
   createTask,
+  upsertTask,
   getTask,
   updateTask,
   deleteTask,
@@ -88,6 +89,16 @@ describe('Tasks List and Scoping tests', () => {
         assignee: "owner's-agent",
       });
       expect(filter).toBe("done = false && assignees in 'owner''s-agent'");
+    });
+
+    it('combines description and actor filters with the default open-state filter', () => {
+      const filter = buildFilterString({
+        descriptionContains: "parser's report",
+        actor: 'Example Agent',
+      });
+      expect(filter).toBe(
+        "done = false && description like '%parser''s report%' && description like '%(by Example Agent)%'",
+      );
     });
   });
 
@@ -379,6 +390,196 @@ describe('Tasks List and Scoping tests', () => {
   });
 
   describe('Task Mutation (CRUD) tests', () => {
+    it('upsert creates a marked task with actor attribution before the stable key', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: 101, title: 'Alpha' }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({ items: [], page: 1, per_page: 5, total: 0, total_pages: 0 }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: 101, title: 'Alpha' }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 201,
+          text: async () =>
+            JSON.stringify({
+              id: 9005,
+              index: 305,
+              identifier: 'ALPHA-305',
+              title: 'Stable finding',
+              project_id: 101,
+            }),
+        } as Response);
+
+      const result = await upsertTask(
+        client,
+        { id: 101 },
+        { title: 'Stable finding', description: 'Evidence' },
+        'detector:file.ts:10',
+        undefined,
+        'Codex',
+      );
+
+      expect(result).toMatchObject({ action: 'created', externalKey: 'detector:file.ts:10' });
+      const createCall = mockFetch.mock.calls.find((call: any) => call[1]?.method === 'POST');
+      const description = JSON.parse(createCall[1].body).description as string;
+      expect(description).toContain('Evidence');
+      expect(description.indexOf('(by Codex)')).toBeLessThan(
+        description.indexOf('[vfm-key:detector:file.ts:10]'),
+      );
+      expect(description.trim().endsWith('</p>')).toBe(true);
+      expect(description).toContain('[vfm-key:detector:file.ts:10]');
+    });
+
+    it('upsert updates the one exact stable-key match without creating a second task', async () => {
+      const existing = {
+        id: 9005,
+        index: 305,
+        identifier: 'ALPHA-305',
+        title: 'Old wording',
+        description: '<p>Evidence</p><p>[vfm-key:detector:file.ts:10]</p>',
+        project_id: 101,
+        project: { title: 'Alpha' },
+        done: false,
+        priority: 0,
+      };
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: 101, title: 'Alpha' }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({ items: [existing], page: 1, per_page: 5, total: 1, total_pages: 1 }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify(existing),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: 101, title: 'Alpha' }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify(existing),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ ...existing, title: 'Reworded finding' }),
+        } as Response);
+
+      const result = await upsertTask(
+        client,
+        { id: 101 },
+        { title: 'Reworded finding' },
+        'detector:file.ts:10',
+      );
+
+      expect(result).toMatchObject({
+        action: 'updated',
+        externalKey: 'detector:file.ts:10',
+        target: { id: 9005, title: 'Reworded finding' },
+      });
+      expect(mockFetch.mock.calls.filter((call: any) => call[1]?.method === 'POST')).toHaveLength(
+        0,
+      );
+    });
+
+    it('upsert matches a stable key even after the title was reworded', async () => {
+      const existing = {
+        id: 9005,
+        index: 305,
+        identifier: 'ALPHA-305',
+        title: 'Completely different title',
+        description: '<p>[vfm-key:detector:file.ts:10]</p>',
+        project_id: 101,
+        project: { title: 'Alpha' },
+      };
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: 101, title: 'Alpha' }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ items: [existing] }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify(existing),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: 101, title: 'Alpha' }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify(existing),
+        } as Response);
+
+      const result = await upsertTask(
+        client,
+        { id: 101 },
+        { title: 'Completely different title' },
+        'detector:file.ts:10',
+      );
+      expect(result.action).toBe('unchanged');
+      expect(result.target.id).toBe(9005);
+    });
+
+    it('upsert fails closed when one stable key matches multiple tasks', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: 101, title: 'Alpha' }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              items: [
+                {
+                  id: 9005,
+                  description: '<p>[vfm-key:duplicate:key]</p>',
+                },
+                {
+                  id: 9006,
+                  description: '<p>[vfm-key:duplicate:key]</p>',
+                },
+              ],
+            }),
+        } as Response);
+
+      await expect(
+        upsertTask(client, { id: 101 }, { title: 'Finding' }, 'duplicate:key'),
+      ).rejects.toMatchObject({ status: 409, code: 'EXTERNAL_KEY_AMBIGUOUS' });
+    });
+
     it('should create a task and return a write echo response', async () => {
       // Mock project Alpha resolution
       mockFetch.mockResolvedValueOnce({
@@ -663,6 +864,55 @@ describe('Tasks List and Scoping tests', () => {
 
       expect(echo.action).toBe('unchanged');
       expect(mockFetch.mock.calls.some((call: any) => call[1]?.method === 'PATCH')).toBe(false);
+    });
+
+    it('appends description text before a stable-key marker', async () => {
+      const existing = {
+        id: 9005,
+        index: 305,
+        identifier: 'ALPHA-305',
+        title: 'Marked task',
+        description: '<p>Existing body</p><p>[vfm-key:detector:file.ts:10]</p>',
+        project_id: 101,
+        project: { title: 'Alpha' },
+      };
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify(existing),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify(existing),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify(existing),
+        } as Response);
+
+      await updateTask(client, 9005, { appendDescription: 'New evidence' });
+
+      const patchCall = mockFetch.mock.calls.find((call: any) => call[1]?.method === 'PATCH');
+      const description = JSON.parse(patchCall[1].body)[0].value as string;
+      expect(description.indexOf('Existing body')).toBeLessThan(
+        description.indexOf('New evidence'),
+      );
+      expect(description.indexOf('New evidence')).toBeLessThan(
+        description.indexOf('[vfm-key:detector:file.ts:10]'),
+      );
+    });
+
+    it('rejects update requests that replace and append description together', async () => {
+      await expect(
+        updateTask(client, 9005, {
+          description: 'Replacement',
+          appendDescription: 'Appendix',
+        }),
+      ).rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it('treats clearing an already-empty (zero-date) due date as unchanged', async () => {

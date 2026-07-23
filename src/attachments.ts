@@ -381,6 +381,7 @@ export interface AttachFileSpec {
 }
 
 export interface AttachResult {
+  task: { id: number; portalRef: string; title: string };
   uploaded: AttachmentInfo[];
   failed: { file: string; error: string }[];
 }
@@ -442,6 +443,7 @@ export async function attachFiles(
   taskSelector: string | number,
   files: AttachFileSpec[],
   projectSelector?: { id?: number; title?: string },
+  idempotencyKey?: string,
 ): Promise<AttachResult> {
   if (!Array.isArray(files) || files.length === 0) {
     throw new VikunjaError({
@@ -455,6 +457,11 @@ export async function attachFiles(
   }
 
   const task = await resolveTask(client, taskSelector, projectSelector);
+  const cacheKey = idempotencyKey ? `attach:${task.id}:${idempotencyKey}` : '';
+  if (cacheKey) {
+    const cached = idempotency.get(cacheKey);
+    if (cached) return cached;
+  }
   const pathUrl = `/tasks/${task.id}/attachments`;
   const uploaded: AttachmentInfo[] = [];
   const failed: { file: string; error: string }[] = [];
@@ -487,7 +494,19 @@ export async function attachFiles(
     }
   }
 
-  return { uploaded, failed };
+  const result: AttachResult = {
+    task: {
+      id: task.id,
+      portalRef: task.identifier || `#${task.index}`,
+      title: task.title,
+    },
+    uploaded,
+    failed,
+  };
+  if (cacheKey) {
+    idempotency.set(cacheKey, result);
+  }
+  return result;
 }
 
 export interface DownloadResult {

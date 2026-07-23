@@ -135,16 +135,16 @@ as independent tracker writers.
 
 - `self_check` / `vikunja_auth` — compact diagnostics and current user (no email); use `detail: "full"` only for capabilities and local paths
 - `vikunja_projects` — list / get
-- `vikunja_tasks` — CRUD, list (default **open only**), project summary, create_if_absent, assignees, labels, mutually exclusive status switching, relations, attachments
+- `vikunja_tasks` — CRUD, stable-key upsert, list (default **open only**), project summary, create_if_absent, assignees, labels, mutually exclusive status switching, relations, attachments
 - `vikunja_task_comments` — comment lists default to 20 items per page and accept `page` / `perPage` (max 100)
 - `vikunja_labels` — global labels (title or id)
 - `vikunja_users`
 - `vikunja_teams` — teams/members (`userId` is the Vikunja user id)
 - `vikunja_filters` — create/get/update/delete (**no list**; API has no collection GET)
-- `vikunja_task_bulk` — native bulk update; bounded composed create/delete
+- `vikunja_task_bulk` — native bulk update; bounded composed create/upsert, delete, assign, and unassign with dry-run support
 - `vikunja_task_reminders` — list/add/remove task reminders
 - `vikunja_batch_import` — detect/preview/import/status for native-fast or MCP-idempotent CSV migration
-- `vikunja_export_project` — local JSON/CSV task export
+- `vikunja_export_project` — local JSON/CSV task export with optional comments, attachments, and relations
 - `vikunja_request_user_export` / `vikunja_download_user_export`
 - `vikunja_templates` — machine-local templates and task instantiation
 - `vikunja_webhooks` — project/user webhooks and event discovery
@@ -158,6 +158,17 @@ Task updates, assignment changes, and label removal return `unchanged` when the
 requested state already exists. `close_with_evidence` accepts an
 `idempotencyKey` so a process-local retry does not duplicate its evidence
 comment.
+
+Use `upsert` with a stable `externalKey` when a detector or repeated agent run
+must update the same finding instead of creating duplicates. For three or more
+tasks, prefer `vikunja_task_bulk create`; each row can carry its own
+`externalKey`, and the batch can use an `idempotencyKey`. Bulk assign/unassign
+accept `dryRun: true` and report changed, already-correct, and failed counts.
+
+Use `appendDescription` to add evidence without replacing the full task
+description. It is mutually exclusive with `description` and preserves a
+stable-key marker as the final line. Project exports fetch comments,
+attachments, or relations only when the matching include flag is enabled.
 
 Create, comment, evidence-close, and idempotent-import operations accept
 optional `actor` attribution. `summary` returns project counts by done state,
@@ -180,6 +191,9 @@ JWT/local-password authentication for user-data export routes; the MCP
 preserves the real `401` instead of presenting false JWT advice.
 
 See generated `MCP_API.md` for inputs. Responses are Markdown summary + one JSON envelope (`ok` / `error`).
+Task write summaries lead with the portal reference and always pair it with the
+global ID, for example `ALPHA-263 (id 451)`; a bare numeric selector still means
+the global ID.
 Task lists default to 20 compact items and cap each project page at 100; use
 `countOnly` for totals and pagination for larger result sets. Compact task
 responses retain global ID, portal reference, project identity where needed,
@@ -190,7 +204,8 @@ title, done state, priority, and the creator username when available. Request
 ### Operational Limits
 
 - Bulk update/close: 100 global task IDs per call.
-- Bulk create: 100 tasks per call; composed and non-atomic.
+- Bulk create/upsert: 100 tasks per call; composed, continue-on-error, and non-atomic.
+- Bulk assign/unassign: 100 global task IDs per call, with optional dry-run.
 - Bulk delete: 100 task IDs per call; composed, non-atomic, and requires `confirm: true`.
 - CSV import and file transfer: 100 MiB by default through `VIKUNJA_MAX_ATTACHMENT_BYTES`; Vikunja controls CSV row limits.
 - Idempotent CSV import: 1,000 rows per call and up to 100 process-local import-ledger keys; same-key reruns skip rows already recorded. Native migration remains faster and non-idempotent.

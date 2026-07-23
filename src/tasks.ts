@@ -89,6 +89,12 @@ export interface WriteEcho {
   attachmentErrors?: { file: string; error: string }[];
 }
 
+export interface UpsertEcho extends WriteEcho {
+  externalKey: string;
+}
+
+export const EXTERNAL_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9:_\-./#]{0,119}$/;
+
 // Upload local files to a just-created/found task and fold the honest
 // per-file outcome (uploaded vs failed) into its write echo.
 async function attachToEcho(
@@ -125,13 +131,15 @@ export interface ListTasksOptions {
   label?: string | number;
   /** Vikunja task filters require an assignee username, not a numeric user ID. */
   assignee?: string;
+  descriptionContains?: string;
+  actor?: string;
   q?: string;
   countOnly?: boolean;
   filter?: string;
   responseMode?: ResponseMode;
 }
 
-function escapeFilterString(val: string): string {
+export function escapeFilterString(val: string): string {
   return `'${val.replace(/'/g, "''")}'`;
 }
 
@@ -156,6 +164,12 @@ export function buildFilterString(options: ListTasksOptions): string {
   }
   if (options.assignee !== undefined) {
     parts.push(`assignees in ${escapeFilterString(options.assignee)}`);
+  }
+  if (options.descriptionContains !== undefined) {
+    parts.push(`description like ${escapeFilterString(`%${options.descriptionContains}%`)}`);
+  }
+  if (options.actor !== undefined) {
+    parts.push(`description like ${escapeFilterString(`%(by ${options.actor})%`)}`);
   }
   if (options.filter) {
     parts.push(`(${options.filter})`);
@@ -597,6 +611,133 @@ export async function createIfAbsent(
   return echo;
 }
 
+function stableKeyMarker(externalKey: string): string {
+  if (!EXTERNAL_KEY_PATTERN.test(externalKey)) {
+    throw new VikunjaError({
+      status: 400,
+      code: 'VALIDATION_ERROR',
+      method: 'TOOLS_CALL',
+      path: 'externalKey',
+      message:
+        'externalKey must be 1-120 characters and use only letters, numbers, colon, underscore, hyphen, period, slash, or #.',
+      fieldErrors: [],
+    });
+  }
+  return `[vfm-key:${externalKey}]`;
+}
+
+function stripTrailingMarker(description: string, marker: string): string {
+  const lines = description.trimEnd().split('\n');
+  if (lines.at(-1)?.trim() === marker) {
+    lines.pop();
+  }
+  return lines.join('\n').trimEnd();
+}
+
+function descriptionWithStableKey(
+  description: string | undefined,
+  externalKey: string,
+  actor?: string,
+): string {
+  const marker = stableKeyMarker(externalKey);
+  const body = stripTrailingMarker(description ?? '', marker);
+  const attributed = withActorAttribution(body || undefined, actor)?.trimEnd() ?? '';
+  return attributed ? `${attributed}\n\n${marker}` : marker;
+}
+
+export async function upsertTask(
+  client: VikunjaApiClient,
+  projectSelector: { id?: number; title?: string },
+  fields: {
+    title: string;
+    description?: string;
+    done?: boolean;
+    priority?: number;
+    dueDate?: string | null;
+  },
+  externalKey: string,
+  expectedUpdatedAt?: string,
+  actor?: string,
+): Promise<UpsertEcho> {
+  const marker = stableKeyMarker(externalKey);
+  const project = await resolveProject(client, projectSelector);
+  const filter = `description like ${escapeFilterString(`%${marker}%`)}`;
+  const lookupPath = `/projects/${project.id}/tasks?filter=${encodeURIComponent(filter)}&per_page=5`;
+
+  let candidates: any[];
+  try {
+    candidates = toItemArray(await client.request<any>('GET', lookupPath));
+  } catch (error: any) {
+    if (error instanceof VikunjaError && error.status >= 400 && error.status < 500) {
+      throw new VikunjaError({
+        status: 502,
+        code: 'UPSERT_LOOKUP_UNSUPPORTED',
+        method: 'GET',
+        path: lookupPath,
+        message:
+          'This Vikunja server cannot filter task descriptions, so stable-key upsert is unavailable.',
+        fieldErrors: [],
+      });
+    }
+    throw error;
+  }
+
+  const matches = candidates.filter((candidate) =>
+    String(candidate.description ?? '').includes(marker),
+  );
+  if (matches.length > 1) {
+    throw new VikunjaError({
+      status: 409,
+      code: 'EXTERNAL_KEY_AMBIGUOUS',
+      method: 'GET',
+      path: lookupPath,
+      message: `External key "${externalKey}" matched multiple task IDs: ${matches
+        .map((candidate) => candidate.id)
+        .join(', ')}.`,
+      fieldErrors: [],
+    });
+  }
+
+  if (matches.length === 0) {
+    const echo = await createTask(
+      client,
+      { id: project.id },
+      {
+        ...fields,
+        description: descriptionWithStableKey(fields.description, externalKey, actor),
+      },
+    );
+    return { ...echo, externalKey };
+  }
+
+  const existing = matches[0];
+  const updateFields: {
+    title?: string;
+    description?: string;
+    done?: boolean;
+    priority?: number;
+    dueDate?: string | null;
+  } = {
+    title: fields.title,
+    done: fields.done,
+    priority: fields.priority,
+    dueDate: fields.dueDate,
+  };
+  if (fields.description !== undefined || actor !== undefined) {
+    const source = fields.description ?? htmlToMarkdown(String(existing.description ?? ''));
+    updateFields.description = descriptionWithStableKey(source, externalKey, actor);
+  }
+
+  const echo = await updateTask(
+    client,
+    existing.id,
+    updateFields,
+    { id: project.id },
+    expectedUpdatedAt,
+  );
+  return { ...echo, externalKey };
+}
+
 export interface ConsolidatedTaskDetails {
   task: Task;
   comments: any[];
@@ -721,6 +862,7 @@ export async function updateTask(
   fields: {
     title?: string;
     description?: string;
+    appendDescription?: string;
     done?: boolean;
     priority?: number;
     dueDate?: string | null;
@@ -728,6 +870,16 @@ export async function updateTask(
   projectSelector?: { id?: number; title?: string },
   expectedUpdatedAt?: string,
 ): Promise<WriteEcho> {
+  if (fields.description !== undefined && fields.appendDescription !== undefined) {
+    throw new VikunjaError({
+      status: 400,
+      code: 'VALIDATION_ERROR',
+      method: 'TOOLS_CALL',
+      path: 'fields',
+      message: 'Provide either description or appendDescription, not both.',
+      fieldErrors: [],
+    });
+  }
   const taskRef = await resolveTask(client, taskSelector, projectSelector);
   const webUrl = client.getConfig().vikunjaWebUrl;
 
@@ -755,6 +907,25 @@ export async function updateTask(
   }
   if (fields.description !== undefined) {
     const htmlDesc = markdownToHtml(fields.description);
+    if (htmlDesc !== currentRaw.description) {
+      body.description = htmlDesc;
+    }
+  } else if (fields.appendDescription !== undefined) {
+    const currentDescription = currentTask.description ?? '';
+    const lines = currentDescription.trimEnd().split('\n');
+    const trailingMarker = /^\[vfm-key:[A-Za-z0-9][A-Za-z0-9:_\-./#]{0,119}\]$/.test(
+      lines.at(-1)?.trim() ?? '',
+    )
+      ? lines.pop()!.trim()
+      : undefined;
+    const existingBody = lines.join('\n').trimEnd();
+    const appendedBody = existingBody
+      ? `${existingBody}\n\n${fields.appendDescription}`
+      : fields.appendDescription;
+    const nextDescription = trailingMarker
+      ? `${appendedBody.trimEnd()}\n\n${trailingMarker}`
+      : appendedBody;
+    const htmlDesc = markdownToHtml(nextDescription);
     if (htmlDesc !== currentRaw.description) {
       body.description = htmlDesc;
     }
@@ -1098,7 +1269,7 @@ export async function listAssignees(
 export async function applyLabel(
   client: VikunjaApiClient,
   taskSelector: string | number,
-  labelTitle: string,
+  labelTitle: string | number,
   projectSelector?: { id?: number; title?: string },
 ): Promise<WriteEcho> {
   const taskRef = await resolveTask(client, taskSelector, projectSelector);
@@ -1109,7 +1280,11 @@ export async function applyLabel(
     project: taskRef.project,
     title: taskRef.title,
   };
-  if (taskRef.labels.some((label) => label.title.toLowerCase() === labelTitle.toLowerCase())) {
+  const numericSelector = typeof labelTitle === 'number' || /^\d+$/.test(String(labelTitle).trim());
+  if (
+    !numericSelector &&
+    taskRef.labels.some((label) => label.title.toLowerCase() === String(labelTitle).toLowerCase())
+  ) {
     return { action: 'unchanged', target };
   }
   const labelId = await resolveOrCreateLabel(client, labelTitle);
@@ -1131,7 +1306,7 @@ export async function applyLabel(
 export async function removeLabel(
   client: VikunjaApiClient,
   taskSelector: string | number,
-  labelTitle: string,
+  labelTitle: string | number,
   projectSelector?: { id?: number; title?: string },
 ): Promise<WriteEcho> {
   const taskRef = await resolveTask(client, taskSelector, projectSelector);
@@ -1142,8 +1317,11 @@ export async function removeLabel(
     project: taskRef.project,
     title: taskRef.title,
   };
-  const appliedLabel = taskRef.labels.find(
-    (label) => label.title.toLowerCase() === labelTitle.toLowerCase(),
+  const numericSelector = typeof labelTitle === 'number' || /^\d+$/.test(String(labelTitle).trim());
+  const appliedLabel = taskRef.labels.find((label) =>
+    numericSelector
+      ? label.id === Number(labelTitle)
+      : label.title.toLowerCase() === String(labelTitle).toLowerCase(),
   );
   if (!appliedLabel) {
     return { action: 'unchanged', target };

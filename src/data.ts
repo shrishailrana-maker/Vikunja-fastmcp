@@ -235,6 +235,8 @@ export async function exportProject(
   format: 'json' | 'csv' = 'json',
   destinationPath?: string,
   includeComments = false,
+  includeAttachments = false,
+  includeRelations = false,
 ) {
   const project = await resolveProject(client, selector);
   const raw = await fetchAllCollectionItems<any>(
@@ -274,6 +276,38 @@ export async function exportProject(
         created: normalizeDate(comment.created),
         updated: normalizeDate(comment.updated),
       }));
+      task.commentCount = task.comments.length;
+    }
+  }
+  if (includeAttachments) {
+    for (const task of tasks) {
+      const attachments = await fetchAllCollectionItems<any>(
+        (requestPath) => client.request('GET', requestPath),
+        `/tasks/${task.id}/attachments`,
+      );
+      task.attachments = attachments.map((attachment) => ({
+        id: attachment.id,
+        fileName: attachment.file?.name || attachment.file_name || 'unknown',
+        mime: attachment.file?.mime || attachment.mime || 'application/octet-stream',
+        fileSize: attachment.file?.size || attachment.file_size || 0,
+      }));
+      task.attachmentCount = task.attachments.length;
+    }
+  }
+  if (includeRelations) {
+    for (const task of tasks) {
+      const detail = await client.request<any>('GET', `/tasks/${task.id}`);
+      const relatedTasks = detail.related_tasks ?? {};
+      task.relations = Object.entries(relatedTasks).flatMap(([kind, related]) =>
+        Array.isArray(related)
+          ? related.map((item: any) => ({
+              kind,
+              taskId: item.id,
+              title: item.title,
+            }))
+          : [],
+      );
+      task.relationCount = task.relations.length;
     }
   }
   const fileName = destinationPath || `project-${project.id}-tasks.${format}`;
@@ -295,13 +329,17 @@ export async function exportProject(
       'creatorUsername',
       'labels',
       'assignees',
-      ...(includeComments ? ['comments'] : []),
+      ...(includeComments ? ['commentCount', 'comments'] : []),
+      ...(includeAttachments ? ['attachmentCount', 'attachments'] : []),
+      ...(includeRelations ? ['relationCount', 'relations'] : []),
     ];
     const csvTasks = tasks.map((task) => ({
       ...task,
       creatorId: task.creator?.id ?? '',
       creatorUsername: task.creator?.username ?? '',
       ...(includeComments ? { comments: JSON.stringify(task.comments) } : {}),
+      ...(includeAttachments ? { attachments: JSON.stringify(task.attachments) } : {}),
+      ...(includeRelations ? { relations: JSON.stringify(task.relations) } : {}),
     }));
     const lines = [
       header.join(','),

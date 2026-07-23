@@ -38,15 +38,23 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     {
       action: 'create',
       required: ['projectSelector', 'fields.title'],
-      optional: ['fields', 'idempotencyKey', 'attachments', 'actor'],
+      optional: ['fields', 'idempotencyKey', 'attachments', 'actor', 'responseMode'],
       execution: 'Direct POST; MCP-composed when attachments are supplied',
+      note: 'For 3 or more tasks use vikunja_task_bulk create instead of repeated create calls.',
     },
     {
       action: 'create_if_absent',
       required: ['projectSelector', 'fields.title'],
-      optional: ['fields', 'idempotencyKey', 'attachments', 'actor'],
+      optional: ['fields', 'idempotencyKey', 'attachments', 'actor', 'responseMode'],
       execution: 'MCP-composed exact-title search then optional create/attach',
       note: 'Best-effort duplicate prevention, not a distributed lock.',
+    },
+    {
+      action: 'upsert',
+      required: ['projectSelector', 'fields.title', 'externalKey'],
+      optional: ['fields', 'expectedUpdatedAt', 'actor', 'responseMode'],
+      execution: 'MCP-composed description-key lookup followed by create or conditional update',
+      note: 'Requires server-side description filtering and never falls back to a full scan.',
     },
     {
       action: 'get',
@@ -69,6 +77,8 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
         'priority (0-5)',
         'label',
         'assignee (exact username; numeric user IDs are not valid Vikunja list filters)',
+        'descriptionContains (requires server-side description filtering)',
+        'actor (matches stored "(by actor)" attribution; requires server-side description filtering)',
         'q',
         'search (free-text alias for q)',
         'filter',
@@ -86,43 +96,48 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     {
       action: 'update',
       required: ['taskSelector', 'fields'],
-      optional: [...taskSelector, ...writeOptions],
+      optional: [
+        ...taskSelector,
+        ...writeOptions,
+        'fields.appendDescription (mutually exclusive with fields.description)',
+        'responseMode',
+      ],
       execution: 'Identity/read preflight followed by RFC 6902 PATCH',
     },
     {
       action: 'delete',
       required: ['taskSelector'],
-      optional: taskSelector,
+      optional: [...taskSelector, 'responseMode'],
       execution: 'Identity preflight then DELETE /tasks/{id}',
     },
     {
       action: 'close',
       required: ['taskSelector'],
-      optional: taskSelector,
+      optional: [...taskSelector, 'responseMode'],
       execution: 'Identity/read preflight then task update transport',
     },
     {
       action: 'reopen',
       required: ['taskSelector'],
-      optional: taskSelector,
+      optional: [...taskSelector, 'responseMode'],
       execution: 'Identity/read preflight then task update transport',
     },
     {
       action: 'close_with_evidence',
       required: ['taskSelector', 'evidenceComment'],
-      optional: [...taskSelector, 'idempotencyKey', 'actor'],
+      optional: [...taskSelector, 'idempotencyKey', 'actor', 'responseMode'],
       execution: 'MCP-composed comment create followed by task close',
     },
     {
       action: 'assign',
       required: ['taskSelector', 'userSelector'],
-      optional: taskSelector,
+      optional: [...taskSelector, 'responseMode'],
       execution: 'Identity preflight then POST assignee',
     },
     {
       action: 'unassign',
       required: ['taskSelector', 'userSelector'],
-      optional: taskSelector,
+      optional: [...taskSelector, 'responseMode'],
       execution: 'Identity preflight then DELETE assignee',
     },
     {
@@ -134,15 +149,17 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     {
       action: 'apply-label',
       required: ['taskSelector', 'labelTitle'],
-      optional: taskSelector,
+      optional: [...taskSelector, 'responseMode'],
       execution:
         'Return unchanged when already attached; otherwise resolve/create then POST task label',
+      note: 'labelTitle accepts an exact title or numeric label ID.',
     },
     {
       action: 'remove-label',
       required: ['taskSelector', 'labelTitle'],
-      optional: taskSelector,
+      optional: [...taskSelector, 'responseMode'],
       execution: 'Resolve label then DELETE task label',
+      note: 'labelTitle accepts an exact title or numeric label ID.',
     },
     {
       action: 'list-labels',
@@ -153,20 +170,20 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     {
       action: 'set_status',
       required: ['taskSelector', 'statusLabel'],
-      optional: [...taskSelector, 'createIfMissing (default false)'],
+      optional: [...taskSelector, 'createIfMissing (default false)', 'responseMode'],
       execution: 'Identity preflight then one bulk label-set replacement',
       note: 'Preserves non-status labels and repairs multiple configured-prefix labels.',
     },
     {
       action: 'relate',
       required: ['taskSelector', 'otherTaskSelector', 'relationKind'],
-      optional: taskSelector,
+      optional: [...taskSelector, 'responseMode'],
       execution: 'Resolve both tasks then POST relation',
     },
     {
       action: 'unrelate',
       required: ['taskSelector', 'otherTaskSelector', 'relationKind'],
-      optional: taskSelector,
+      optional: [...taskSelector, 'responseMode'],
       execution: 'Resolve both tasks then DELETE relation',
     },
     {
@@ -178,7 +195,7 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     {
       action: 'attach',
       required: ['taskSelector', 'filePaths or base64Content+filename'],
-      optional: [...taskSelector, 'mimeType'],
+      optional: [...taskSelector, 'mimeType', 'idempotencyKey', 'responseMode'],
       execution: 'Multipart POST per file after identity resolution',
     },
     {
@@ -294,12 +311,26 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     {
       action: 'create',
       required: ['projectSelector', 'tasks'],
+      optional: ['idempotencyKey'],
       execution: 'MCP-composed bounded task creates; non-atomic',
+      note: 'Each row may provide externalKey for stable-key upsert; failures do not abort later rows.',
     },
     {
       action: 'delete',
       required: ['taskIds', 'confirm'],
       execution: 'MCP-composed verified task deletes; non-atomic',
+    },
+    {
+      action: 'assign',
+      required: ['taskIds', 'userSelector'],
+      optional: ['projectSelector', 'dryRun'],
+      execution: 'Resolve user once, verify each task scope, then compose bounded assignee writes',
+    },
+    {
+      action: 'unassign',
+      required: ['taskIds', 'userSelector'],
+      optional: ['projectSelector', 'dryRun'],
+      execution: 'Resolve user once, verify each task scope, then compose bounded assignee deletes',
     },
   ],
   vikunja_task_reminders: [
@@ -355,9 +386,15 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     {
       action: 'export',
       required: ['projectSelector'],
-      optional: ['format', 'destinationPath', 'includeComments'],
+      optional: [
+        'format',
+        'destinationPath',
+        'includeComments',
+        'includeAttachments',
+        'includeRelations',
+      ],
       execution: 'MCP-composed paginated export to sandboxed JSON or CSV',
-      note: 'Creator is always included; comments are fetched only when includeComments is true.',
+      note: 'Creator is always included; comments, attachments, and relations are fetched only when their include flags are true.',
     },
   ],
   vikunja_request_user_export: [

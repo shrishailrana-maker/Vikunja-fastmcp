@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+- Add stable-key task `upsert` with `externalKey`, exact marker verification,
+  ambiguity protection, optimistic concurrency, and no full-scan fallback.
+- Make bulk create continue after row failures, return compact per-row outcomes,
+  support stable-key upserts, and cache whole-batch idempotent retries.
+- Add bounded bulk assign and unassign with one user resolution, optional dry
+  runs, project verification, already-correct counts, and per-task failures.
+- Accept numeric label IDs in apply/remove operations so duplicate global label
+  titles do not block an explicitly identified mutation.
+- Lead task write summaries with the project portal reference and always pair
+  it with the global database ID.
+- Return compact task write targets by default while retaining full targets in
+  explicit standard and full response modes.
+- Add server-side `descriptionContains` and actor-attribution task-list filters.
+- Add optional comments, attachment metadata, and relation metadata with
+  per-task counts to JSON and CSV project exports.
+- Add `appendDescription` for safe partial description updates with optimistic
+  concurrency and stable-key-marker preservation.
+- Include a compact task-to-attachment mapping in attach responses.
+- Make attachment retries idempotent through the existing process-local cache.
+
 ## 2.4.0 - 2026-07-22
 
 ### Vikunja 2.4.0

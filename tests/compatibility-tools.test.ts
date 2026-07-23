@@ -414,6 +414,7 @@ describe('restored compatibility capabilities', () => {
           updated: null,
         },
       ]);
+      expect(exported.tasks[0].commentCount).toBe(1);
 
       mockFetch.mockClear();
       mockFetch
@@ -451,6 +452,116 @@ describe('restored compatibility capabilities', () => {
       const compactExport = JSON.parse(await fs.readFile(compact.path, 'utf8'));
       expect(compactExport.tasks[0]).not.toHaveProperty('comments');
       expect(mockFetch).toHaveBeenCalledTimes(2);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('exports attachment and relation metadata with per-task counts', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vikunja-project-export-'));
+    const exportClient = new VikunjaApiClient({ ...config, attachmentDownloadRoot: root });
+    const task = {
+      id: 10,
+      index: 4,
+      identifier: 'ALPHA-4',
+      title: 'Exported task',
+      project_id: 2,
+      labels: [],
+      assignees: [],
+    };
+    try {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: 2, title: 'Alpha' }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({ items: [task], page: 1, per_page: 100, total: 1, total_pages: 1 }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              items: [
+                {
+                  id: 70,
+                  file: { name: 'run.log', mime: 'text/plain', size: 321 },
+                },
+              ],
+            }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              ...task,
+              related_tasks: {
+                blocking: [{ id: 11, title: 'Blocked task' }],
+              },
+            }),
+        } as Response);
+
+      const result = await exportProject(
+        exportClient,
+        { id: 2 },
+        'json',
+        'complete.json',
+        false,
+        true,
+        true,
+      );
+      const exported = JSON.parse(await fs.readFile(result.path, 'utf8'));
+      expect(exported.tasks[0]).toMatchObject({
+        attachmentCount: 1,
+        relationCount: 1,
+        attachments: [{ id: 70, fileName: 'run.log', mime: 'text/plain', fileSize: 321 }],
+        relations: [{ kind: 'blocking', taskId: 11, title: 'Blocked task' }],
+      });
+
+      mockFetch.mockClear();
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: 2, title: 'Alpha' }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({ items: [task], page: 1, per_page: 100, total: 1, total_pages: 1 }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ items: [] }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ ...task, related_tasks: {} }),
+        } as Response);
+      const csvResult = await exportProject(
+        exportClient,
+        { id: 2 },
+        'csv',
+        'attachments.csv',
+        false,
+        true,
+        true,
+      );
+      const csv = await fs.readFile(csvResult.path, 'utf8');
+      expect(csv.split('\n')[0]).toContain('attachmentCount');
+      expect(csv.split('\n')[0]).toContain('attachments');
+      expect(csv.split('\n')[0]).toContain('relationCount');
+      expect(csv.split('\n')[0]).toContain('relations');
+      expect(csv.split('\n')[0]).not.toContain('comments');
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

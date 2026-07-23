@@ -297,6 +297,54 @@ describe('Assignees, Labels and Relations tests', () => {
       expect(echo.target.id).toBe(9005);
     });
 
+    it('applies and removes an ambiguous-title label by numeric id', async () => {
+      const taskWithoutLabel = {
+        id: 9005,
+        index: 305,
+        title: 'Ambiguous labels',
+        project_id: 101,
+        project: { title: 'Alpha' },
+        labels: [{ id: 801, title: 'Bug' }],
+      };
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify(taskWithoutLabel),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 201,
+          text: async () => JSON.stringify({}),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              ...taskWithoutLabel,
+              labels: [
+                { id: 801, title: 'Bug' },
+                { id: 802, title: 'Bug' },
+              ],
+            }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 204,
+          text: async () => '',
+        } as Response);
+
+      const applied = await applyLabel(client, 9005, 802);
+      const removed = await removeLabel(client, 9005, '802');
+
+      expect(applied.action).toBe('updated');
+      expect(removed.action).toBe('updated');
+      expect(
+        mockFetch.mock.calls.some((call: any) => String(call[0]).endsWith('/labels/802')),
+      ).toBe(true);
+    });
+
     it('treats removing an absent label as unchanged without a label lookup', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,

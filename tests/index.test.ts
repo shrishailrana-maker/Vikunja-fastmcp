@@ -99,7 +99,7 @@ describe('MCP Server Registration and Dispatching tests', () => {
     );
     expect(applyLabelBranch.additionalProperties).toBe(false);
     expect(Object.keys(applyLabelBranch.properties).sort()).toEqual(
-      ['action', 'labelTitle', 'projectSelector', 'taskSelector'].sort(),
+      ['action', 'labelTitle', 'projectSelector', 'responseMode', 'taskSelector'].sort(),
     );
     const listBranch = taskTool.inputSchema.oneOf.find(
       (branch: any) => branch.properties.action.const === 'list',
@@ -120,6 +120,29 @@ describe('MCP Server Registration and Dispatching tests', () => {
         (branch: any) => branch.properties.action.const === 'set_status',
       ),
     ).toBe(true);
+    const upsertBranch = taskTool.inputSchema.oneOf.find(
+      (branch: any) => branch.properties.action.const === 'upsert',
+    );
+    expect(upsertBranch.required).toEqual(
+      expect.arrayContaining(['action', 'projectSelector', 'fields', 'externalKey']),
+    );
+    expect(applyLabelBranch.properties.labelTitle.anyOf).toEqual(
+      expect.arrayContaining([{ type: 'string' }, { type: 'number' }]),
+    );
+
+    const bulkTool = response.tools.find((t: any) => t.name === 'vikunja_task_bulk');
+    expect(bulkTool.inputSchema.oneOf.map((branch: any) => branch.properties.action.const)).toEqual(
+      expect.arrayContaining(['create', 'assign', 'unassign']),
+    );
+    const bulkAssignBranch = bulkTool.inputSchema.oneOf.find(
+      (branch: any) => branch.properties.action.const === 'assign',
+    );
+    expect(bulkAssignBranch.properties.dryRun).toEqual({ type: 'boolean' });
+    expect(bulkAssignBranch.required).not.toContain('dryRun');
+
+    const exportTool = response.tools.find((t: any) => t.name === 'vikunja_export_project');
+    expect(exportTool.inputSchema.properties).toHaveProperty('includeAttachments');
+    expect(exportTool.inputSchema.properties).toHaveProperty('includeRelations');
 
     const webhookTool = response.tools.find((t: any) => t.name === 'vikunja_webhooks');
     const eventBranch = webhookTool.inputSchema.oneOf.find(
@@ -398,6 +421,92 @@ describe('MCP Server Registration and Dispatching tests', () => {
     expect(response.isError).not.toBe(true);
     expect(response.content[0].text).toContain('(ALPHA-5 · id 99)');
     expect(response.content[0].text).not.toContain('#?');
+  });
+
+  it('uses portal-first summaries and compact write echoes by default', async () => {
+    const handler = (server as any)._requestHandlers.get('tools/call');
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ id: 101, title: 'Alpha' }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 201,
+        text: async () =>
+          JSON.stringify({
+            id: 99,
+            index: 5,
+            identifier: 'ALPHA-5',
+            title: 'Created task',
+            project_id: 101,
+          }),
+      } as Response);
+
+    const response = await handler({
+      method: 'tools/call',
+      params: {
+        name: 'vikunja_tasks',
+        arguments: {
+          action: 'create',
+          projectSelector: { id: 101 },
+          fields: { title: 'Created task' },
+        },
+      },
+    });
+    const text = response.content[0].text as string;
+    const envelope = JSON.parse(text.match(/```json\n([\s\S]*?)\n```/)![1]);
+
+    expect(text).toContain('(ALPHA-5 · id 99)');
+    expect(envelope.data.target).toEqual({
+      id: 99,
+      portalRef: 'ALPHA-5',
+      title: 'Created task',
+      project: { id: 101, title: 'Alpha' },
+    });
+    expect(envelope.data.target).not.toHaveProperty('index');
+    expect(envelope.data.target).not.toHaveProperty('identifier');
+  });
+
+  it('keeps the full write target in standard response mode', async () => {
+    const handler = (server as any)._requestHandlers.get('tools/call');
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ id: 101, title: 'Alpha' }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 201,
+        text: async () =>
+          JSON.stringify({
+            id: 99,
+            index: 5,
+            identifier: 'ALPHA-5',
+            title: 'Created task',
+            project_id: 101,
+          }),
+      } as Response);
+
+    const response = await handler({
+      method: 'tools/call',
+      params: {
+        name: 'vikunja_tasks',
+        arguments: {
+          action: 'create',
+          projectSelector: { id: 101 },
+          fields: { title: 'Created task' },
+          responseMode: 'standard',
+        },
+      },
+    });
+    const envelope = JSON.parse(
+      (response.content[0].text as string).match(/```json\n([\s\S]*?)\n```/)![1],
+    );
+
+    expect(envelope.data.target).toMatchObject({ index: 5, identifier: 'ALPHA-5' });
   });
 
   it.each([
