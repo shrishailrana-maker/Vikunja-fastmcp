@@ -20,16 +20,43 @@ requests or legacy tracker scripts while the MCP is available.
 ## Scope And Identity
 
 - Pass `projectSelector` for every project-specific list, search, create, or
-  portal-index operation. Use `projects` or `allProjects: true` only deliberately.
-- A portal reference such as `#25` repeats across projects and requires a project.
-- A numeric task ID is globally unique and is used in task URLs.
-- Quote tasks as `PROJ-ref (id N)`; never write `#N` for a global ID.
-- A bare numeric selector always means the global database ID. For example,
-  `taskSelector: 360` targets global task 360, not portal task `#360`. Resolve
-  the portal task with `taskSelector: "#360"` plus an explicit
-  `projectSelector`, such as `{ title: "Example Project" }`.
+  bare `#index` operation. A full identifier such as `ALPHA-517` resolves its
+  project on its own; an explicit `projectSelector` remains a wrong-project guard.
+  Use `projects` or `allProjects: true` only deliberately.
+### One human reference: `ALPHA-517`
+
+- Write every task reference as the project identifier, such as `ALPHA-517`, in
+  chat, headings, lists, reports, prompts, commit messages, and task comments.
+  Never a bare number, and never a `PROJ #ref (id N)` pair.
+- The global database ID, such as `9005`, is internal. Use it in MCP calls and
+  in `/tasks/{id}` URLs only. Keep it out of owner-facing text.
+- Label links with the human reference:
+  `[ALPHA-517](https://vikunja.example.com/tasks/9005)`.
+- A bare portal number is ambiguous and must never be guessed because different
+  projects may each contain task `#517`. When the owner writes "bug 517",
+  resolve it against the project the repository's `AGENTS.md` declares as its
+  scope; if no project is declared, ask which one. Never reinterpret it as
+  global ID 517.
+- Always write back the complete reference, such as `ALPHA-517`, so the next
+  reader has no ambiguity to resolve.
+
+### Resolving a reference
+
+- Fetch ALPHA-517 directly with `taskSelector: "ALPHA-517"`. The identifier prefix
+  resolves the project case-insensitively. Supplying `projectSelector` as well
+  is optional wrong-project protection and must agree with the prefix.
+- A bare portal reference such as `taskSelector: "#517"` still requires
+  `projectSelector: { title: "Alpha" }` because the number repeats across projects.
+- A bare numeric selector means the global database ID and can silently return
+  a different task from the human reference. Never look up an owner reference
+  this way.
+- Responses carry `identifier` (`ALPHA-517`), `index` (the portal number), and
+  `id` (global). Read `identifier` to confirm the right task.
 - Before update, close, reopen, unassign, unlabel, unrelate, or delete, get the
-  task and verify its global ID, project, and title.
+  task and verify its `identifier`, project, and title against what was asked.
+  Stop and report any mismatch.
+- A project with no identifier falls back to a bare `#n`, which is ambiguous
+  across projects. Set an identifier on every project that holds real work.
 - Pass `projectSelector` on mutations even when using a global task ID. The
   server rejects unscoped global-ID mutations by default
   (`PROJECT_SCOPE_REQUIRED`); only deployments configured with `warn` or `off`

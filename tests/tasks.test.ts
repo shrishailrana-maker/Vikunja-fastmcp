@@ -725,12 +725,15 @@ describe('Tasks List and Scoping tests', () => {
       expect(details).toEqual({
         task: {
           id: 9005,
+          index: 305,
+          identifier: 'ALPHA-305',
           portalRef: 'ALPHA-305',
           project: { id: 101, title: 'Alpha' },
           title: 'Task Title',
           done: false,
           priority: 4,
           creator: 'example-tester',
+          taskUrl: 'https://vikunja.example.com/tasks/9005',
         },
       });
       expect(mockFetch).toHaveBeenCalledTimes(1);

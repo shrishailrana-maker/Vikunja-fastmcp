@@ -95,27 +95,27 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 | `create` | projectSelector, fields.title | fields, idempotencyKey, attachments, actor, responseMode | Direct POST; MCP-composed when attachments are supplied. For 3 or more tasks use vikunja_task_bulk create instead of repeated create calls. |
 | `create_if_absent` | projectSelector, fields.title | fields, idempotencyKey, attachments, actor, responseMode | MCP-composed exact-title search then optional create/attach. Best-effort duplicate prevention, not a distributed lock. |
 | `upsert` | projectSelector, fields.title, externalKey | fields, expectedUpdatedAt, actor, responseMode | MCP-composed description-key lookup followed by create or conditional update. Requires server-side description filtering and never falls back to a full scan. |
-| `get` | taskSelector | projectSelector (required for #index or PRJ-index), commentLimit (full mode only; default 5, max 100), responseMode (compact default; standard task; full bundled detail) | Direct compact/standard GET; full mode composes comments and attachments |
+| `get` | taskSelector | projectSelector (required for #index; optional guard for PRJ-index), commentLimit (full mode only; default 5, max 100), responseMode (compact default; standard task; full bundled detail) | Direct compact/standard GET; full mode composes comments and attachments |
 | `list` | none | exactly one of projectSelector, projects, allProjects, page (default 1), perPage (default 20; requests above 100 are safely capped to 100), done, allStates, priority (0-5), label, assignee (exact username; numeric user IDs are not valid Vikunja list filters), descriptionContains (requires server-side description filtering), actor (matches stored "(by actor)" attribution; requires server-side description filtering), q, search (free-text alias for q), filter, countOnly, responseMode (compact default; standard/full explicit) | Direct per project; grouped subsets/allProjects are MCP-composed. Defaults to done=false unless done or allStates is supplied. |
 | `summary` | projectSelector | none | MCP-composed paginated counts by state, priority, and label |
-| `update` | taskSelector, fields | projectSelector (required for #index or PRJ-index), expectedUpdatedAt, fields.appendDescription (mutually exclusive with fields.description), responseMode | Identity/read preflight followed by RFC 6902 PATCH |
-| `delete` | taskSelector | projectSelector (required for #index or PRJ-index), responseMode | Identity preflight then DELETE /tasks/{id} |
-| `close` | taskSelector | projectSelector (required for #index or PRJ-index), responseMode | Identity/read preflight then task update transport |
-| `reopen` | taskSelector | projectSelector (required for #index or PRJ-index), responseMode | Identity/read preflight then task update transport |
-| `close_with_evidence` | taskSelector, evidenceComment | projectSelector (required for #index or PRJ-index), idempotencyKey, actor, responseMode | MCP-composed comment create followed by task close |
-| `assign` | taskSelector, userSelector | projectSelector (required for #index or PRJ-index), responseMode | Identity preflight then POST assignee |
-| `unassign` | taskSelector, userSelector | projectSelector (required for #index or PRJ-index), responseMode | Identity preflight then DELETE assignee |
-| `list-assignees` | taskSelector | projectSelector (required for #index or PRJ-index) | Direct GET after identity resolution |
-| `apply-label` | taskSelector, labelTitle | projectSelector (required for #index or PRJ-index), responseMode | Return unchanged when already attached; otherwise resolve/create then POST task label. labelTitle accepts an exact title or numeric label ID. |
-| `remove-label` | taskSelector, labelTitle | projectSelector (required for #index or PRJ-index), responseMode | Resolve label then DELETE task label. labelTitle accepts an exact title or numeric label ID. |
-| `list-labels` | taskSelector | projectSelector (required for #index or PRJ-index) | Direct GET after identity resolution |
-| `set_status` | taskSelector, statusLabel | projectSelector (required for #index or PRJ-index), createIfMissing (default false), responseMode | Identity preflight then one bulk label-set replacement. Preserves non-status labels and repairs multiple configured-prefix labels. |
-| `relate` | taskSelector, otherTaskSelector, relationKind | projectSelector (required for #index or PRJ-index), responseMode | Resolve both tasks then POST relation |
-| `unrelate` | taskSelector, otherTaskSelector, relationKind | projectSelector (required for #index or PRJ-index), responseMode | Resolve both tasks then DELETE relation |
-| `list-relations` | taskSelector | projectSelector (required for #index or PRJ-index), responseMode (compact default; standard/full explicit) | MCP-composed from task related_tasks data |
-| `attach` | taskSelector, filePaths or base64Content+filename | projectSelector (required for #index or PRJ-index), mimeType, idempotencyKey, responseMode | Multipart POST per file after identity resolution |
-| `list-attachments` | taskSelector | projectSelector (required for #index or PRJ-index) | Direct GET after identity resolution |
-| `download-attachment` | taskSelector, attachmentId | projectSelector (required for #index or PRJ-index), destinationPath, overwrite | Authenticated streaming GET to sandboxed local disk |
+| `update` | taskSelector, fields | projectSelector (required for #index; optional guard for PRJ-index), expectedUpdatedAt, fields.appendDescription (mutually exclusive with fields.description), responseMode | Identity/read preflight followed by RFC 6902 PATCH |
+| `delete` | taskSelector | projectSelector (required for #index; optional guard for PRJ-index), responseMode | Identity preflight then DELETE /tasks/{id} |
+| `close` | taskSelector | projectSelector (required for #index; optional guard for PRJ-index), responseMode | Identity/read preflight then task update transport |
+| `reopen` | taskSelector | projectSelector (required for #index; optional guard for PRJ-index), responseMode | Identity/read preflight then task update transport |
+| `close_with_evidence` | taskSelector, evidenceComment | projectSelector (required for #index; optional guard for PRJ-index), idempotencyKey, actor, responseMode | MCP-composed comment create followed by task close |
+| `assign` | taskSelector, userSelector | projectSelector (required for #index; optional guard for PRJ-index), responseMode | Identity preflight then POST assignee |
+| `unassign` | taskSelector, userSelector | projectSelector (required for #index; optional guard for PRJ-index), responseMode | Identity preflight then DELETE assignee |
+| `list-assignees` | taskSelector | projectSelector (required for #index; optional guard for PRJ-index) | Direct GET after identity resolution |
+| `apply-label` | taskSelector, labelTitle | projectSelector (required for #index; optional guard for PRJ-index), responseMode | Return unchanged when already attached; otherwise resolve/create then POST task label. labelTitle accepts an exact title or numeric label ID. |
+| `remove-label` | taskSelector, labelTitle | projectSelector (required for #index; optional guard for PRJ-index), responseMode | Resolve label then DELETE task label. labelTitle accepts an exact title or numeric label ID. |
+| `list-labels` | taskSelector | projectSelector (required for #index; optional guard for PRJ-index) | Direct GET after identity resolution |
+| `set_status` | taskSelector, statusLabel | projectSelector (required for #index; optional guard for PRJ-index), createIfMissing (default false), responseMode | Identity preflight then one bulk label-set replacement. Preserves non-status labels and repairs multiple configured-prefix labels. |
+| `relate` | taskSelector, otherTaskSelector, relationKind | projectSelector (required for #index; optional guard for PRJ-index), responseMode | Resolve both tasks then POST relation |
+| `unrelate` | taskSelector, otherTaskSelector, relationKind | projectSelector (required for #index; optional guard for PRJ-index), responseMode | Resolve both tasks then DELETE relation |
+| `list-relations` | taskSelector | projectSelector (required for #index; optional guard for PRJ-index), responseMode (compact default; standard/full explicit) | MCP-composed from task related_tasks data |
+| `attach` | taskSelector, filePaths or base64Content+filename | projectSelector (required for #index; optional guard for PRJ-index), mimeType, idempotencyKey, responseMode | Multipart POST per file after identity resolution |
+| `list-attachments` | taskSelector | projectSelector (required for #index; optional guard for PRJ-index) | Direct GET after identity resolution |
+| `download-attachment` | taskSelector, attachmentId | projectSelector (required for #index; optional guard for PRJ-index), destinationPath, overwrite | Authenticated streaming GET to sandboxed local disk |
 
 ### `vikunja_task_comments`
 * **Description**: Manage task comments (create, list, get, update, delete).
@@ -134,11 +134,11 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 
 | Action | Required | Optional | Execution |
 | --- | --- | --- | --- |
-| `create` | taskSelector, comment | projectSelector (required for #index or PRJ-index), idempotencyKey, actor | Direct POST after identity resolution |
-| `list` | taskSelector | projectSelector (required for #index or PRJ-index), page (default 1), perPage (default 20, max 100) | Direct paginated GET after identity resolution |
-| `get` | taskSelector, commentId | projectSelector (required for #index or PRJ-index) | Direct GET after identity resolution |
-| `update` | taskSelector, commentId, comment | projectSelector (required for #index or PRJ-index) | Direct PATCH after identity resolution |
-| `delete` | taskSelector, commentId | projectSelector (required for #index or PRJ-index) | Direct DELETE after identity resolution |
+| `create` | taskSelector, comment | projectSelector (required for #index; optional guard for PRJ-index), idempotencyKey, actor | Direct POST after identity resolution |
+| `list` | taskSelector | projectSelector (required for #index; optional guard for PRJ-index), page (default 1), perPage (default 20, max 100) | Direct paginated GET after identity resolution |
+| `get` | taskSelector, commentId | projectSelector (required for #index; optional guard for PRJ-index) | Direct GET after identity resolution |
+| `update` | taskSelector, commentId, comment | projectSelector (required for #index; optional guard for PRJ-index) | Direct PATCH after identity resolution |
+| `delete` | taskSelector, commentId | projectSelector (required for #index; optional guard for PRJ-index) | Direct DELETE after identity resolution |
 
 ### `vikunja_labels`
 * **Description**: List, get, create, update, or delete global labels.
@@ -251,9 +251,9 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 
 | Action | Required | Optional | Execution |
 | --- | --- | --- | --- |
-| `list` | taskSelector | projectSelector (required for #index or PRJ-index) | Direct task read; reminders are embedded task fields |
-| `add` | taskSelector | projectSelector (required for #index or PRJ-index), reminder, relativePeriod, relativeTo | Task read followed by RFC 6902 PATCH of reminders |
-| `remove` | taskSelector, reminderIndex | projectSelector (required for #index or PRJ-index) | Task read followed by RFC 6902 PATCH of reminders |
+| `list` | taskSelector | projectSelector (required for #index; optional guard for PRJ-index) | Direct task read; reminders are embedded task fields |
+| `add` | taskSelector | projectSelector (required for #index; optional guard for PRJ-index), reminder, relativePeriod, relativeTo | Task read followed by RFC 6902 PATCH of reminders |
+| `remove` | taskSelector, reminderIndex | projectSelector (required for #index; optional guard for PRJ-index) | Task read followed by RFC 6902 PATCH of reminders |
 
 ### `vikunja_batch_import`
 * **Description**: Detect, preview, import, or inspect CSV data through native-fast or MCP-idempotent mode.

@@ -52,6 +52,8 @@ interface CacheEntry<T> {
 
 export class IdentityCache {
   private projectCache = new Map<string, CacheEntry<ProjectRef>>();
+  private projectIdentifierCache = new Map<string, ProjectRef[]>();
+  private projectIdentifierCacheExpiresAt = 0;
   private labelCache = new Map<string, CacheEntry<number>>();
 
   getProject(title: string): ProjectRef | null {
@@ -74,10 +76,38 @@ export class IdentityCache {
 
   invalidateProject(title: string) {
     this.projectCache.delete(title.toLowerCase());
+    this.clearProjectIdentifiers();
   }
 
   clearProjects() {
     this.projectCache.clear();
+    this.clearProjectIdentifiers();
+  }
+
+  getProjectsByIdentifier(identifier: string): ProjectRef[] | null {
+    if (this.projectIdentifierCacheExpiresAt <= Date.now()) {
+      this.clearProjectIdentifiers();
+      return null;
+    }
+    return this.projectIdentifierCache.get(identifier.toLowerCase()) ?? [];
+  }
+
+  setProjectIdentifiers(projects: { id: number; title: string; identifier?: string }[]) {
+    this.projectIdentifierCache.clear();
+    for (const project of projects) {
+      const identifier = project.identifier?.trim();
+      if (!identifier) continue;
+      const ref = { id: project.id, title: project.title };
+      const key = identifier.toLowerCase();
+      this.projectIdentifierCache.set(key, [...(this.projectIdentifierCache.get(key) ?? []), ref]);
+      this.setProject(project.title, ref);
+    }
+    this.projectIdentifierCacheExpiresAt = Date.now() + 45000;
+  }
+
+  private clearProjectIdentifiers() {
+    this.projectIdentifierCache.clear();
+    this.projectIdentifierCacheExpiresAt = 0;
   }
 
   getLabel(title: string): number | null {
@@ -115,6 +145,41 @@ async function listAllProjects(client: VikunjaApiClient): Promise<any[]> {
 
 export async function listAllLabels(client: VikunjaApiClient): Promise<any[]> {
   return fetchAllCollectionItems(async (path) => client.request<any>('GET', path), '/labels');
+}
+
+async function resolveProjectIdentifier(
+  client: VikunjaApiClient,
+  identifier: string,
+): Promise<ProjectRef> {
+  let matches = cache.getProjectsByIdentifier(identifier);
+  if (matches === null) {
+    cache.setProjectIdentifiers(await listAllProjects(client));
+    matches = cache.getProjectsByIdentifier(identifier) ?? [];
+  }
+
+  if (matches.length === 0) {
+    throw new VikunjaError({
+      status: 400,
+      code: 'UNKNOWN_PROJECT_IDENTIFIER',
+      method: 'GET',
+      path: '/projects',
+      message: `No project uses identifier "${identifier}".`,
+      fieldErrors: [],
+    });
+  }
+
+  if (matches.length > 1) {
+    throw new VikunjaError({
+      status: 400,
+      code: 'AMBIGUOUS_PROJECT_IDENTIFIER',
+      method: 'GET',
+      path: '/projects',
+      message: `Multiple projects use identifier "${identifier}". Candidates: ${JSON.stringify(matches)}`,
+      fieldErrors: [],
+    });
+  }
+
+  return matches[0];
 }
 
 export async function resolveProject(
@@ -285,6 +350,7 @@ export async function resolveTask(
   }
 
   let index: number | null = null;
+  let identifierPrefix: string | null = null;
   if (selectorStr.startsWith('#')) {
     if (selectorStr.length < 2) {
       throw new VikunjaError({
@@ -297,11 +363,11 @@ export async function resolveTask(
       });
     }
     index = Number(selectorStr.slice(1));
-  } else if (selectorStr.includes('-')) {
-    const parts = selectorStr.split('-');
-    const lastPart = parts[parts.length - 1];
-    if (/^\d+$/.test(lastPart)) {
-      index = Number(lastPart);
+  } else {
+    const identifierMatch = /^(.+)-(\d+)$/.exec(selectorStr);
+    if (identifierMatch) {
+      identifierPrefix = identifierMatch[1];
+      index = Number(identifierMatch[2]);
     }
   }
 
@@ -316,7 +382,7 @@ export async function resolveTask(
     });
   }
 
-  if (!projectSelector) {
+  if (!identifierPrefix && !projectSelector) {
     throw new VikunjaError({
       status: 400,
       code: 'PROJECT_CONTEXT_REQUIRED',
@@ -327,7 +393,26 @@ export async function resolveTask(
     });
   }
 
-  const project = await resolveProject(client, projectSelector);
+  let project: ProjectRef;
+  if (identifierPrefix) {
+    const identifierProject = await resolveProjectIdentifier(client, identifierPrefix);
+    if (projectSelector) {
+      const scopedProject = await resolveProject(client, projectSelector);
+      if (identifierProject.id !== scopedProject.id) {
+        throw new VikunjaError({
+          status: 400,
+          code: 'PROJECT_SCOPE_MISMATCH',
+          method: 'GET',
+          path: '/projects',
+          message: `Task identifier prefix "${identifierPrefix}" resolves to "${identifierProject.title}" (ID ${identifierProject.id}), but projectSelector resolves to "${scopedProject.title}" (ID ${scopedProject.id}).`,
+          fieldErrors: [],
+        });
+      }
+    }
+    project = identifierProject;
+  } else {
+    project = await resolveProject(client, projectSelector!);
+  }
 
   const filter = encodeURIComponent(`index = ${index}`);
   const lookupPath = `/projects/${project.id}/tasks?filter=${filter}&per_page=2`;

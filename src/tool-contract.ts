@@ -14,7 +14,7 @@ export interface OperationDoc {
   note?: string;
 }
 
-const taskSelector = ['projectSelector (required for #index or PRJ-index)'];
+const taskSelector = ['projectSelector (required for #index; optional guard for PRJ-index)'];
 const writeOptions = ['expectedUpdatedAt'];
 
 export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {

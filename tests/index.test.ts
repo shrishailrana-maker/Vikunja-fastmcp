@@ -419,8 +419,20 @@ describe('MCP Server Registration and Dispatching tests', () => {
     });
 
     expect(response.isError).not.toBe(true);
-    expect(response.content[0].text).toContain('(ALPHA-5 · id 99)');
+    expect(response.content[0].text).toContain('ALPHA-5 - Compact task');
+    expect(response.content[0].text).toContain(
+      '[Open ALPHA-5](https://vikunja.example.com/tasks/99)',
+    );
+    expect(response.content[0].text).not.toContain('id 99');
     expect(response.content[0].text).not.toContain('#?');
+    const envelope = JSON.parse(
+      (response.content[0].text as string).match(/```json\n([\s\S]*?)\n```/)![1],
+    );
+    expect(envelope.data.task).toMatchObject({
+      id: 99,
+      index: 5,
+      identifier: 'ALPHA-5',
+    });
   });
 
   it('uses portal-first summaries and compact write echoes by default', async () => {
@@ -458,7 +470,9 @@ describe('MCP Server Registration and Dispatching tests', () => {
     const text = response.content[0].text as string;
     const envelope = JSON.parse(text.match(/```json\n([\s\S]*?)\n```/)![1]);
 
-    expect(text).toContain('(ALPHA-5 · id 99)');
+    expect(text).toContain('ALPHA-5 - Created task');
+    expect(text).toContain('[Open ALPHA-5](https://vikunja.example.com/tasks/99)');
+    expect(text).not.toContain('id 99');
     expect(envelope.data.target).toEqual({
       id: 99,
       portalRef: 'ALPHA-5',

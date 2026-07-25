@@ -72,7 +72,10 @@ export interface CompactTaskListItem {
 }
 
 export interface CompactTask extends CompactTaskListItem {
+  index: number;
+  identifier?: string;
   project: { id: number; title: string };
+  taskUrl: string;
 }
 
 export interface WriteEcho {
@@ -239,27 +242,29 @@ function normalizeTaskListItem(task: any, projectRef: ProjectRef, webUrl: string
   };
 }
 
-function normalizeCompactTask(task: any, projectRef: ProjectRef): CompactTask {
+function normalizeCompactTask(task: any, projectRef: ProjectRef, webUrl: string): CompactTask {
   return {
     id: task.id,
+    index: task.index,
+    identifier: task.identifier,
     portalRef: task.identifier || `#${task.index}`,
     project: { id: projectRef.id, title: projectRef.title },
     title: task.title,
     done: !!task.done,
     priority: task.priority || 0,
     creator: task.created_by?.username ?? null,
+    taskUrl: `${webUrl}tasks/${task.id}`,
   };
 }
 
-function normalizeCompactTaskListItem(task: any, projectRef: ProjectRef): CompactTaskListItem {
-  const compact = normalizeCompactTask(task, projectRef);
+function normalizeCompactTaskListItem(task: any): CompactTaskListItem {
   return {
-    id: compact.id,
-    portalRef: compact.portalRef,
-    title: compact.title,
-    done: compact.done,
-    priority: compact.priority,
-    creator: compact.creator,
+    id: task.id,
+    portalRef: task.identifier || `#${task.index}`,
+    title: task.title,
+    done: !!task.done,
+    priority: task.priority || 0,
+    creator: task.created_by?.username ?? null,
   };
 }
 
@@ -370,7 +375,7 @@ export async function listTasks(client: VikunjaApiClient, options: ListTasksOpti
       const rawTasks = toItemArray(rawRes);
       const tasks = rawTasks.map((task: any) => {
         if (responseMode === 'compact') {
-          return normalizeCompactTaskListItem(task, proj);
+          return normalizeCompactTaskListItem(task);
         }
         if (responseMode === 'full') {
           return normalizeTask(task, proj, webUrl);
@@ -808,7 +813,7 @@ export async function getTask(
       : taskRef.rawTask;
 
   if (responseMode === 'compact') {
-    return { task: normalizeCompactTask(rawTask, taskRef.project) };
+    return { task: normalizeCompactTask(rawTask, taskRef.project, webUrl) };
   }
 
   const task = normalizeTask(rawTask, taskRef.project, webUrl);
@@ -1567,7 +1572,7 @@ export async function listRelations(
           relationKind: kind,
           task:
             responseMode === 'compact'
-              ? normalizeCompactTask(t, project)
+              ? normalizeCompactTask(t, project, webUrl)
               : responseMode === 'full'
                 ? normalizeTask(t, project, webUrl)
                 : normalizeTaskListItem(t, project, webUrl),

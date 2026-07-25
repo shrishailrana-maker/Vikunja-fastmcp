@@ -250,19 +250,23 @@ function toolDescription(tool: McpToolDefinition): string {
   return `${tool.description} Actions: ${actionGuide}.`;
 }
 
-function summaryFor(toolName: string, args: any, result: any): string {
+function taskLink(webUrl: string, taskId: number, portalRef: string): string {
+  return `[Open ${safeSummaryText(portalRef)}](${webUrl}tasks/${taskId})`;
+}
+
+function summaryFor(toolName: string, args: any, result: any, webUrl: string): string {
   if (toolName === 'self_check' || (toolName === 'vikunja_auth' && args?.action === 'self-check')) {
     return result?.ok ? 'Self-check passed.' : 'Self-check reported problems.';
   }
   if (result?.action && result?.target) {
     const portalRef =
       result.target.identifier || result.target.portalRef || `#${result.target.index ?? '?'}`;
-    return `${result.action} **${safeSummaryText(result.target.title || 'task')}** (${safeSummaryText(portalRef)} · id ${result.target.id}) in **${safeSummaryText(result.target.project?.title || 'project')}**.`;
+    return `${result.action}: ${safeSummaryText(portalRef)} - ${safeSummaryText(result.target.title || 'task')} in **${safeSummaryText(result.target.project?.title || 'project')}**. ${taskLink(webUrl, result.target.id, portalRef)}`;
   }
   if (result?.task?.title) {
     const portalRef =
       result.task.portalRef || result.task.identifier || `#${result.task.index ?? '?'}`;
-    return `Task **${safeSummaryText(result.task.title)}** (${safeSummaryText(portalRef)} · id ${result.task.id}).`;
+    return `${safeSummaryText(portalRef)} - ${safeSummaryText(result.task.title)}. ${taskLink(webUrl, result.task.id, portalRef)}`;
   }
   if (result?.count !== undefined && result?.project) {
     return `Count ${result.count} in **${safeSummaryText(result.project.title)}**.`;
@@ -1551,7 +1555,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       ['vikunja_tasks', 'vikunja_task_bulk'].includes(name) && effectiveResponseMode === 'compact'
         ? compactWriteEchoes(rawResult)
         : rawResult;
-    const summary = summaryFor(name, parsedArgs, result);
+    const summary = summaryFor(name, parsedArgs, result, client.getConfig().vikunjaWebUrl);
     // Diagnostics carry their own `ok`. A failed self-check must surface as an
     // error envelope so an agent checking only the outer `ok` sees the failure.
     const isDiag =
