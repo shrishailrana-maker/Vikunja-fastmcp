@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.4.101 - 2026-07-25
+
+- Resolve full task identifiers such as `ALPHA-517` directly from the
+  project identifier without requiring a separate `projectSelector`.
+- Reject unknown, duplicate, or conflicting project identifiers instead of
+  guessing from the task's local index.
+- Cache project-identifier mappings for repeated task lookups while preserving
+  existing cache invalidation behavior.
+- Keep bare numeric selectors as global database IDs and bare `#index`
+  selectors explicitly project-scoped.
+- Show one project task identifier in human summaries while retaining global
+  IDs in structured data and direct task-link targets.
+- Update the packaged agent skill and generated MCP API reference for the new
+  identity contract.
+
 ## 2.4.100 - 2026-07-23
 
 - Add stable-key task `upsert` with `externalKey`, exact marker verification,
