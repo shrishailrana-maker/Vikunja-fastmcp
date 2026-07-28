@@ -24,6 +24,7 @@ requests or legacy tracker scripts while the MCP is available.
   `taskSelector: { identifier: "ALPHA-517" }` resolves its project on its own;
   an explicit `projectSelector` remains a wrong-project guard. Use `projects`
   or `allProjects: true` only deliberately.
+
 ### One human reference: `ALPHA-517`
 
 - Write every task reference as the project identifier, such as `ALPHA-517`, in

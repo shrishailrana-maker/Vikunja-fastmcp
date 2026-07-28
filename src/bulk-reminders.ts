@@ -71,6 +71,7 @@ interface BulkOperationContext {
   recordKey: string;
   acquired: boolean;
   state: any;
+  leaseToken?: string;
 }
 
 const BULK_LEASE_MS = 120_000;
@@ -113,12 +114,18 @@ function bulkOperation(
     recordKey,
     acquired: leased.acquired,
     state: leased.value,
+    leaseToken: leased.leaseToken,
   };
 }
 
 function saveBulkOperation(context: BulkOperationContext | null, state: any): void {
   if (context) {
-    if (state.status === 'running') state.leaseUntil = Date.now() + BULK_LEASE_MS;
+    if (state.status === 'running') {
+      state.leaseUntil = Date.now() + BULK_LEASE_MS;
+      if (context.leaseToken) {
+        idempotency.renewLease(context.recordKey, context.leaseToken, BULK_LEASE_MS);
+      }
+    }
     idempotency.set(context.recordKey, state);
   }
 }

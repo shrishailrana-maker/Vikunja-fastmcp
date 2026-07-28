@@ -48,6 +48,41 @@ describe('durable idempotency ledger', () => {
     }
   });
 
+  it('renews an active lease without allowing a second local process to take it', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'vikunja-fastmcp-lease-'));
+    const databasePath = join(directory, 'idempotency.sqlite');
+    const now = jest.spyOn(Date, 'now').mockReturnValue(1_000);
+    let first: IdempotencyCache | undefined;
+    let second: IdempotencyCache | undefined;
+
+    try {
+      first = new IdempotencyCache({ databasePath });
+      second = new IdempotencyCache({ databasePath });
+      const acquired = first.acquireLease('task-create:lease', { status: 'running' }, 100);
+
+      expect(acquired.acquired).toBe(true);
+      expect(acquired.leaseToken).toEqual(expect.any(String));
+
+      now.mockReturnValue(1_080);
+      expect(first.renewLease('task-create:lease', acquired.leaseToken!, 100)).toBe(true);
+
+      now.mockReturnValue(1_150);
+      expect(second.acquireLease('task-create:lease', { status: 'running' }, 100).acquired).toBe(
+        false,
+      );
+
+      now.mockReturnValue(1_181);
+      const takeover = second.acquireLease('task-create:lease', { status: 'running' }, 100);
+      expect(takeover.acquired).toBe(true);
+      expect(first.renewLease('task-create:lease', acquired.leaseToken!, 100)).toBe(false);
+    } finally {
+      first?.close();
+      second?.close();
+      now.mockRestore();
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
   it('lists operation receipts by namespace for resumable bulk status', () => {
     const cache = new IdempotencyCache({ databasePath: ':memory:' });
     cache.set('bulk-operation:alpha', { operationId: 'alpha', status: 'partial' });

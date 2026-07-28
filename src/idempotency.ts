@@ -10,7 +10,7 @@
  */
 
 import { chmodSync, mkdirSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -29,6 +29,12 @@ interface StoredRow {
 interface LeaseResult {
   acquired: boolean;
   value: any;
+  leaseToken?: string;
+}
+
+interface StoredLease {
+  token: string;
+  expires_at: number;
 }
 
 const DEFAULT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -106,6 +112,20 @@ export async function runDurableOperation<T>(
     });
   }
 
+  const heartbeat = leased.leaseToken
+    ? setInterval(
+        () => {
+          try {
+            idempotency.renewLease(operationKey, leased.leaseToken!, OPERATION_LEASE_MS);
+          } catch {
+            // The final receipt write remains authoritative if a heartbeat is delayed.
+          }
+        },
+        Math.floor(OPERATION_LEASE_MS / 3),
+      )
+    : null;
+  heartbeat?.unref();
+
   try {
     const result = await operation();
     idempotency.set(operationKey, { status: 'completed', result });
@@ -113,6 +133,8 @@ export async function runDurableOperation<T>(
   } catch (error) {
     idempotency.delete(operationKey);
     throw error;
+  } finally {
+    if (heartbeat) clearInterval(heartbeat);
   }
 }
 
@@ -167,6 +189,11 @@ export class IdempotencyCache {
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS idempotency_leases (
+        key TEXT PRIMARY KEY,
+        token TEXT NOT NULL,
+        expires_at INTEGER NOT NULL
+      );
     `);
   }
 
@@ -185,15 +212,25 @@ export class IdempotencyCache {
 
   set(key: string, result: any): void {
     const now = Date.now();
-    this.database
-      .prepare(
-        `INSERT INTO idempotency_records (key, result_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT(key) DO UPDATE SET
-           result_json = excluded.result_json,
-           updated_at = excluded.updated_at`,
-      )
-      .run(key, JSON.stringify(result), now, now);
+    this.database.exec('BEGIN IMMEDIATE');
+    try {
+      this.database
+        .prepare(
+          `INSERT INTO idempotency_records (key, result_json, created_at, updated_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(key) DO UPDATE SET
+             result_json = excluded.result_json,
+             updated_at = excluded.updated_at`,
+        )
+        .run(key, JSON.stringify(result), now, now);
+      if (result?.status !== 'running') {
+        this.database.prepare('DELETE FROM idempotency_leases WHERE key = ?').run(key);
+      }
+      this.database.exec('COMMIT');
+    } catch (error) {
+      this.database.exec('ROLLBACK');
+      throw error;
+    }
   }
 
   claim(key: string, result: any): any | null {
@@ -208,6 +245,7 @@ export class IdempotencyCache {
         return JSON.parse(row.result_json);
       }
       if (row) {
+        this.database.prepare('DELETE FROM idempotency_leases WHERE key = ?').run(key);
         this.database.prepare('DELETE FROM idempotency_records WHERE key = ?').run(key);
       }
       this.database
@@ -230,18 +268,22 @@ export class IdempotencyCache {
       const row = this.database
         .prepare('SELECT result_json, updated_at FROM idempotency_records WHERE key = ?')
         .get(key) as unknown as StoredRow | undefined;
+      const lease = this.database
+        .prepare('SELECT token, expires_at FROM idempotency_leases WHERE key = ?')
+        .get(key) as unknown as StoredLease | undefined;
       const now = Date.now();
       const current = row && now - row.updated_at < this.ttlMs ? JSON.parse(row.result_json) : null;
       if (
         current &&
         (current.status === undefined ||
           current.status === 'completed' ||
-          (typeof current.leaseUntil === 'number' && current.leaseUntil > now))
+          (lease?.expires_at ?? current.leaseUntil ?? 0) > now)
       ) {
         this.database.exec('COMMIT');
         return { acquired: false, value: current };
       }
 
+      const leaseToken = randomUUID();
       const next = {
         ...(current ?? initial),
         status: 'running',
@@ -256,8 +298,64 @@ export class IdempotencyCache {
              updated_at = excluded.updated_at`,
         )
         .run(key, JSON.stringify(next), now, now);
+      this.database
+        .prepare(
+          `INSERT INTO idempotency_leases (key, token, expires_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(key) DO UPDATE SET
+             token = excluded.token,
+             expires_at = excluded.expires_at`,
+        )
+        .run(key, leaseToken, now + leaseMs);
       this.database.exec('COMMIT');
-      return { acquired: true, value: next };
+      return { acquired: true, value: next, leaseToken };
+    } catch (error) {
+      this.database.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  renewLease(key: string, leaseToken: string, leaseMs: number): boolean {
+    this.database.exec('BEGIN IMMEDIATE');
+    try {
+      const lease = this.database
+        .prepare('SELECT token, expires_at FROM idempotency_leases WHERE key = ?')
+        .get(key) as unknown as StoredLease | undefined;
+      if (!lease || lease.token !== leaseToken) {
+        this.database.exec('COMMIT');
+        return false;
+      }
+
+      const row = this.database
+        .prepare('SELECT result_json, updated_at FROM idempotency_records WHERE key = ?')
+        .get(key) as unknown as StoredRow | undefined;
+      if (!row) {
+        this.database.prepare('DELETE FROM idempotency_leases WHERE key = ?').run(key);
+        this.database.exec('COMMIT');
+        return false;
+      }
+
+      const current = JSON.parse(row.result_json);
+      if (current.status !== 'running') {
+        this.database.prepare('DELETE FROM idempotency_leases WHERE key = ?').run(key);
+        this.database.exec('COMMIT');
+        return false;
+      }
+
+      const now = Date.now();
+      current.leaseUntil = now + leaseMs;
+      this.database
+        .prepare(
+          `UPDATE idempotency_records
+           SET result_json = ?, updated_at = ?
+           WHERE key = ?`,
+        )
+        .run(JSON.stringify(current), now, key);
+      this.database
+        .prepare('UPDATE idempotency_leases SET expires_at = ? WHERE key = ? AND token = ?')
+        .run(now + leaseMs, key, leaseToken);
+      this.database.exec('COMMIT');
+      return true;
     } catch (error) {
       this.database.exec('ROLLBACK');
       throw error;
@@ -288,18 +386,37 @@ export class IdempotencyCache {
   }
 
   delete(key: string): void {
-    this.database.prepare('DELETE FROM idempotency_records WHERE key = ?').run(key);
+    this.database.exec('BEGIN IMMEDIATE');
+    try {
+      this.database.prepare('DELETE FROM idempotency_leases WHERE key = ?').run(key);
+      this.database.prepare('DELETE FROM idempotency_records WHERE key = ?').run(key);
+      this.database.exec('COMMIT');
+    } catch (error) {
+      this.database.exec('ROLLBACK');
+      throw error;
+    }
   }
 
   deletePrefix(prefix: string): void {
     const escaped = prefix.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_');
-    this.database
-      .prepare(`DELETE FROM idempotency_records WHERE key LIKE ? ESCAPE '\\'`)
-      .run(`${escaped}%`);
+    const pattern = `${escaped}%`;
+    this.database.exec('BEGIN IMMEDIATE');
+    try {
+      this.database
+        .prepare(`DELETE FROM idempotency_leases WHERE key LIKE ? ESCAPE '\\'`)
+        .run(pattern);
+      this.database
+        .prepare(`DELETE FROM idempotency_records WHERE key LIKE ? ESCAPE '\\'`)
+        .run(pattern);
+      this.database.exec('COMMIT');
+    } catch (error) {
+      this.database.exec('ROLLBACK');
+      throw error;
+    }
   }
 
   clear(): void {
-    this.database.exec('DELETE FROM idempotency_records');
+    this.database.exec('DELETE FROM idempotency_leases; DELETE FROM idempotency_records;');
   }
 
   close(): void {

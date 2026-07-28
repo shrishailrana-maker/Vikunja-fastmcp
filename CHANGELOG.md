@@ -9,6 +9,8 @@
 - Bind caller idempotency keys to one payload and reject conflicting reuse.
 - Prevent concurrent same-key writes on one machine with atomic SQLite
   execution leases and scope default ledger files to `VIKUNJA_URL`.
+- Renew active execution leases so healthy long-running transfers and bulk
+  operations cannot admit a duplicate retry after the initial lease window.
 - Add durable per-row bulk receipts, resumable retries, and bulk operation
   status lookup; successful rows are not repeated.
 - Require actor attribution for task creation, every comment mutation, closing,
