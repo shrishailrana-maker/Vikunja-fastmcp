@@ -104,6 +104,25 @@ export class VikunjaApiClient {
           // If response is not JSON, we keep the default status text
         }
 
+        const subscriptionSchemaFailure = fieldErrors.some(
+          (fieldError) =>
+            fieldError.location === 'subscription.entity' &&
+            /expected integer/i.test(fieldError.message),
+        );
+        if (subscriptionSchemaFailure) {
+          throw new VikunjaError({
+            status: 502,
+            code: 'VIKUNJA_SUBSCRIPTION_SCHEMA_BUG',
+            method,
+            path,
+            message:
+              'Vikunja returned an invalid subscription.entity value while validating this task response. ' +
+              'The write may not have been applied. Track the server fix at ' +
+              'https://github.com/go-vikunja/vikunja/issues/3316.',
+            fieldErrors,
+          });
+        }
+
         throw new VikunjaError({
           status: response.status,
           code: mapStatusToCode(response.status),

@@ -29,6 +29,9 @@ export interface TaskRef {
   rawTask?: any;
 }
 
+export type TaskSelector = { globalId: number } | { identifier: string } | { projectIndex: number };
+export type TaskSelectorInput = TaskSelector | string | number;
+
 interface ResolveTaskOptions {
   includeRawTask?: boolean;
 }
@@ -281,22 +284,44 @@ export async function resolveProject(
 
 export async function resolveTask(
   client: VikunjaApiClient,
-  taskSelector: string | number,
+  taskSelector: TaskSelector,
   projectSelector?: { id?: number; title?: string },
   options: ResolveTaskOptions = {},
 ): Promise<TaskRef> {
-  const selectorStr = String(taskSelector).trim();
-  const isDigits = /^\d+$/.test(selectorStr);
+  if (!taskSelector || typeof taskSelector !== 'object' || Array.isArray(taskSelector)) {
+    throw new VikunjaError({
+      status: 400,
+      code: 'INVALID_TASK_SELECTOR',
+      method: 'GET',
+      path: '/tasks',
+      message:
+        'Use an explicit task selector: {globalId}, {identifier}, or {projectIndex}. Bare numbers and strings are not accepted.',
+      fieldErrors: [],
+    });
+  }
 
-  if (isDigits && !selectorStr.startsWith('#')) {
-    const globalId = Number(selectorStr);
+  const keys = Object.keys(taskSelector);
+  const allowedKeys = ['globalId', 'identifier', 'projectIndex'];
+  if (keys.length !== 1 || !allowedKeys.includes(keys[0])) {
+    throw new VikunjaError({
+      status: 400,
+      code: 'INVALID_TASK_SELECTOR',
+      method: 'GET',
+      path: '/tasks',
+      message: 'A task selector must contain exactly one of globalId, identifier, or projectIndex.',
+      fieldErrors: [],
+    });
+  }
+
+  if ('globalId' in taskSelector) {
+    const globalId = taskSelector.globalId;
     if (!Number.isInteger(globalId) || globalId <= 0) {
       throw new VikunjaError({
         status: 400,
         code: 'INVALID_TASK_SELECTOR',
         method: 'GET',
         path: '/tasks',
-        message: `Invalid task selector: "${taskSelector}".`,
+        message: `Invalid global task ID: ${globalId}.`,
         fieldErrors: [],
       });
     }
@@ -349,35 +374,37 @@ export async function resolveTask(
     }
   }
 
-  let index: number | null = null;
+  let index: number;
   let identifierPrefix: string | null = null;
-  if (selectorStr.startsWith('#')) {
-    if (selectorStr.length < 2) {
+  let selectorLabel: string;
+  if ('projectIndex' in taskSelector) {
+    index = taskSelector.projectIndex;
+    selectorLabel = `#${index}`;
+  } else {
+    const identifier = taskSelector.identifier.trim();
+    const identifierMatch = /^(.+)-(\d+)$/.exec(identifier);
+    if (!identifierMatch) {
       throw new VikunjaError({
         status: 400,
         code: 'INVALID_TASK_SELECTOR',
         method: 'GET',
         path: '/tasks',
-        message: `Invalid task selector: "${taskSelector}". Use #index with a positive portal number.`,
+        message: `Invalid task identifier: "${taskSelector.identifier}". Use a full identifier such as PRJ-123.`,
         fieldErrors: [],
       });
     }
-    index = Number(selectorStr.slice(1));
-  } else {
-    const identifierMatch = /^(.+)-(\d+)$/.exec(selectorStr);
-    if (identifierMatch) {
-      identifierPrefix = identifierMatch[1];
-      index = Number(identifierMatch[2]);
-    }
+    identifierPrefix = identifierMatch[1];
+    index = Number(identifierMatch[2]);
+    selectorLabel = identifier;
   }
 
-  if (index === null || !Number.isInteger(index) || index <= 0 || isNaN(index)) {
+  if (!Number.isInteger(index) || index <= 0 || isNaN(index)) {
     throw new VikunjaError({
       status: 400,
       code: 'INVALID_TASK_SELECTOR',
       method: 'GET',
       path: '/tasks',
-      message: `Invalid task selector: "${taskSelector}". Use a numeric global ID, or a project-scoped #index or short-identifier (e.g. PRJ-123).`,
+      message: `Invalid project task index: ${index}.`,
       fieldErrors: [],
     });
   }
@@ -388,7 +415,7 @@ export async function resolveTask(
       code: 'PROJECT_CONTEXT_REQUIRED',
       method: 'GET',
       path: '/tasks',
-      message: `Project title or ID context is required to resolve project-scoped task reference: "${taskSelector}"`,
+      message: `Project title or ID context is required to resolve project-scoped task reference: "${selectorLabel}"`,
       fieldErrors: [],
     });
   }
@@ -442,16 +469,16 @@ export async function resolveTask(
     const task = matches[0];
 
     if (
-      selectorStr.includes('-') &&
+      identifierPrefix &&
       task.identifier &&
-      task.identifier.toLowerCase() !== selectorStr.toLowerCase()
+      task.identifier.toLowerCase() !== selectorLabel.toLowerCase()
     ) {
       throw new VikunjaError({
         status: 400,
         code: 'IDENTIFIER_MISMATCH',
         method: 'GET',
         path: lookupPath,
-        message: `Task identifier "${task.identifier}" does not match specified selector "${selectorStr}"`,
+        message: `Task identifier "${task.identifier}" does not match specified selector "${selectorLabel}"`,
         fieldErrors: [],
       });
     }
@@ -479,4 +506,27 @@ export async function resolveTask(
     }
     throw err;
   }
+}
+
+/**
+ * Internal adapter for module-level helpers while their direct-call tests and
+ * downstream imports migrate. MCP schemas never expose this legacy coercion.
+ */
+export async function resolveTaskInput(
+  client: VikunjaApiClient,
+  taskSelector: TaskSelectorInput,
+  projectSelector?: { id?: number; title?: string },
+  options: ResolveTaskOptions = {},
+): Promise<TaskRef> {
+  let explicit: TaskSelector;
+  if (typeof taskSelector === 'number' || /^\d+$/.test(String(taskSelector).trim())) {
+    explicit = { globalId: Number(taskSelector) };
+  } else if (typeof taskSelector === 'string' && taskSelector.trim().startsWith('#')) {
+    explicit = { projectIndex: Number(taskSelector.trim().slice(1)) };
+  } else if (typeof taskSelector === 'string') {
+    explicit = { identifier: taskSelector.trim() };
+  } else {
+    explicit = taskSelector;
+  }
+  return resolveTask(client, explicit, projectSelector, options);
 }

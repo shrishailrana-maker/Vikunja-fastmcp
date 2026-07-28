@@ -20,20 +20,21 @@ requests or legacy tracker scripts while the MCP is available.
 ## Scope And Identity
 
 - Pass `projectSelector` for every project-specific list, search, create, or
-  bare `#index` operation. A full identifier such as `ALPHA-517` resolves its
-  project on its own; an explicit `projectSelector` remains a wrong-project guard.
-  Use `projects` or `allProjects: true` only deliberately.
+  `taskSelector: { projectIndex: 517 }` operation. A full selector such as
+  `taskSelector: { identifier: "ALPHA-517" }` resolves its project on its own;
+  an explicit `projectSelector` remains a wrong-project guard. Use `projects`
+  or `allProjects: true` only deliberately.
 ### One human reference: `ALPHA-517`
 
 - Write every task reference as the project identifier, such as `ALPHA-517`, in
   chat, headings, lists, reports, prompts, commit messages, and task comments.
   Never a bare number, and never a `PROJ #ref (id N)` pair.
 - The global database ID, such as `9005`, is internal. Use it in MCP calls and
-  in `/tasks/{id}` URLs only. Keep it out of owner-facing text.
+  in `/tasks/{id}` URLs only. Keep it out of Boss-facing text.
 - Label links with the human reference:
   `[ALPHA-517](https://vikunja.example.com/tasks/9005)`.
 - A bare portal number is ambiguous and must never be guessed because different
-  projects may each contain task `#517`. When the owner writes "bug 517",
+  projects may each contain task `#517`. When the Boss writes "bug 517",
   resolve it against the project the repository's `AGENTS.md` declares as its
   scope; if no project is declared, ask which one. Never reinterpret it as
   global ID 517.
@@ -42,14 +43,15 @@ requests or legacy tracker scripts while the MCP is available.
 
 ### Resolving a reference
 
-- Fetch ALPHA-517 directly with `taskSelector: "ALPHA-517"`. The identifier prefix
-  resolves the project case-insensitively. Supplying `projectSelector` as well
-  is optional wrong-project protection and must agree with the prefix.
-- A bare portal reference such as `taskSelector: "#517"` still requires
-  `projectSelector: { title: "Alpha" }` because the number repeats across projects.
-- A bare numeric selector means the global database ID and can silently return
-  a different task from the human reference. Never look up an owner reference
-  this way.
+- Fetch ALPHA-517 with `taskSelector: { identifier: "ALPHA-517" }`. The
+  identifier prefix resolves the project case-insensitively. Supplying
+  `projectSelector` as well is optional wrong-project protection and must agree
+  with the prefix.
+- Use `taskSelector: { projectIndex: 517 }` only with
+  `projectSelector: { title: "Alpha" }`, because project indexes repeat.
+- Use `taskSelector: { globalId: 9005 }` only for an already-verified database
+  ID. Bare numbers and strings are rejected; never reinterpret a human
+  reference as a global ID.
 - Responses carry `identifier` (`ALPHA-517`), `index` (the portal number), and
   `id` (global). Read `identifier` to confirm the right task.
 - Before update, close, reopen, unassign, unlabel, unrelate, or delete, get the
@@ -91,8 +93,16 @@ requests or legacy tracker scripts while the MCP is available.
 - Prefer `create_if_absent` for duplicate-sensitive creation, while remembering
   it is best-effort rather than a distributed lock.
 - Add verification evidence before closing work. Use `close_with_evidence` when appropriate.
-- Pass `actor` on create, comment, evidence-close, and idempotent import so the
-  MCP appends durable attribution once.
+- Pass `actor` on create, every comment mutation, close, import, and every
+  mutating bulk call. These operations reject missing attribution.
+- Pass a stable `idempotencyKey` on task creation, comment creation, attachment
+  upload, evidence-close, and every mutating bulk call. Reuse the same key only
+  for the identical payload.
+- Use bulk `status` with the returned `operationId`, or rerun the same bulk
+  payload and key, to resume failed rows without repeating recorded successes.
+- Before replacing a task title or full description, run `get` and pass its
+  `updated` timestamp as `expectedUpdatedAt`. Prefer `appendDescription` when
+  only adding evidence.
 - Use `set_status` to replace all labels in the configured status-prefix group
   in one request. Keep `createIfMissing: false` unless label creation is
   explicitly intended.
@@ -102,7 +112,9 @@ requests or legacy tracker scripts while the MCP is available.
   retry deduplication. Preview either mode before importing.
 - Wrap file paths, commands, and code identifiers in inline backticks in task
   descriptions and comments so Markdown does not reinterpret underscores.
-- Treat composed bulk create/delete operations as bounded and non-atomic.
+- Treat composed bulk operations as bounded and non-atomic. Their durable
+  SQLite receipts survive local MCP restarts and prevent concurrent same-key
+  writes on one machine, but they are not a distributed lock between machines.
 - Use one writer per task when several agents are active.
 
 ## Attachments And Errors
@@ -111,5 +123,12 @@ requests or legacy tracker scripts while the MCP is available.
   sandboxed path. Do not put bearer tokens in download URLs.
 - A `401` means the token or API URL is invalid or expired. A `403` means the
   authenticated identity lacks permission. Preserve the real status.
+- `VIKUNJA_SUBSCRIPTION_SCHEMA_BUG` means Vikunja returned the known invalid
+  `subscription.entity` response while processing a task write. Task updates
+  automatically read back the requested fields and succeed only when the write
+  is proven. If the error remains, keep the task open, preserve the evidence,
+  and reference
+  `https://github.com/go-vikunja/vikunja/issues/3316`; do not reconnect auth or
+  silently unsubscribe the user.
 - When exact tool contracts are needed, call `self_check` with `detail: "full"`
   once and read `MCP_API.md` from its `apiDocumentPath`.

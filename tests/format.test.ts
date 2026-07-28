@@ -98,11 +98,13 @@ describe('Format and Markdown tests', () => {
 
   describe('Markdown / HTML conversions', () => {
     it('should convert safe headings, bold, links, code, lists and preserve them', () => {
-      const md = `# Heading 1\n\nSome **bold text** and *italic text*.\n\nA link: [Google](https://google.com)\n\n* Item 1\n* Item 2\n\n\`\`\`javascript\nconst x = 1;\n\`\`\``;
+      const md = `# Heading 1\n\nSome **bold text**, *italic text*, and \`inline_code\`.\n\nA link: [Google](https://google.com)\n\n* Item 1\n* Item 2\n\n\`\`\`javascript\nconst x = 1;\n\`\`\``;
       const html = markdownToHtml(md);
       expect(html).toContain('<h1>Heading 1</h1>');
       expect(html).toContain('<strong>bold text</strong>');
       expect(html).toContain('<em>italic text</em>');
+      expect(html).toContain('<code>inline_code</code>');
+      expect(html).not.toContain('INLINECODE');
       expect(html).toContain('<a href="https://google.com">Google</a>');
       expect(html).toContain('<li>Item 1</li>');
       expect(html).toContain('<pre><code>const x = 1;</code></pre>');
@@ -112,6 +114,7 @@ describe('Format and Markdown tests', () => {
       expect(backToMd).toContain('# Heading 1');
       expect(backToMd).toContain('**bold text**');
       expect(backToMd).toContain('*italic text*');
+      expect(backToMd).toContain('`inline_code`');
       expect(backToMd).toContain('[Google](https://google.com)');
       expect(backToMd).toContain('* Item 1');
       expect(backToMd).toContain('const x = 1;');

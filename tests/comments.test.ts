@@ -197,14 +197,17 @@ describe('Comments and Compound Operations tests', () => {
         text: async () =>
           JSON.stringify({
             id: 2001,
-            comment: '<p><strong>updated</strong></p>',
+            comment: '<p><strong>updated</strong></p><p>(by Codex)</p>',
             author: { id: 1 },
             created: '2026-07-12T00:00:00Z',
           }),
       } as Response);
 
-      const comment = await updateComment(client, 9005, 2001, '**updated**');
-      expect(comment.comment).toBe('**updated**');
+      const comment = await updateComment(client, 9005, 2001, '**updated**', undefined, 'Codex');
+      expect(comment.comment).toContain('**updated**');
+      expect(comment.comment).toContain('(by Codex)');
+      const patchCall = mockFetch.mock.calls.find((call: any) => call[1]?.method === 'PATCH');
+      expect(JSON.parse(patchCall[1].body).comment).toContain('(by Codex)');
     });
 
     it('should delete comment successfully', async () => {
@@ -220,9 +223,10 @@ describe('Comments and Compound Operations tests', () => {
         text: async () => '',
       } as Response);
 
-      const res = await deleteComment(client, 9005, 2001);
+      const res = await deleteComment(client, 9005, 2001, undefined, 'Codex');
       expect(res.ok).toBe(true);
       expect(res.commentId).toBe(2001);
+      expect(res.actor).toBe('Codex');
     });
   });
 

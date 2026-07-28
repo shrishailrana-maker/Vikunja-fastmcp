@@ -121,6 +121,39 @@ describe('VikunjaApiClient tests', () => {
     );
   });
 
+  it('identifies the Vikunja subscription entity response-schema defect', async () => {
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 422,
+      statusText: 'Unprocessable Entity',
+      text: async () =>
+        JSON.stringify({
+          title: 'Unprocessable Entity',
+          status: 422,
+          detail: 'validation failed',
+          errors: [
+            {
+              location: 'subscription.entity',
+              message: 'expected integer',
+              value: 'task',
+            },
+          ],
+        }),
+    } as Response);
+
+    await expect(
+      client.request('PATCH', '/tasks/702', {
+        body: { done: true },
+      }),
+    ).rejects.toMatchObject({
+      status: 502,
+      code: 'VIKUNJA_SUBSCRIPTION_SCHEMA_BUG',
+      method: 'PATCH',
+      path: '/tasks/702',
+      message: expect.stringContaining('go-vikunja/vikunja/issues/3316'),
+    });
+  });
+
   it('should handle non-JSON error response from server', async () => {
     mockFetch.mockResolvedValue({
       ok: false,

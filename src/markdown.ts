@@ -112,7 +112,7 @@ export function markdownToHtml(md: string): string {
     escaped = escaped.replace(/`([^`]+)`/g, (_, code) => {
       const idx = inlineCodes.length;
       inlineCodes.push(`<code>${code}</code>`);
-      return `@@INLINECODE_${idx}@@`;
+      return `@@INLINECODE${idx}@@`;
     });
 
     // Bold
@@ -148,7 +148,7 @@ export function markdownToHtml(md: string): string {
     }
 
     // Restore inline code
-    escaped = escaped.replace(/@@INLINECODE_(\d+)@@/g, (_, idx) => inlineCodes[Number(idx)]);
+    escaped = escaped.replace(/@@INLINECODE(\d+)@@/g, (_, idx) => inlineCodes[Number(idx)]);
 
     return escaped;
   }

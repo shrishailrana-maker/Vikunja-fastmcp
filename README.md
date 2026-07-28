@@ -112,6 +112,10 @@ Optional:
   `require`; `warn` and `off` are migration options.
 - `VIKUNJA_STATUS_LABEL_PREFIX`: mutually exclusive task-status prefix.
   Defaults to `status:`.
+- `VIKUNJA_IDEMPOTENCY_DB_PATH`: durable SQLite ledger path. Defaults to the
+  operating system's per-user local-state directory, with a separate database
+  name derived from `VIKUNJA_URL`.
+- `VIKUNJA_IDEMPOTENCY_TTL_MS`: durable receipt lifetime. Defaults to 30 days.
 
 Never commit tokens. Rejects `/api/v1` URLs.
 API and browser URLs must use `http://` or `https://`.
@@ -170,8 +174,8 @@ as independent tracker writers.
 - `vikunja_users`
 - `vikunja_teams` — teams/members (`userId` is the Vikunja user id)
 - `vikunja_filters` — create/get/update/delete (**no list**; API has no collection GET)
-- `vikunja_task_bulk` — native bulk update plus bounded create/upsert, delete,
-  assign, and unassign operations with dry-run and idempotency support.
+- `vikunja_task_bulk` — resumable create/upsert, update, delete, assign, and
+  unassign operations with durable per-row receipts, dry-run, and status lookup.
 - `vikunja_task_reminders` — list/add/remove task reminders
 - `vikunja_batch_import` — detect, preview, import, and status for native-fast
   or MCP-idempotent CSV migration.
@@ -183,28 +187,40 @@ as independent tracker writers.
 
 Templates default to `~/.vikunja-fastmcp/templates.json` and may be relocated
 with `VIKUNJA_TEMPLATE_FILE`. Downloads and exports remain inside
-`VIKUNJA_ATTACHMENT_DOWNLOAD_ROOT`. Composed batch create/delete operations are
-bounded to 100 tasks and are not atomic.
+`VIKUNJA_ATTACHMENT_DOWNLOAD_ROOT`. Bulk operations are bounded to 100 tasks,
+are not atomic, and persist a receipt after every row so the same request can
+resume without repeating recorded successes.
 
 Task updates, assignment changes, and label removal return `unchanged` when the
-requested state already exists. `close_with_evidence` accepts an
-`idempotencyKey` so a process-local retry does not duplicate its evidence
-comment.
+requested state already exists. Task create, create-if-absent, comment create,
+attachment upload, evidence-close, and every mutating bulk call require a
+stable `idempotencyKey`. Reusing one key with a different payload is rejected.
+Receipts survive MCP restarts and concurrent local agent processes. They are
+protected by an atomic local execution lease, but are not a distributed lock
+across different machines. The ledger directory is private to the current user
+where the operating system supports POSIX permissions.
 
 Use `upsert` with a stable `externalKey` when a detector or repeated agent run
 must update the same finding instead of creating duplicates. For three or more
 tasks, prefer `vikunja_task_bulk create`; each row can carry its own
-`externalKey`, and the batch can use an `idempotencyKey`. Bulk assign/unassign
-accept `dryRun: true` and report changed, already-correct, and failed counts.
+`externalKey`, and every mutating batch requires an `idempotencyKey`. Bulk
+assign/unassign accept `dryRun: true` and report changed, already-correct, and
+failed counts. Re-run the same payload and key to resume failed rows, or use
+the bulk `status` action with its returned `operationId`.
+An external-key row that updates an existing title or description also carries
+that task's `expectedUpdatedAt`.
 
 Use `appendDescription` to add evidence without replacing the full task
 description. It is mutually exclusive with `description` and preserves a
-stable-key marker as the final line. Project exports fetch comments,
-attachments, or relations only when the matching include flag is enabled.
+stable-key marker as the final line. Replacing a task title or full description
+requires the `updated` value from a fresh `get` as `expectedUpdatedAt`.
+Project exports fetch comments, attachments, or relations only when the
+matching include flag is enabled.
 
-Create, comment, evidence-close, and idempotent-import operations accept
-optional `actor` attribution. `summary` returns project counts by done state,
-priority, label, and configured status label without returning task bodies.
+Create, comment-create/update/delete, close, evidence-close, import, and
+mutating bulk operations require `actor` attribution. `summary` returns project
+counts by done state, priority, label, and configured status label without
+returning task bodies.
 
 `set_status` replaces every task label matching `VIKUNJA_STATUS_LABEL_PREFIX`
 with the requested existing visible label in one bulk-label request. It repairs
@@ -221,12 +237,26 @@ Vikunja permissions still apply per operation. Applying a label may be denied
 even when ordinary task updates are allowed. Some Vikunja builds also require
 JWT/local-password authentication for user-data export routes; the MCP
 preserves the real `401` instead of presenting false JWT advice.
+If Vikunja 2.4 returns `subscription.entity: expected integer` while reading a
+write response, the MCP reports `VIKUNJA_SUBSCRIPTION_SCHEMA_BUG` with the
+[upstream issue](https://github.com/go-vikunja/vikunja/issues/3316). It does
+not silently unsubscribe the user or claim that the token is invalid. For task
+updates, it first reads the task back and reports success only when every
+requested field is visibly applied.
 
 See generated `MCP_API.md` for inputs. Responses contain a Markdown summary
-and one JSON envelope (`ok` or `error`).
-Task write summaries lead with the portal reference and always pair it with the
-global ID, for example `ALPHA-263 (id 451)`; a bare numeric selector still means
-the global ID.
+and one JSON envelope (`ok` or `error`). Task selectors are explicit objects:
+
+```json
+{ "globalId": 451 }
+{ "identifier": "ALPHA-263" }
+{ "projectIndex": 263 }
+```
+
+`projectIndex` also requires `projectSelector`. Bare numbers and strings are
+rejected, which removes the old ambiguity between a global database ID and a
+human project reference. Human-facing output uses the full identifier, while
+structured receipts retain the global ID required by Vikunja URLs and API calls.
 Task lists default to 20 compact items and cap each project page at 100; use
 `countOnly` for totals and pagination for larger result sets. Compact task
 responses retain global ID, portal reference, project identity where needed,
@@ -236,16 +266,18 @@ title, done state, priority, and the creator username when available. Request
 
 ### Operational Limits
 
-- Bulk update/close: 100 global task IDs per call.
+- Bulk update: 100 explicit task selectors per call. Title and description
+  replacements must use individual updates with each task's `expectedUpdatedAt`.
 - Bulk create/upsert: 100 tasks per call; composed, continue-on-error, and
   non-atomic.
-- Bulk assign/unassign: 100 global task IDs per call, with optional dry-run.
-- Bulk delete: 100 task IDs per call; composed, non-atomic, and requires
+- Bulk assign/unassign: 100 explicit task selectors per call, with optional
+  dry-run.
+- Bulk delete: 100 explicit task selectors per call; composed, non-atomic, and requires
   `confirm: true`.
 - CSV import and file transfer: 100 MiB by default through
   `VIKUNJA_MAX_ATTACHMENT_BYTES`. Vikunja controls CSV row limits.
-- Idempotent CSV import: 1,000 rows per call and up to 100 process-local ledger
-  keys. Same-key reruns skip recorded rows. Native migration remains faster.
+- Idempotent CSV import: 1,000 rows per call. Same-key reruns skip rows recorded
+  in the durable local ledger. Native migration remains faster.
 - Multi-project lists page each project independently. Prefer `countOnly`
   when only totals are needed.
 

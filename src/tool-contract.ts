@@ -14,7 +14,9 @@ export interface OperationDoc {
   note?: string;
 }
 
-const taskSelector = ['projectSelector (required for #index; optional guard for PRJ-index)'];
+const taskSelector = [
+  'projectSelector (required with taskSelector.projectIndex; optional guard otherwise)',
+];
 const writeOptions = ['expectedUpdatedAt'];
 
 export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
@@ -37,24 +39,24 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
   vikunja_tasks: [
     {
       action: 'create',
-      required: ['projectSelector', 'fields.title'],
-      optional: ['fields', 'idempotencyKey', 'attachments', 'actor', 'responseMode'],
+      required: ['projectSelector', 'fields.title', 'actor', 'idempotencyKey'],
+      optional: ['fields', 'attachments', 'responseMode'],
       execution: 'Direct POST; MCP-composed when attachments are supplied',
       note: 'For 3 or more tasks use vikunja_task_bulk create instead of repeated create calls.',
     },
     {
       action: 'create_if_absent',
-      required: ['projectSelector', 'fields.title'],
-      optional: ['fields', 'idempotencyKey', 'attachments', 'actor', 'responseMode'],
+      required: ['projectSelector', 'fields.title', 'actor', 'idempotencyKey'],
+      optional: ['fields', 'attachments', 'responseMode'],
       execution: 'MCP-composed exact-title search then optional create/attach',
       note: 'Best-effort duplicate prevention, not a distributed lock.',
     },
     {
       action: 'upsert',
-      required: ['projectSelector', 'fields.title', 'externalKey'],
-      optional: ['fields', 'expectedUpdatedAt', 'actor', 'responseMode'],
+      required: ['projectSelector', 'fields.title', 'externalKey', 'actor'],
+      optional: ['fields', 'expectedUpdatedAt', 'responseMode'],
       execution: 'MCP-composed description-key lookup followed by create or conditional update',
-      note: 'Requires server-side description filtering and never falls back to a full scan.',
+      note: 'Requires server-side description filtering. Updating a matched title/description also requires expectedUpdatedAt.',
     },
     {
       action: 'get',
@@ -65,6 +67,7 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
         'responseMode (compact default; standard task; full bundled detail)',
       ],
       execution: 'Direct compact/standard GET; full mode composes comments and attachments',
+      note: 'taskSelector is exactly one of {globalId}, {identifier}, or {projectIndex}; bare numbers and strings are rejected.',
     },
     {
       action: 'list',
@@ -103,6 +106,7 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
         'responseMode',
       ],
       execution: 'Identity/read preflight followed by RFC 6902 PATCH',
+      note: 'Replacing title or description requires expectedUpdatedAt.',
     },
     {
       action: 'delete',
@@ -112,7 +116,7 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     },
     {
       action: 'close',
-      required: ['taskSelector'],
+      required: ['taskSelector', 'actor'],
       optional: [...taskSelector, 'responseMode'],
       execution: 'Identity/read preflight then task update transport',
     },
@@ -124,8 +128,8 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     },
     {
       action: 'close_with_evidence',
-      required: ['taskSelector', 'evidenceComment'],
-      optional: [...taskSelector, 'idempotencyKey', 'actor', 'responseMode'],
+      required: ['taskSelector', 'evidenceComment', 'actor', 'idempotencyKey'],
+      optional: [...taskSelector, 'responseMode'],
       execution: 'MCP-composed comment create followed by task close',
     },
     {
@@ -194,8 +198,8 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     },
     {
       action: 'attach',
-      required: ['taskSelector', 'filePaths or base64Content+filename'],
-      optional: [...taskSelector, 'mimeType', 'idempotencyKey', 'responseMode'],
+      required: ['taskSelector', 'filePaths or base64Content+filename', 'idempotencyKey'],
+      optional: [...taskSelector, 'mimeType', 'responseMode'],
       execution: 'Multipart POST per file after identity resolution',
     },
     {
@@ -214,8 +218,8 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
   vikunja_task_comments: [
     {
       action: 'create',
-      required: ['taskSelector', 'comment'],
-      optional: [...taskSelector, 'idempotencyKey', 'actor'],
+      required: ['taskSelector', 'comment', 'actor', 'idempotencyKey'],
+      optional: taskSelector,
       execution: 'Direct POST after identity resolution',
     },
     {
@@ -232,13 +236,13 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     },
     {
       action: 'update',
-      required: ['taskSelector', 'commentId', 'comment'],
+      required: ['taskSelector', 'commentId', 'comment', 'actor'],
       optional: taskSelector,
       execution: 'Direct PATCH after identity resolution',
     },
     {
       action: 'delete',
-      required: ['taskSelector', 'commentId'],
+      required: ['taskSelector', 'commentId', 'actor'],
       optional: taskSelector,
       execution: 'Direct DELETE after identity resolution',
     },
@@ -305,34 +309,39 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
   vikunja_task_bulk: [
     {
       action: 'update',
-      required: ['taskIds', 'fields'],
-      optional: ['projectSelector', 'idempotencyKey'],
-      execution: 'Direct PUT /tasks/bulk',
+      required: ['taskSelectors', 'fields', 'actor', 'idempotencyKey'],
+      optional: ['projectSelector'],
+      execution: 'MCP-composed per-task updates with durable row receipts',
+      note: 'Bulk title/description replacement is rejected; use individual optimistic updates.',
     },
     {
       action: 'create',
-      required: ['projectSelector', 'tasks'],
-      optional: ['idempotencyKey'],
-      execution: 'MCP-composed bounded task creates; non-atomic',
-      note: 'Each row may provide externalKey for stable-key upsert; failures do not abort later rows.',
+      required: ['projectSelector', 'tasks', 'actor', 'idempotencyKey'],
+      execution: 'MCP-composed bounded task creates with durable row receipts',
+      note: 'Each row may provide externalKey and expectedUpdatedAt. Repeating the same request resumes failed rows and skips recorded successes.',
     },
     {
       action: 'delete',
-      required: ['taskIds', 'confirm'],
-      optional: ['projectSelector', 'idempotencyKey'],
-      execution: 'MCP-composed verified task deletes; non-atomic',
+      required: ['taskSelectors', 'confirm', 'actor', 'idempotencyKey'],
+      optional: ['projectSelector'],
+      execution: 'MCP-composed verified task deletes with durable row receipts',
     },
     {
       action: 'assign',
-      required: ['taskIds', 'userSelector'],
-      optional: ['projectSelector', 'dryRun', 'idempotencyKey'],
+      required: ['taskSelectors', 'userSelector', 'actor', 'idempotencyKey'],
+      optional: ['projectSelector', 'dryRun'],
       execution: 'Resolve user once, verify each task scope, then compose bounded assignee writes',
     },
     {
       action: 'unassign',
-      required: ['taskIds', 'userSelector'],
-      optional: ['projectSelector', 'dryRun', 'idempotencyKey'],
+      required: ['taskSelectors', 'userSelector', 'actor', 'idempotencyKey'],
+      optional: ['projectSelector', 'dryRun'],
       execution: 'Resolve user once, verify each task scope, then compose bounded assignee deletes',
+    },
+    {
+      action: 'status',
+      required: ['operationId'],
+      execution: 'Read a durable local bulk-operation receipt',
     },
   ],
   vikunja_task_reminders: [
@@ -365,15 +374,14 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     },
     {
       action: 'import',
-      required: ['filePath', 'config'],
+      required: ['filePath', 'config', 'actor'],
       optional: [
         'mode (native default or idempotent)',
         'idempotencyKey (required in idempotent mode)',
         'projectSelector',
-        'actor',
       ],
       execution: 'Direct native migration or MCP-composed row-by-row task creation',
-      note: 'Native mode is fast and non-idempotent; idempotent mode uses a process-local ledger.',
+      note: 'Native mode is fast and non-idempotent; idempotent mode uses the durable local ledger.',
     },
     {
       action: 'status',
@@ -381,7 +389,7 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
         'mode (native default or idempotent)',
         'idempotencyKey (required in idempotent mode)',
       ],
-      execution: 'Direct native GET or compact process-local ledger status',
+      execution: 'Direct native GET or compact durable local ledger status',
     },
   ],
   vikunja_export_project: [

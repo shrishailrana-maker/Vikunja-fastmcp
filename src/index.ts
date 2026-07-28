@@ -81,6 +81,7 @@ import {
   bulkAssignTasks,
   bulkCreateTasks,
   bulkDeleteTasks,
+  getBulkOperationStatus,
   bulkUnassignTasks,
   bulkUpdateTasks,
   listTaskReminders,
@@ -310,17 +311,68 @@ function badRequest(message: string): VikunjaError {
   });
 }
 
+function policyError(code: string, message: string): VikunjaError {
+  return new VikunjaError({
+    status: 400,
+    code,
+    method: 'TOOLS_CALL',
+    path: 'arguments',
+    message,
+    fieldErrors: [],
+  });
+}
+
+function requireActor(actor: string | undefined, action: string): string {
+  if (!actor) {
+    throw policyError('ACTOR_REQUIRED', `actor is required for ${action}.`);
+  }
+  return actor;
+}
+
+function requireIdempotencyKey(key: string | undefined, action: string): string {
+  if (!key) {
+    throw policyError('IDEMPOTENCY_KEY_REQUIRED', `idempotencyKey is required for ${action}.`);
+  }
+  return key;
+}
+
 function hasDefinedValue(value: Record<string, unknown> | undefined): boolean {
   return !!value && Object.values(value).some((field) => field !== undefined);
 }
 
-const actorSchema = z
+const actorValueSchema = z
   .string()
   .trim()
   .min(1)
   .max(80)
-  .regex(/^[\p{L}\p{N} ._-]+$/u, 'actor contains unsupported characters')
-  .optional();
+  .regex(/^[\p{L}\p{N} ._-]+$/u, 'actor contains unsupported characters');
+const actorSchema = actorValueSchema.optional();
+
+const taskSelectorSchema = z.union([
+  z
+    .object({
+      globalId: z.number().int().positive().describe('Vikunja global database task ID.'),
+    })
+    .strict(),
+  z
+    .object({
+      identifier: z
+        .string()
+        .trim()
+        .regex(/^.+-\d+$/)
+        .describe('Full human task identifier, for example ALPHA-517.'),
+    })
+    .strict(),
+  z
+    .object({
+      projectIndex: z
+        .number()
+        .int()
+        .positive()
+        .describe('Project-local task index; projectSelector is also required.'),
+    })
+    .strict(),
+]);
 
 export interface McpToolDefinition {
   name: string;
@@ -446,7 +498,7 @@ export const TOOLS: McpToolDefinition[] = [
         'list-attachments',
         'download-attachment',
       ]),
-      taskSelector: z.union([z.string().trim().min(1), z.number().int().positive()]).optional(),
+      taskSelector: taskSelectorSchema.optional(),
       projectSelector: z
         .object({
           id: z.number().int().positive().optional(),
@@ -506,9 +558,7 @@ export const TOOLS: McpToolDefinition[] = [
       labelTitle: z.union([z.string().trim().min(1), z.number().int().positive()]).optional(),
       statusLabel: z.string().trim().min(1).optional(),
       createIfMissing: z.boolean().optional(),
-      otherTaskSelector: z
-        .union([z.string().trim().min(1), z.number().int().positive()])
-        .optional(),
+      otherTaskSelector: taskSelectorSchema.optional(),
       relationKind: z.string().optional(),
       // Attachment inputs. `attach` accepts local `filePaths` and/or a single
       // base64 file (filename + optional mimeType + base64Content). `create` and
@@ -553,6 +603,8 @@ export const TOOLS: McpToolDefinition[] = [
           if (!args.projectSelector) throw badRequest('projectSelector is required for summary.');
           return projectSummary(client, args.projectSelector);
         case 'create':
+          requireActor(args.actor, 'task creation');
+          requireIdempotencyKey(args.idempotencyKey, 'task creation');
           if (!args.projectSelector) throw badRequest('projectSelector is required for create.');
           if (!args.fields?.title) throw badRequest('fields.title is required for create.');
           return createTask(
@@ -570,6 +622,8 @@ export const TOOLS: McpToolDefinition[] = [
             args.actor,
           );
         case 'create_if_absent':
+          requireActor(args.actor, 'task creation');
+          requireIdempotencyKey(args.idempotencyKey, 'task creation');
           if (!args.projectSelector) throw badRequest('projectSelector is required.');
           if (!args.fields?.title) throw badRequest('fields.title is required.');
           return createIfAbsent(
@@ -587,6 +641,7 @@ export const TOOLS: McpToolDefinition[] = [
             args.actor,
           );
         case 'upsert':
+          requireActor(args.actor, 'task upsert');
           if (!args.projectSelector) throw badRequest('projectSelector is required for upsert.');
           if (!args.fields?.title) throw badRequest('fields.title is required for upsert.');
           if (!args.externalKey) throw badRequest('externalKey is required for upsert.');
@@ -618,6 +673,15 @@ export const TOOLS: McpToolDefinition[] = [
           if (!hasDefinedValue(args.fields)) {
             throw badRequest('At least one task field is required for update.');
           }
+          if (
+            (args.fields.title !== undefined || args.fields.description !== undefined) &&
+            !args.expectedUpdatedAt
+          ) {
+            throw policyError(
+              'EXPECTED_UPDATED_AT_REQUIRED',
+              'expectedUpdatedAt is required when replacing a task title or description.',
+            );
+          }
           return updateTask(
             client,
             args.taskSelector,
@@ -636,12 +700,18 @@ export const TOOLS: McpToolDefinition[] = [
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
           return deleteTask(client, args.taskSelector, args.projectSelector);
         case 'close':
+          requireActor(args.actor, 'task close');
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
-          return updateTask(client, args.taskSelector, { done: true }, args.projectSelector);
+          return {
+            ...(await updateTask(client, args.taskSelector, { done: true }, args.projectSelector)),
+            actor: args.actor,
+          };
         case 'reopen':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
           return updateTask(client, args.taskSelector, { done: false }, args.projectSelector);
         case 'close_with_evidence':
+          requireActor(args.actor, 'task close');
+          requireIdempotencyKey(args.idempotencyKey, 'close_with_evidence');
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
           if (!args.evidenceComment) throw badRequest('evidenceComment is required.');
           return closeWithEvidence(
@@ -710,6 +780,7 @@ export const TOOLS: McpToolDefinition[] = [
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
           return listRelations(client, args.taskSelector, args.projectSelector, args.responseMode);
         case 'attach': {
+          requireIdempotencyKey(args.idempotencyKey, 'attachment upload');
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
           const files: AttachFileSpec[] = [];
           if (Array.isArray(args.filePaths)) {
@@ -760,7 +831,7 @@ export const TOOLS: McpToolDefinition[] = [
     description: 'Manage task comments (create, list, get, update, delete).',
     inputSchema: z.object({
       action: z.enum(['create', 'list', 'get', 'update', 'delete']),
-      taskSelector: z.union([z.string().trim().min(1), z.number().int().positive()]),
+      taskSelector: taskSelectorSchema,
       projectSelector: z
         .object({
           id: z.number().int().positive().optional(),
@@ -777,6 +848,8 @@ export const TOOLS: McpToolDefinition[] = [
     handler: async (args, client) => {
       switch (args.action) {
         case 'create':
+          requireActor(args.actor, 'comment creation');
+          requireIdempotencyKey(args.idempotencyKey, 'comment creation');
           if (!args.comment) throw badRequest('comment text is required.');
           return createComment(
             client,
@@ -798,6 +871,7 @@ export const TOOLS: McpToolDefinition[] = [
           if (!args.commentId) throw badRequest('commentId is required.');
           return getComment(client, args.taskSelector, args.commentId, args.projectSelector);
         case 'update':
+          requireActor(args.actor, 'comment update');
           if (!args.commentId) throw badRequest('commentId is required.');
           if (!args.comment) throw badRequest('comment text is required.');
           return updateComment(
@@ -806,10 +880,18 @@ export const TOOLS: McpToolDefinition[] = [
             args.commentId,
             args.comment,
             args.projectSelector,
+            args.actor,
           );
         case 'delete':
+          requireActor(args.actor, 'comment deletion');
           if (!args.commentId) throw badRequest('commentId is required.');
-          return deleteComment(client, args.taskSelector, args.commentId, args.projectSelector);
+          return deleteComment(
+            client,
+            args.taskSelector,
+            args.commentId,
+            args.projectSelector,
+            args.actor,
+          );
         default:
           throw badRequest(`Unknown comments action: ${args.action}`);
       }
@@ -1035,10 +1117,10 @@ export const TOOLS: McpToolDefinition[] = [
   {
     name: 'vikunja_task_bulk',
     description:
-      'Preferred way to create or upsert several tasks in one call. Also supports bounded update, delete, assign, and unassign batches.',
+      'Preferred way to create or upsert several tasks in one call. Supports durable resumable update, delete, assign, and unassign batches plus status lookup.',
     inputSchema: z.object({
-      action: z.enum(['update', 'create', 'delete', 'assign', 'unassign']),
-      taskIds: z.array(z.number().int().positive()).min(1).max(100).optional(),
+      action: z.enum(['update', 'create', 'delete', 'assign', 'unassign', 'status']),
+      taskSelectors: z.array(taskSelectorSchema).min(1).max(100).optional(),
       projectSelector: z
         .object({
           id: z.number().int().positive().optional(),
@@ -1063,6 +1145,7 @@ export const TOOLS: McpToolDefinition[] = [
             priority: z.number().int().min(0).max(5).optional(),
             dueDate: z.string().nullable().optional(),
             externalKey: z.string().regex(EXTERNAL_KEY_PATTERN).optional(),
+            expectedUpdatedAt: z.string().optional(),
           }),
         )
         .min(1)
@@ -1071,55 +1154,97 @@ export const TOOLS: McpToolDefinition[] = [
       userSelector: z.union([z.string().trim().min(1), z.number().int().positive()]).optional(),
       dryRun: z.boolean().optional(),
       idempotencyKey: z.string().trim().min(1).max(200).optional(),
+      operationId: z.string().trim().min(1).max(120).optional(),
+      actor: actorSchema,
       confirm: z.boolean().optional(),
     }),
     handler: async (args, client) => {
+      if (args.action === 'status') {
+        if (!args.operationId) throw badRequest('operationId is required for bulk status.');
+        return getBulkOperationStatus(args.operationId);
+      }
+      requireActor(args.actor, `bulk ${args.action}`);
+      if (!args.idempotencyKey) {
+        throw policyError(
+          'IDEMPOTENCY_KEY_REQUIRED',
+          `idempotencyKey is required for bulk ${args.action}.`,
+        );
+      }
       switch (args.action) {
         case 'update':
-          if (!args.taskIds) throw badRequest('taskIds is required for bulk update.');
+          if (!args.taskSelectors) {
+            throw badRequest('taskSelectors is required for bulk update.');
+          }
           if (!args.fields) throw badRequest('fields is required for bulk update.');
+          if (args.fields.title !== undefined || args.fields.description !== undefined) {
+            throw policyError(
+              'EXPECTED_UPDATED_AT_REQUIRED',
+              'Bulk replacement of title or description is disabled because each task requires its own expectedUpdatedAt. Use individual update calls.',
+            );
+          }
           return bulkUpdateTasks(
             client,
-            args.taskIds,
+            args.taskSelectors,
             args.fields,
             args.projectSelector,
             args.idempotencyKey,
+            args.actor,
           );
         case 'create':
           if (!args.projectSelector) {
             throw badRequest('projectSelector is required for bulk create.');
           }
           if (!args.tasks) throw badRequest('tasks is required for bulk create.');
-          return bulkCreateTasks(client, args.projectSelector, args.tasks, args.idempotencyKey);
+          return bulkCreateTasks(
+            client,
+            args.projectSelector,
+            args.tasks,
+            args.idempotencyKey,
+            args.actor,
+          );
         case 'delete':
-          if (!args.taskIds) throw badRequest('taskIds is required for bulk delete.');
+          if (!args.taskSelectors) {
+            throw badRequest('taskSelectors is required for bulk delete.');
+          }
           if (args.confirm !== true) throw badRequest('confirm=true is required for bulk delete.');
-          return bulkDeleteTasks(client, args.taskIds, args.projectSelector, args.idempotencyKey);
+          return bulkDeleteTasks(
+            client,
+            args.taskSelectors,
+            args.projectSelector,
+            args.idempotencyKey,
+            args.actor,
+          );
         case 'assign':
-          if (!args.taskIds) throw badRequest('taskIds is required for bulk assign.');
+          if (!args.taskSelectors) {
+            throw badRequest('taskSelectors is required for bulk assign.');
+          }
           if (args.userSelector === undefined) {
             throw badRequest('userSelector is required for bulk assign.');
           }
           return bulkAssignTasks(
             client,
-            args.taskIds,
+            args.taskSelectors,
             args.userSelector,
             args.projectSelector,
             args.dryRun ?? false,
             args.idempotencyKey,
+            args.actor,
           );
         case 'unassign':
-          if (!args.taskIds) throw badRequest('taskIds is required for bulk unassign.');
+          if (!args.taskSelectors) {
+            throw badRequest('taskSelectors is required for bulk unassign.');
+          }
           if (args.userSelector === undefined) {
             throw badRequest('userSelector is required for bulk unassign.');
           }
           return bulkUnassignTasks(
             client,
-            args.taskIds,
+            args.taskSelectors,
             args.userSelector,
             args.projectSelector,
             args.dryRun ?? false,
             args.idempotencyKey,
+            args.actor,
           );
         default:
           throw badRequest(`Unknown bulk action: ${args.action}`);
@@ -1131,7 +1256,7 @@ export const TOOLS: McpToolDefinition[] = [
     description: 'List, add, or remove reminders stored on a task.',
     inputSchema: z.object({
       action: z.enum(['list', 'add', 'remove']),
-      taskSelector: z.union([z.string().trim().min(1), z.number().int().positive()]),
+      taskSelector: taskSelectorSchema,
       projectSelector: z
         .object({
           id: z.number().int().positive().optional(),
@@ -1211,6 +1336,7 @@ export const TOOLS: McpToolDefinition[] = [
             )
           : previewCsvImport(client, args.filePath, args.config);
       }
+      requireActor(args.actor, 'CSV import');
       if (mode === 'idempotent') {
         if (!args.idempotencyKey) {
           throw badRequest('idempotencyKey is required for idempotent import mode.');
@@ -1227,6 +1353,7 @@ export const TOOLS: McpToolDefinition[] = [
       return {
         mode: 'native',
         idempotent: false,
+        actor: args.actor,
         ...(await startCsvImport(client, args.filePath, args.config)),
       };
     },
@@ -1442,15 +1569,17 @@ function enforceToolMutationScope(
   } else if (
     name === 'vikunja_task_bulk' &&
     ['update', 'delete', 'assign', 'unassign'].includes(args.action) &&
-    Array.isArray(args.taskIds) &&
-    args.taskIds.length > 0
+    Array.isArray(args.taskSelectors) &&
+    args.taskSelectors.length > 0
   ) {
-    enforceMutationProjectScope(
-      mode,
-      `${name}.${args.action} (${args.taskIds.length} tasks)`,
-      args.taskIds[0],
-      args.projectSelector,
-    );
+    for (const selector of args.taskSelectors) {
+      enforceMutationProjectScope(
+        mode,
+        `${name}.${args.action} (${args.taskSelectors.length} tasks)`,
+        selector,
+        args.projectSelector,
+      );
+    }
   }
 }
 

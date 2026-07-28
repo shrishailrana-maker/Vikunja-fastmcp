@@ -10,9 +10,9 @@
  */
 
 import { VikunjaApiClient } from './api.js';
-import { resolveTask } from './identity.js';
+import { resolveTaskInput as resolveTask, type TaskSelectorInput } from './identity.js';
 import { htmlToMarkdown, markdownToHtml, normalizePagination, toItemArray } from './format.js';
-import { idempotency } from './idempotency.js';
+import { runDurableOperation } from './idempotency.js';
 import { withActorAttribution } from './mutation-policy.js';
 
 export interface Comment {
@@ -27,50 +27,40 @@ export interface Comment {
 
 export async function createComment(
   client: VikunjaApiClient,
-  taskSelector: string | number,
+  taskSelector: TaskSelectorInput,
   comment: string,
   projectSelector?: { id?: number; title?: string },
   idempotencyKey?: string,
   actor?: string,
 ): Promise<Comment> {
-  const projectKey = projectSelector?.id ?? projectSelector?.title?.toLowerCase() ?? 'global';
-  const cacheKey = idempotencyKey
-    ? `comment-create:${projectKey}:${String(taskSelector).trim()}:${idempotencyKey}`
-    : '';
+  const payload = { taskSelector, projectSelector, comment, actor };
+  const execute = async (): Promise<Comment> => {
+    const task = await resolveTask(client, taskSelector, projectSelector);
+    const htmlComment = markdownToHtml(withActorAttribution(comment, actor)!);
+    const path = `/tasks/${task.id}/comments`;
+    const rawComment = await client.request<any>('POST', path, {
+      body: { comment: htmlComment },
+    });
 
-  if (cacheKey) {
-    const cached = idempotency.get(cacheKey);
-    if (cached) return cached;
-  }
-
-  const task = await resolveTask(client, taskSelector, projectSelector);
-
-  const htmlComment = markdownToHtml(withActorAttribution(comment, actor)!);
-  const path = `/tasks/${task.id}/comments`;
-  const rawComment = await client.request<any>('POST', path, {
-    body: { comment: htmlComment },
-  });
-
-  const normalized: Comment = {
-    id: rawComment.id,
-    comment: htmlToMarkdown(rawComment.comment),
-    author: {
-      id: rawComment.author?.id,
-      username: rawComment.author?.username || 'unknown',
-    },
-    created: rawComment.created,
+    return {
+      id: rawComment.id,
+      comment: htmlToMarkdown(rawComment.comment),
+      author: {
+        id: rawComment.author?.id,
+        username: rawComment.author?.username || 'unknown',
+      },
+      created: rawComment.created,
+    };
   };
 
-  if (cacheKey) {
-    idempotency.set(cacheKey, normalized);
-  }
-
-  return normalized;
+  return idempotencyKey
+    ? runDurableOperation('comment-create', idempotencyKey, payload, execute)
+    : execute();
 }
 
 export async function listComments(
   client: VikunjaApiClient,
-  taskSelector: string | number,
+  taskSelector: TaskSelectorInput,
   projectSelector?: { id?: number; title?: string },
   page = 1,
   perPage = 20,
@@ -99,7 +89,7 @@ export async function listComments(
 
 export async function getComment(
   client: VikunjaApiClient,
-  taskSelector: string | number,
+  taskSelector: TaskSelectorInput,
   commentId: number,
   projectSelector?: { id?: number; title?: string },
 ): Promise<Comment> {
@@ -119,13 +109,14 @@ export async function getComment(
 
 export async function updateComment(
   client: VikunjaApiClient,
-  taskSelector: string | number,
+  taskSelector: TaskSelectorInput,
   commentId: number,
   comment: string,
   projectSelector?: { id?: number; title?: string },
+  actor?: string,
 ): Promise<Comment> {
   const task = await resolveTask(client, taskSelector, projectSelector);
-  const htmlComment = markdownToHtml(comment);
+  const htmlComment = markdownToHtml(withActorAttribution(comment, actor)!);
 
   // Prefer PATCH for partial comment updates (OpenAPI also offers PUT).
   const c = await client.request<any>('PATCH', `/tasks/${task.id}/comments/${commentId}`, {
@@ -146,15 +137,17 @@ export async function updateComment(
 
 export async function deleteComment(
   client: VikunjaApiClient,
-  taskSelector: string | number,
+  taskSelector: TaskSelectorInput,
   commentId: number,
   projectSelector?: { id?: number; title?: string },
-): Promise<{ ok: boolean; commentId: number }> {
+  actor?: string,
+): Promise<{ ok: boolean; commentId: number; actor?: string }> {
   const task = await resolveTask(client, taskSelector, projectSelector);
   await client.request<any>('DELETE', `/tasks/${task.id}/comments/${commentId}`);
 
   return {
     ok: true,
     commentId,
+    actor,
   };
 }

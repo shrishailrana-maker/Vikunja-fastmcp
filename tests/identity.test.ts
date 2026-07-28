@@ -189,7 +189,7 @@ describe('Identity and Resolution Cache tests', () => {
   });
 
   describe('resolveTask', () => {
-    it('should resolve global task ID without project context', async () => {
+    it('resolves an explicit globalId selector without project context', async () => {
       mockFetch.mockResolvedValue({
         ok: true,
         status: 200,
@@ -203,7 +203,7 @@ describe('Identity and Resolution Cache tests', () => {
           }),
       } as Response);
 
-      const ref = await resolveTask(client, 9005);
+      const ref = await resolveTask(client, { globalId: 9005 });
       expect(ref).toEqual({
         id: 9005,
         index: 305,
@@ -230,7 +230,7 @@ describe('Identity and Resolution Cache tests', () => {
         text: async () => JSON.stringify({ id: 101, title: 'Alpha' }),
       } as Response);
 
-      const ref = await resolveTask(client, 9005);
+      const ref = await resolveTask(client, { globalId: 9005 });
       expect(ref.project).toEqual({ id: 101, title: 'Alpha' });
       expect(mockFetch.mock.calls[1][0]).toContain('/projects/101');
     });
@@ -257,7 +257,7 @@ describe('Identity and Resolution Cache tests', () => {
         text: async () => JSON.stringify({ id: 102, title: 'Beta' }),
       } as Response);
 
-      await expect(resolveTask(client, 9005, { id: 102 })).rejects.toThrow(
+      await expect(resolveTask(client, { globalId: 9005 }, { id: 102 })).rejects.toThrow(
         expect.objectContaining({
           status: 400,
           code: 'PROJECT_MISMATCH',
@@ -265,13 +265,23 @@ describe('Identity and Resolution Cache tests', () => {
       );
     });
 
-    it('should require project context for #index reference', async () => {
-      await expect(resolveTask(client, '#305')).rejects.toThrow(
+    it('requires project context for an explicit projectIndex selector', async () => {
+      await expect(resolveTask(client, { projectIndex: 305 })).rejects.toThrow(
         expect.objectContaining({
           status: 400,
           code: 'PROJECT_CONTEXT_REQUIRED',
         }),
       );
+    });
+
+    it('rejects legacy bare numeric and string selectors', async () => {
+      await expect(resolveTask(client, 9005 as any)).rejects.toMatchObject({
+        code: 'INVALID_TASK_SELECTOR',
+      });
+      await expect(resolveTask(client, 'ALPHA-517' as any)).rejects.toMatchObject({
+        code: 'INVALID_TASK_SELECTOR',
+      });
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it('resolves ALPHA-517 from its project identifier without project context', async () => {
@@ -296,7 +306,7 @@ describe('Identity and Resolution Cache tests', () => {
           ),
         );
 
-      await expect(resolveTask(client, 'ALPHA-517')).resolves.toMatchObject({
+      await expect(resolveTask(client, { identifier: 'ALPHA-517' })).resolves.toMatchObject({
         id: 9005,
         identifier: 'ALPHA-517',
         project: { id: 101, title: 'Alpha' },
@@ -325,7 +335,7 @@ describe('Identity and Resolution Cache tests', () => {
           ),
         );
 
-      await expect(resolveTask(client, 'BETA-517')).resolves.toMatchObject({
+      await expect(resolveTask(client, { identifier: 'BETA-517' })).resolves.toMatchObject({
         id: 9006,
         identifier: 'BETA-517',
         project: { id: 102, title: 'Beta' },
@@ -349,7 +359,7 @@ describe('Identity and Resolution Cache tests', () => {
           ),
         );
 
-      await expect(resolveTask(client, 'alpha-517')).resolves.toMatchObject({
+      await expect(resolveTask(client, { identifier: 'alpha-517' })).resolves.toMatchObject({
         id: 9005,
         identifier: 'ALPHA-517',
       });
@@ -360,7 +370,7 @@ describe('Identity and Resolution Cache tests', () => {
         jsonResponse(projectPage([{ id: 101, title: 'Alpha', identifier: 'ALPHA' }])),
       );
 
-      await expect(resolveTask(client, 'NOSUCH-1')).rejects.toMatchObject({
+      await expect(resolveTask(client, { identifier: 'NOSUCH-1' })).rejects.toMatchObject({
         status: 400,
         code: 'UNKNOWN_PROJECT_IDENTIFIER',
       });
@@ -377,7 +387,7 @@ describe('Identity and Resolution Cache tests', () => {
         ),
       );
 
-      await expect(resolveTask(client, 'ALPHA-1')).rejects.toMatchObject({
+      await expect(resolveTask(client, { identifier: 'ALPHA-1' })).rejects.toMatchObject({
         status: 400,
         code: 'AMBIGUOUS_PROJECT_IDENTIFIER',
         message: expect.stringContaining('Alpha Archive'),
@@ -394,7 +404,9 @@ describe('Identity and Resolution Cache tests', () => {
         ),
       );
 
-      await expect(resolveTask(client, 'ALPHA-517', { title: 'Beta' })).rejects.toMatchObject({
+      await expect(
+        resolveTask(client, { identifier: 'ALPHA-517' }, { title: 'Beta' }),
+      ).rejects.toMatchObject({
         status: 400,
         code: 'PROJECT_SCOPE_MISMATCH',
         message: expect.stringContaining('Beta'),
@@ -402,7 +414,7 @@ describe('Identity and Resolution Cache tests', () => {
       expect(mockFetch).toHaveBeenCalledTimes(1);
     });
 
-    it('keeps bare numeric selectors as global database IDs', async () => {
+    it('resolves an explicit globalId without treating it as a project index', async () => {
       mockFetch.mockResolvedValueOnce(
         jsonResponse({
           id: 517,
@@ -414,7 +426,7 @@ describe('Identity and Resolution Cache tests', () => {
         }),
       );
 
-      await expect(resolveTask(client, 517)).resolves.toMatchObject({
+      await expect(resolveTask(client, { globalId: 517 })).resolves.toMatchObject({
         id: 517,
         index: 1,
         project: { id: 1, title: 'Inbox' },
@@ -450,8 +462,8 @@ describe('Identity and Resolution Cache tests', () => {
           ),
         );
 
-      await resolveTask(client, 'ALPHA-517');
-      await resolveTask(client, 'ALPHA-518');
+      await resolveTask(client, { identifier: 'ALPHA-517' });
+      await resolveTask(client, { identifier: 'ALPHA-518' });
 
       const projectListCalls = mockFetch.mock.calls.filter(([url]: [string]) =>
         url.includes('/projects?'),
@@ -495,7 +507,7 @@ describe('Identity and Resolution Cache tests', () => {
           }),
       } as Response);
 
-      const ref = await resolveTask(client, '#305', { title: 'Beta' });
+      const ref = await resolveTask(client, { projectIndex: 305 }, { title: 'Beta' });
       expect(ref).toEqual({
         id: 9005,
         index: 305,
@@ -549,7 +561,9 @@ describe('Identity and Resolution Cache tests', () => {
             }),
         } as Response);
 
-      await expect(resolveTask(client, 'beta-305', { id: 102 })).resolves.toMatchObject({
+      await expect(
+        resolveTask(client, { identifier: 'beta-305' }, { id: 102 }),
+      ).resolves.toMatchObject({
         id: 9005,
       });
     });

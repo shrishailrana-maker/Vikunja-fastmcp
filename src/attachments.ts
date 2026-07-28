@@ -10,14 +10,15 @@
  */
 
 import { VikunjaApiClient } from './api.js';
-import { resolveTask } from './identity.js';
+import { resolveTaskInput as resolveTask, type TaskSelectorInput } from './identity.js';
 import { redactSecrets, VikunjaError } from './errors.js';
-import { idempotency } from './idempotency.js';
+import { runDurableOperation } from './idempotency.js';
 import { DEFAULT_MAX_ATTACHMENT_BYTES } from './config.js';
 import { toItemArray } from './format.js';
 import path from 'path';
 import fs from 'fs/promises';
 import crypto from 'crypto';
+import { createReadStream } from 'node:fs';
 
 export interface AttachmentInfo {
   id: number;
@@ -222,78 +223,64 @@ export async function openSafeDestination(root: string, target: string, overwrit
 
 export async function uploadAttachment(
   client: VikunjaApiClient,
-  taskSelector: string | number,
+  taskSelector: TaskSelectorInput,
   filename: string,
   mimeType: string,
   base64Content: string,
   projectSelector?: { id?: number; title?: string },
   idempotencyKey?: string,
 ): Promise<AttachmentInfo> {
-  const projectKey = projectSelector?.id ?? projectSelector?.title?.toLowerCase() ?? 'global';
-  const cacheKey = idempotencyKey
-    ? `attachment-upload:${projectKey}:${String(taskSelector).trim()}:${filename}:${idempotencyKey}`
-    : '';
-  if (cacheKey) {
-    const cached = idempotency.get(cacheKey);
-    if (cached) return cached;
-  }
-
-  const task = await resolveTask(client, taskSelector, projectSelector);
-
-  if (!filename || filename.trim() === '') {
-    throw new VikunjaError({
-      status: 400,
-      code: 'INVALID_FILENAME',
-      method: 'POST',
-      path: `/tasks/${task.id}/attachments`,
-      message: 'Filename cannot be undefined or empty.',
-      fieldErrors: [],
-    });
-  }
-
-  if (!mimeType || mimeType.trim() === '') {
-    throw new VikunjaError({
-      status: 400,
-      code: 'INVALID_MIME_TYPE',
-      method: 'POST',
-      path: `/tasks/${task.id}/attachments`,
-      message: 'Mime-type cannot be undefined or empty.',
-      fieldErrors: [],
-    });
-  }
-
-  if (!base64Content || base64Content.trim() === '') {
-    throw new VikunjaError({
-      status: 400,
-      code: 'INVALID_CONTENT',
-      method: 'POST',
-      path: `/tasks/${task.id}/attachments`,
-      message: 'Base64 content cannot be undefined or empty.',
-      fieldErrors: [],
-    });
-  }
-
-  // Reject an oversized payload from its encoded length before allocating a
-  // (potentially huge) decode buffer.
-  assertWithinSizeLimit(
-    client,
+  const payload = {
+    taskSelector,
+    projectSelector,
     filename,
-    estimatedBase64Bytes(base64Content),
-    `/tasks/${task.id}/attachments`,
-  );
+    mimeType,
+    contentHash: crypto.createHash('sha256').update(base64Content).digest('hex'),
+  };
+  const execute = async (): Promise<AttachmentInfo> => {
+    const task = await resolveTask(client, taskSelector, projectSelector);
+    const pathUrl = `/tasks/${task.id}/attachments`;
 
-  const fileBuffer = decodeBase64(base64Content, `/tasks/${task.id}/attachments`);
+    if (!filename || filename.trim() === '') {
+      throw new VikunjaError({
+        status: 400,
+        code: 'INVALID_FILENAME',
+        method: 'POST',
+        path: pathUrl,
+        message: 'Filename cannot be undefined or empty.',
+        fieldErrors: [],
+      });
+    }
+    if (!mimeType || mimeType.trim() === '') {
+      throw new VikunjaError({
+        status: 400,
+        code: 'INVALID_MIME_TYPE',
+        method: 'POST',
+        path: pathUrl,
+        message: 'Mime-type cannot be undefined or empty.',
+        fieldErrors: [],
+      });
+    }
+    if (!base64Content || base64Content.trim() === '') {
+      throw new VikunjaError({
+        status: 400,
+        code: 'INVALID_CONTENT',
+        method: 'POST',
+        path: pathUrl,
+        message: 'Base64 content cannot be undefined or empty.',
+        fieldErrors: [],
+      });
+    }
 
-  // Reject anything over the configured ceiling before sending it upstream.
-  assertWithinSizeLimit(client, filename, fileBuffer.length, `/tasks/${task.id}/attachments`);
+    assertWithinSizeLimit(client, filename, estimatedBase64Bytes(base64Content), pathUrl);
+    const fileBuffer = decodeBase64(base64Content, pathUrl);
+    assertWithinSizeLimit(client, filename, fileBuffer.length, pathUrl);
+    return uploadBufferToTask(client, task.id, filename, mimeType, fileBuffer);
+  };
 
-  const normalized = await uploadBufferToTask(client, task.id, filename, mimeType, fileBuffer);
-
-  if (cacheKey) {
-    idempotency.set(cacheKey, normalized);
-  }
-
-  return normalized;
+  return idempotencyKey
+    ? runDurableOperation('attachment-upload', idempotencyKey, payload, execute)
+    : execute();
 }
 
 // Throw a 413 when a single attachment exceeds the configured size ceiling.
@@ -386,6 +373,31 @@ export interface AttachResult {
   failed: { file: string; error: string }[];
 }
 
+async function attachmentPayload(files: AttachFileSpec[]): Promise<unknown[]> {
+  return Promise.all(
+    files.map(async (file) => {
+      let contentHash: string | undefined;
+      if (file.base64Content !== undefined) {
+        contentHash = crypto.createHash('sha256').update(file.base64Content).digest('hex');
+      } else if (file.filePath) {
+        try {
+          const hash = crypto.createHash('sha256');
+          for await (const chunk of createReadStream(file.filePath)) hash.update(chunk);
+          contentHash = hash.digest('hex');
+        } catch (error: any) {
+          contentHash = `unreadable:${error?.code ?? 'error'}`;
+        }
+      }
+      return {
+        filePath: file.filePath,
+        filename: file.filename,
+        mimeType: file.mimeType,
+        contentHash,
+      };
+    }),
+  );
+}
+
 // Turn one spec into an in-memory buffer plus its filename and MIME type.
 async function materializeFile(
   client: VikunjaApiClient,
@@ -440,7 +452,7 @@ async function materializeFile(
 // result honestly separates uploaded metadata from per-file failures.
 export async function attachFiles(
   client: VikunjaApiClient,
-  taskSelector: string | number,
+  taskSelector: TaskSelectorInput,
   files: AttachFileSpec[],
   projectSelector?: { id?: number; title?: string },
   idempotencyKey?: string,
@@ -457,56 +469,56 @@ export async function attachFiles(
   }
 
   const task = await resolveTask(client, taskSelector, projectSelector);
-  const cacheKey = idempotencyKey ? `attach:${task.id}:${idempotencyKey}` : '';
-  if (cacheKey) {
-    const cached = idempotency.get(cacheKey);
-    if (cached) return cached;
-  }
-  const pathUrl = `/tasks/${task.id}/attachments`;
-  const uploaded: AttachmentInfo[] = [];
-  const failed: { file: string; error: string }[] = [];
+  const payload = {
+    taskId: task.id,
+    files: idempotencyKey ? await attachmentPayload(files) : [],
+  };
+  const execute = async (): Promise<AttachResult> => {
+    const pathUrl = `/tasks/${task.id}/attachments`;
+    const uploaded: AttachmentInfo[] = [];
+    const failed: { file: string; error: string }[] = [];
 
-  for (const spec of files) {
-    const label = spec.filePath || spec.filename || 'unnamed';
-    try {
-      // Bound base64 payloads before decoding them into a Buffer.
-      if (spec.base64Content !== undefined) {
-        assertWithinSizeLimit(client, label, estimatedBase64Bytes(spec.base64Content), pathUrl);
-      }
-      const { filename, mimeType, buffer } = await materializeFile(client, spec, pathUrl);
-      if (buffer.length === 0) {
-        throw new VikunjaError({
-          status: 400,
-          code: 'INVALID_CONTENT',
-          method: 'POST',
-          path: pathUrl,
-          message: `Attachment "${label}" is empty.`,
-          fieldErrors: [],
+    for (const spec of files) {
+      const label = spec.filePath || spec.filename || 'unnamed';
+      try {
+        if (spec.base64Content !== undefined) {
+          assertWithinSizeLimit(client, label, estimatedBase64Bytes(spec.base64Content), pathUrl);
+        }
+        const { filename, mimeType, buffer } = await materializeFile(client, spec, pathUrl);
+        if (buffer.length === 0) {
+          throw new VikunjaError({
+            status: 400,
+            code: 'INVALID_CONTENT',
+            method: 'POST',
+            path: pathUrl,
+            message: `Attachment "${label}" is empty.`,
+            fieldErrors: [],
+          });
+        }
+        assertWithinSizeLimit(client, filename, buffer.length, pathUrl);
+        uploaded.push(await uploadBufferToTask(client, task.id, filename, mimeType, buffer));
+      } catch (err: any) {
+        failed.push({
+          file: label,
+          error: redactSecrets(err.message || 'Upload failed', client.getConfig().vikunjaToken),
         });
       }
-      assertWithinSizeLimit(client, filename, buffer.length, pathUrl);
-      uploaded.push(await uploadBufferToTask(client, task.id, filename, mimeType, buffer));
-    } catch (err: any) {
-      failed.push({
-        file: label,
-        error: redactSecrets(err.message || 'Upload failed', client.getConfig().vikunjaToken),
-      });
     }
-  }
 
-  const result: AttachResult = {
-    task: {
-      id: task.id,
-      portalRef: task.identifier || `#${task.index}`,
-      title: task.title,
-    },
-    uploaded,
-    failed,
+    return {
+      task: {
+        id: task.id,
+        portalRef: task.identifier || `#${task.index}`,
+        title: task.title,
+      },
+      uploaded,
+      failed,
+    };
   };
-  if (cacheKey) {
-    idempotency.set(cacheKey, result);
-  }
-  return result;
+
+  return idempotencyKey
+    ? runDurableOperation('attach', idempotencyKey, payload, execute)
+    : execute();
 }
 
 export interface DownloadResult {
@@ -524,7 +536,7 @@ export interface DownloadResult {
 
 export async function downloadAttachment(
   client: VikunjaApiClient,
-  taskSelector: string | number,
+  taskSelector: TaskSelectorInput,
   attachmentId: number,
   destinationPath?: string,
   projectSelector?: { id?: number; title?: string },
@@ -662,7 +674,7 @@ export async function downloadAttachment(
 
 export async function listAttachments(
   client: VikunjaApiClient,
-  taskSelector: string | number,
+  taskSelector: TaskSelectorInput,
   projectSelector?: { id?: number; title?: string },
 ): Promise<AttachmentInfo[]> {
   const task = await resolveTask(client, taskSelector, projectSelector);

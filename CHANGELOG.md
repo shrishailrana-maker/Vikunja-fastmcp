@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+- Replace overloaded numeric/string task inputs with explicit `{globalId}`,
+  `{identifier}`, or `{projectIndex}` selectors; bare values are rejected.
+- Persist idempotency receipts in a SQLite/WAL ledger for 30 days by default,
+  surviving MCP restarts and concurrent local agent processes.
+- Bind caller idempotency keys to one payload and reject conflicting reuse.
+- Prevent concurrent same-key writes on one machine with atomic SQLite
+  execution leases and scope default ledger files to `VIKUNJA_URL`.
+- Add durable per-row bulk receipts, resumable retries, and bulk operation
+  status lookup; successful rows are not repeated.
+- Require actor attribution for task creation, every comment mutation, closing,
+  imports, and mutating bulk operations.
+- Require `expectedUpdatedAt` for title or full-description replacements and
+  for matched upserts that replace either field.
+- Diagnose Vikunja's `subscription.entity: expected integer` response defect
+  as `VIKUNJA_SUBSCRIPTION_SCHEMA_BUG` with its upstream issue, without
+  misreporting authentication or silently changing subscriptions.
+- Recover a task update from that upstream response defect only when a fresh
+  readback proves every requested field was applied.
+- Update the packaged skill and public API guidance for explicit identity,
+  durable receipts, safe retries, and optimistic replacement updates.
+- Preserve inline code containing underscores during Markdown-to-HTML
+  conversion instead of leaking internal placeholders into comments.
+
 ## 2.4.101 - 2026-07-25
 
 - Resolve full task identifiers such as `ALPHA-517` directly from the

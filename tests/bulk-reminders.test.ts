@@ -5,6 +5,7 @@ import {
   bulkDeleteTasks,
   bulkUnassignTasks,
   bulkUpdateTasks,
+  getBulkOperationStatus,
 } from '../src/bulk-reminders.js';
 import { idempotency } from '../src/idempotency.js';
 import { VikunjaError } from '../src/errors.js';
@@ -90,7 +91,7 @@ describe('bulk task composition', () => {
     expect(request.mock.calls.filter(([method]) => method === 'POST')).toHaveLength(writes);
   });
 
-  it('does not collide when one bulk-create idempotency key is reused for different rows', async () => {
+  it('rejects one bulk-create idempotency key reused for a different payload', async () => {
     const request = jest.fn(async (method: string, path: string, options?: any) => {
       if (method === 'GET' && path === '/projects/101') return { id: 101, title: 'Alpha' };
       if (method === 'POST' && path === '/projects/101/tasks') {
@@ -113,11 +114,64 @@ describe('bulk task composition', () => {
     } as any;
 
     const first = await bulkCreateTasks(client, { id: 101 }, [{ title: 'First' }], 'batch-1');
-    const second = await bulkCreateTasks(client, { id: 101 }, [{ title: 'Second' }], 'batch-1');
 
     expect(first.created[0].id).toBe(9001);
-    expect(second.created[0].id).toBe(9002);
-    expect(request.mock.calls.filter(([method]) => method === 'POST')).toHaveLength(2);
+    await expect(
+      bulkCreateTasks(client, { id: 101 }, [{ title: 'Second' }], 'batch-1'),
+    ).rejects.toMatchObject({ status: 409, code: 'IDEMPOTENCY_KEY_REUSED' });
+    expect(request.mock.calls.filter(([method]) => method === 'POST')).toHaveLength(1);
+  });
+
+  it('resumes a partial bulk create without repeating successful rows', async () => {
+    let brokenAttempts = 0;
+    const request = jest.fn(async (method: string, path: string, options?: any) => {
+      if (method === 'GET' && path === '/projects/101') return { id: 101, title: 'Alpha' };
+      if (method === 'POST' && path === '/projects/101/tasks') {
+        if (options.body.title === 'Broken' && brokenAttempts++ === 0) {
+          throw new VikunjaError({
+            status: 503,
+            code: 'SERVICE_UNAVAILABLE',
+            method,
+            path,
+            message: 'Temporary failure',
+            fieldErrors: [],
+          });
+        }
+        return {
+          id: options.body.title === 'First' ? 9001 : 9002,
+          index: options.body.title === 'First' ? 1 : 2,
+          identifier: options.body.title === 'First' ? 'ALPHA-1' : 'ALPHA-2',
+          title: options.body.title,
+          project_id: 101,
+        };
+      }
+      throw new Error(`Unexpected ${method} ${path}`);
+    });
+    const client = {
+      request,
+      getConfig: () => ({
+        vikunjaWebUrl: 'https://vikunja.example.com/',
+        vikunjaToken: 'test-token',
+      }),
+    } as any;
+    const rows = [{ title: 'First' }, { title: 'Broken' }];
+
+    const first = (await bulkCreateTasks(client, { id: 101 }, rows, 'resume-1')) as any;
+
+    expect(first.status).toBe('partial');
+    expect(getBulkOperationStatus(first.operationId)).toMatchObject({
+      status: 'partial',
+      failed: [{ row: 2 }],
+    });
+    const second = (await bulkCreateTasks(client, { id: 101 }, rows, 'resume-1')) as any;
+    expect(second.status).toBe('completed');
+    expect(getBulkOperationStatus(second.operationId).status).toBe('completed');
+    expect(second.created).toHaveLength(2);
+    expect(
+      request.mock.calls.filter(
+        ([method, , options]) => method === 'POST' && options.body.title === 'First',
+      ),
+    ).toHaveLength(1);
   });
 
   it('bulk assigns a mixed batch and isolates a wrong-project task', async () => {

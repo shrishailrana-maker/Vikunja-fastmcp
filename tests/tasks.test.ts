@@ -452,6 +452,7 @@ describe('Tasks List and Scoping tests', () => {
         description: '<p>Evidence</p><p>[vfm-key:detector:file.ts:10]</p>',
         project_id: 101,
         project: { title: 'Alpha' },
+        updated: '2026-07-28T10:00:00Z',
         done: false,
         priority: 0,
       };
@@ -493,6 +494,7 @@ describe('Tasks List and Scoping tests', () => {
         { id: 101 },
         { title: 'Reworded finding' },
         'detector:file.ts:10',
+        '2026-07-28T10:00:00Z',
       );
 
       expect(result).toMatchObject({
@@ -550,6 +552,63 @@ describe('Tasks List and Scoping tests', () => {
       );
       expect(result.action).toBe('unchanged');
       expect(result.target.id).toBe(9005);
+    });
+
+    it('records the actor without forcing an unchanged upsert to replace the description', async () => {
+      const existing = {
+        id: 9005,
+        index: 305,
+        identifier: 'ALPHA-305',
+        title: 'Stable title',
+        description: '<p>Evidence</p><p>[vfm-key:detector:file.ts:10]</p>',
+        project_id: 101,
+        project: { title: 'Alpha' },
+        done: false,
+        priority: 0,
+      };
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: 101, title: 'Alpha' }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({ items: [existing], page: 1, per_page: 5, total: 1, total_pages: 1 }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify(existing),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: 101, title: 'Alpha' }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify(existing),
+        } as Response);
+
+      await expect(
+        upsertTask(
+          client,
+          { id: 101 },
+          { title: 'Stable title' },
+          'detector:file.ts:10',
+          undefined,
+          'Codex',
+        ),
+      ).resolves.toMatchObject({
+        action: 'unchanged',
+        actor: 'Codex',
+        externalKey: 'detector:file.ts:10',
+      });
+      expect(mockFetch.mock.calls.some((call: any) => call[1]?.method === 'PATCH')).toBe(false);
     });
 
     it('upsert fails closed when one stable key matches multiple tasks', async () => {
@@ -869,6 +928,102 @@ describe('Tasks List and Scoping tests', () => {
 
       expect(echo.action).toBe('unchanged');
       expect(mockFetch.mock.calls.some((call: any) => call[1]?.method === 'PATCH')).toBe(false);
+    });
+
+    it('recovers a subscription schema error only when readback proves the patch applied', async () => {
+      const openTask = {
+        id: 9005,
+        index: 305,
+        identifier: 'ALPHA-305',
+        title: 'Verified task',
+        project_id: 101,
+        project: { title: 'Alpha' },
+        done: false,
+      };
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify(openTask),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify(openTask),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 422,
+          statusText: 'Unprocessable Entity',
+          text: async () =>
+            JSON.stringify({
+              detail: 'Validation failed',
+              errors: [
+                {
+                  location: ['subscription', 'entity'],
+                  message: 'expected integer',
+                },
+              ],
+            }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ ...openTask, done: true }),
+        } as Response);
+
+      await expect(updateTask(client, 9005, { done: true })).resolves.toMatchObject({
+        action: 'closed',
+        target: { id: 9005, identifier: 'ALPHA-305' },
+      });
+    });
+
+    it('preserves the subscription schema error when readback shows no update', async () => {
+      const openTask = {
+        id: 9005,
+        index: 305,
+        identifier: 'ALPHA-305',
+        title: 'Still open',
+        project_id: 101,
+        project: { title: 'Alpha' },
+        done: false,
+      };
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify(openTask),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify(openTask),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 422,
+          statusText: 'Unprocessable Entity',
+          text: async () =>
+            JSON.stringify({
+              detail: 'Validation failed',
+              errors: [
+                {
+                  location: ['subscription', 'entity'],
+                  message: 'expected integer',
+                },
+              ],
+            }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify(openTask),
+        } as Response);
+
+      await expect(updateTask(client, 9005, { done: true })).rejects.toMatchObject({
+        code: 'VIKUNJA_SUBSCRIPTION_SCHEMA_BUG',
+        status: 502,
+      });
     });
 
     it('appends description text before a stable-key marker', async () => {

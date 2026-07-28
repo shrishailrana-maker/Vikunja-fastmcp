@@ -13,7 +13,7 @@ import { jest } from '@jest/globals';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { pathsReferToSameFile, server } from '../src/index.js';
+import { pathsReferToSameFile, server, TOOLS } from '../src/index.js';
 
 describe('MCP Server Registration and Dispatching tests', () => {
   let mockFetch: any;
@@ -90,6 +90,19 @@ describe('MCP Server Registration and Dispatching tests', () => {
     });
 
     const taskTool = response.tools.find((t: any) => t.name === 'vikunja_tasks');
+    const taskDefinition = TOOLS.find((tool) => tool.name === 'vikunja_tasks')!;
+    expect(
+      taskDefinition.inputSchema.safeParse({
+        action: 'get',
+        taskSelector: { globalId: 99 },
+      }).success,
+    ).toBe(true);
+    expect(
+      taskDefinition.inputSchema.safeParse({
+        action: 'get',
+        taskSelector: 99,
+      }).success,
+    ).toBe(false);
     expect(taskTool.inputSchema.properties.responseMode).toMatchObject({
       type: 'string',
       enum: ['compact', 'standard', 'full'],
@@ -129,16 +142,43 @@ describe('MCP Server Registration and Dispatching tests', () => {
     expect(applyLabelBranch.properties.labelTitle.anyOf).toEqual(
       expect.arrayContaining([{ type: 'string' }, { type: 'number' }]),
     );
+    const createBranch = taskTool.inputSchema.oneOf.find(
+      (branch: any) => branch.properties.action.const === 'create',
+    );
+    const closeBranch = taskTool.inputSchema.oneOf.find(
+      (branch: any) => branch.properties.action.const === 'close',
+    );
+    expect(createBranch.required).toContain('actor');
+    expect(createBranch.required).toContain('idempotencyKey');
+    expect(closeBranch.required).toContain('actor');
+
+    const commentTool = response.tools.find((t: any) => t.name === 'vikunja_task_comments');
+    const commentCreateBranch = commentTool.inputSchema.oneOf.find(
+      (branch: any) => branch.properties.action.const === 'create',
+    );
+    expect(commentCreateBranch.required).toEqual(
+      expect.arrayContaining(['taskSelector', 'comment', 'actor', 'idempotencyKey']),
+    );
+    for (const action of ['update', 'delete']) {
+      const branch = commentTool.inputSchema.oneOf.find(
+        (candidate: any) => candidate.properties.action.const === action,
+      );
+      expect(branch.required).toContain('actor');
+    }
 
     const bulkTool = response.tools.find((t: any) => t.name === 'vikunja_task_bulk');
     expect(bulkTool.inputSchema.oneOf.map((branch: any) => branch.properties.action.const)).toEqual(
-      expect.arrayContaining(['create', 'assign', 'unassign']),
+      expect.arrayContaining(['create', 'assign', 'unassign', 'status']),
     );
     const bulkAssignBranch = bulkTool.inputSchema.oneOf.find(
       (branch: any) => branch.properties.action.const === 'assign',
     );
     expect(bulkAssignBranch.properties.dryRun).toEqual({ type: 'boolean' });
     expect(bulkAssignBranch.required).not.toContain('dryRun');
+    expect(bulkAssignBranch.required).toEqual(
+      expect.arrayContaining(['taskSelectors', 'actor', 'idempotencyKey']),
+    );
+    expect(bulkAssignBranch.properties).not.toHaveProperty('taskIds');
 
     const exportTool = response.tools.find((t: any) => t.name === 'vikunja_export_project');
     expect(exportTool.inputSchema.properties).toHaveProperty('includeAttachments');
@@ -149,6 +189,51 @@ describe('MCP Server Registration and Dispatching tests', () => {
       (branch: any) => branch.properties.action.const === 'events',
     );
     expect(eventBranch.properties).toHaveProperty('scope');
+  });
+
+  it('requires actor attribution and optimistic concurrency before dispatching writes', async () => {
+    const taskTool = TOOLS.find((tool) => tool.name === 'vikunja_tasks')!;
+    const client = {
+      request: jest.fn(async () => {
+        throw new Error('network should not be reached');
+      }),
+    } as any;
+
+    await expect(
+      taskTool.handler(
+        {
+          action: 'create',
+          projectSelector: { id: 101 },
+          fields: { title: 'Attributed task' },
+        },
+        client,
+      ),
+    ).rejects.toMatchObject({ code: 'ACTOR_REQUIRED' });
+
+    await expect(
+      taskTool.handler(
+        {
+          action: 'create',
+          projectSelector: { id: 101 },
+          fields: { title: 'Attributed task' },
+          actor: 'Codex',
+        },
+        client,
+      ),
+    ).rejects.toMatchObject({ code: 'IDEMPOTENCY_KEY_REQUIRED' });
+
+    await expect(
+      taskTool.handler(
+        {
+          action: 'update',
+          taskSelector: { globalId: 9005 },
+          fields: { description: 'Replacement description' },
+        },
+        client,
+      ),
+    ).rejects.toMatchObject({ code: 'EXPECTED_UPDATED_AT_REQUIRED' });
+
+    expect(client.request).not.toHaveBeenCalled();
   });
 
   it('puts the next-page instruction before a large task-list envelope', async () => {
@@ -243,7 +328,11 @@ describe('MCP Server Registration and Dispatching tests', () => {
       method: 'tools/call',
       params: {
         name: 'vikunja_tasks',
-        arguments: { action: 'update', taskSelector: 99, fields: { done: true } },
+        arguments: {
+          action: 'update',
+          taskSelector: { globalId: 99 },
+          fields: { done: true },
+        },
       },
     });
 
@@ -415,7 +504,10 @@ describe('MCP Server Registration and Dispatching tests', () => {
 
     const response = await handler({
       method: 'tools/call',
-      params: { name: 'vikunja_tasks', arguments: { action: 'get', taskSelector: 99 } },
+      params: {
+        name: 'vikunja_tasks',
+        arguments: { action: 'get', taskSelector: { globalId: 99 } },
+      },
     });
 
     expect(response.isError).not.toBe(true);
@@ -464,6 +556,8 @@ describe('MCP Server Registration and Dispatching tests', () => {
           action: 'create',
           projectSelector: { id: 101 },
           fields: { title: 'Created task' },
+          actor: 'Codex',
+          idempotencyKey: 'create-compact',
         },
       },
     });
@@ -512,6 +606,8 @@ describe('MCP Server Registration and Dispatching tests', () => {
           action: 'create',
           projectSelector: { id: 101 },
           fields: { title: 'Created task' },
+          actor: 'Codex',
+          idempotencyKey: 'create-standard',
           responseMode: 'standard',
         },
       },
@@ -526,7 +622,12 @@ describe('MCP Server Registration and Dispatching tests', () => {
   it.each([
     [
       'vikunja_tasks',
-      { action: 'update', taskSelector: 99, projectSelector: { id: 101 }, fields: {} },
+      {
+        action: 'update',
+        taskSelector: { globalId: 99 },
+        projectSelector: { id: 101 },
+        fields: {},
+      },
     ],
     ['vikunja_labels', { action: 'update', labelSelector: 9 }],
     ['vikunja_filters', { action: 'update', filterId: 7 }],
@@ -581,7 +682,14 @@ describe('MCP Server Registration and Dispatching tests', () => {
 
     const response = await handler({
       method: 'tools/call',
-      params: { name: 'vikunja_tasks', arguments: { action: 'delete', taskSelector: 99 } },
+      params: {
+        name: 'vikunja_tasks',
+        arguments: {
+          action: 'delete',
+          taskSelector: { globalId: 99 },
+          actor: 'Codex',
+        },
+      },
     });
 
     const jsonMatch = (response.content[0].text as string).match(/```json\n([\s\S]*?)\n```/);
@@ -630,7 +738,11 @@ describe('MCP Server Registration and Dispatching tests', () => {
       method: 'tools/call',
       params: {
         name: 'vikunja_tasks',
-        arguments: { action: 'update', taskSelector: 99, fields: { dueDate: null } },
+        arguments: {
+          action: 'update',
+          taskSelector: { globalId: 99 },
+          fields: { dueDate: null },
+        },
       },
     });
 
@@ -695,7 +807,10 @@ describe('MCP Server Registration and Dispatching tests', () => {
 
     const response = await handler({
       method: 'tools/call',
-      params: { name: 'vikunja_tasks', arguments: { action: 'get', taskSelector: 99 } },
+      params: {
+        name: 'vikunja_tasks',
+        arguments: { action: 'get', taskSelector: { globalId: 99 } },
+      },
     });
     const text = response.content[0].text as string;
     expect(text.match(/```json/g)).toHaveLength(1);

@@ -11,7 +11,14 @@
 
 import { VikunjaApiClient } from './api.js';
 import type { ResponseMode } from './config.js';
-import { resolveProject, resolveTask, ProjectRef, cache, listAllLabels } from './identity.js';
+import {
+  resolveProject,
+  resolveTaskInput as resolveTask,
+  ProjectRef,
+  cache,
+  listAllLabels,
+  type TaskSelectorInput,
+} from './identity.js';
 import { VikunjaError } from './errors.js';
 import {
   normalizePagination,
@@ -22,7 +29,7 @@ import {
   toItemArray,
   fetchAllCollectionItems,
 } from './format.js';
-import { idempotency } from './idempotency.js';
+import { runDurableOperation } from './idempotency.js';
 import { createComment } from './comments.js';
 import { attachFiles, AttachmentInfo } from './attachments.js';
 import { withActorAttribution } from './mutation-policy.js';
@@ -94,6 +101,7 @@ export interface WriteEcho {
 
 export interface UpsertEcho extends WriteEcho {
   externalKey: string;
+  actor?: string;
 }
 
 export const EXTERNAL_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9:_\-./#]{0,119}$/;
@@ -473,11 +481,18 @@ export async function createTask(
   attachments?: string[],
   actor?: string,
 ): Promise<WriteEcho> {
-  const projectKey = projectSelector.id ?? projectSelector.title?.toLowerCase() ?? 'missing';
-  const cacheKey = idempotencyKey ? `task-create:${projectKey}:${idempotencyKey}` : '';
-  if (cacheKey) {
-    const cached = idempotency.get(cacheKey);
-    if (cached) return cached;
+  if (idempotencyKey) {
+    return runDurableOperation(
+      'task-create',
+      idempotencyKey,
+      {
+        projectSelector,
+        fields,
+        attachments,
+        actor,
+      },
+      () => createTask(client, projectSelector, fields, undefined, attachments, actor),
+    );
   }
 
   const project = await resolveProject(client, projectSelector);
@@ -519,10 +534,6 @@ export async function createTask(
   // retry with the same idempotencyKey never creates a second task.
   await attachToEcho(client, echo, attachments);
 
-  if (cacheKey) {
-    idempotency.set(cacheKey, echo);
-  }
-
   return echo;
 }
 
@@ -540,11 +551,18 @@ export async function createIfAbsent(
   attachments?: string[],
   actor?: string,
 ): Promise<WriteEcho> {
-  const projectKey = projectSelector.id ?? projectSelector.title?.toLowerCase() ?? 'missing';
-  const cacheKey = idempotencyKey ? `task-create-absent:${projectKey}:${idempotencyKey}` : '';
-  if (cacheKey) {
-    const cached = idempotency.get(cacheKey);
-    if (cached) return cached;
+  if (idempotencyKey) {
+    return runDurableOperation(
+      'task-create-absent',
+      idempotencyKey,
+      {
+        projectSelector,
+        fields,
+        attachments,
+        actor,
+      },
+      () => createIfAbsent(client, projectSelector, fields, undefined, attachments, actor),
+    );
   }
 
   const project = await resolveProject(client, projectSelector);
@@ -609,11 +627,7 @@ export async function createIfAbsent(
     // Do not re-upload attachments when the task already exists.
   } else {
     // Create with attachments only on the create path (not on exists).
-    echo = await createTask(client, { id: project.id }, fields, idempotencyKey, attachments, actor);
-  }
-
-  if (cacheKey) {
-    idempotency.set(cacheKey, echo);
+    echo = await createTask(client, { id: project.id }, fields, undefined, attachments, actor);
   }
 
   return echo;
@@ -715,10 +729,22 @@ export async function upsertTask(
         description: descriptionWithStableKey(fields.description, externalKey, actor),
       },
     );
-    return { ...echo, externalKey };
+    return { ...echo, externalKey, actor };
   }
 
   const existing = matches[0];
+  const replacementRequested = fields.title !== existing.title || fields.description !== undefined;
+  if (replacementRequested && !expectedUpdatedAt) {
+    throw new VikunjaError({
+      status: 400,
+      code: 'EXPECTED_UPDATED_AT_REQUIRED',
+      method: 'TOOLS_CALL',
+      path: 'expectedUpdatedAt',
+      message:
+        'expectedUpdatedAt is required when upsert replaces the title or description of an existing task.',
+      fieldErrors: [],
+    });
+  }
   const updateFields: {
     title?: string;
     description?: string;
@@ -731,19 +757,18 @@ export async function upsertTask(
     priority: fields.priority,
     dueDate: fields.dueDate,
   };
-  if (fields.description !== undefined || actor !== undefined) {
-    const source = fields.description ?? htmlToMarkdown(String(existing.description ?? ''));
-    updateFields.description = descriptionWithStableKey(source, externalKey, actor);
+  if (fields.description !== undefined) {
+    updateFields.description = descriptionWithStableKey(fields.description, externalKey, actor);
   }
 
   const echo = await updateTask(
     client,
-    existing.id,
+    { globalId: existing.id },
     updateFields,
     { id: project.id },
     expectedUpdatedAt,
   );
-  return { ...echo, externalKey };
+  return { ...echo, externalKey, actor };
 }
 
 export interface ConsolidatedTaskDetails {
@@ -763,35 +788,35 @@ export interface StandardTaskDetails {
 
 export function getTask(
   client: VikunjaApiClient,
-  taskSelector: string | number,
+  taskSelector: TaskSelectorInput,
   projectSelector: { id?: number; title?: string } | undefined,
   commentLimit: number,
   requestedResponseMode: 'compact',
 ): Promise<CompactTaskDetails>;
 export function getTask(
   client: VikunjaApiClient,
-  taskSelector: string | number,
+  taskSelector: TaskSelectorInput,
   projectSelector: { id?: number; title?: string } | undefined,
   commentLimit: number,
   requestedResponseMode: 'standard',
 ): Promise<StandardTaskDetails>;
 export function getTask(
   client: VikunjaApiClient,
-  taskSelector: string | number,
+  taskSelector: TaskSelectorInput,
   projectSelector: { id?: number; title?: string } | undefined,
   commentLimit: number,
   requestedResponseMode: 'full',
 ): Promise<ConsolidatedTaskDetails>;
 export function getTask(
   client: VikunjaApiClient,
-  taskSelector: string | number,
+  taskSelector: TaskSelectorInput,
   projectSelector?: { id?: number; title?: string },
   commentLimit?: number,
   requestedResponseMode?: ResponseMode,
 ): Promise<ConsolidatedTaskDetails | StandardTaskDetails | CompactTaskDetails>;
 export async function getTask(
   client: VikunjaApiClient,
-  taskSelector: string | number,
+  taskSelector: TaskSelectorInput,
   projectSelector?: { id?: number; title?: string },
   commentLimit = 5,
   requestedResponseMode?: ResponseMode,
@@ -866,7 +891,7 @@ export async function getTask(
 
 export async function updateTask(
   client: VikunjaApiClient,
-  taskSelector: string | number,
+  taskSelector: TaskSelectorInput,
   fields: {
     title?: string;
     description?: string;
@@ -959,7 +984,23 @@ export async function updateTask(
       path: `/${field}`,
       value,
     }));
-    const rawUpdated = await patchTaskFields(client, taskRef.id, patchOperations);
+    let rawUpdated: any;
+    try {
+      rawUpdated = await patchTaskFields(client, taskRef.id, patchOperations);
+    } catch (error: any) {
+      if (!(error instanceof VikunjaError) || error.code !== 'VIKUNJA_SUBSCRIPTION_SCHEMA_BUG') {
+        throw error;
+      }
+      const verified = await client.request<any>('GET', `/tasks/${taskRef.id}`);
+      const applied = Object.entries(body).every(([field, value]) => {
+        if (field === 'done') return Boolean(verified.done) === value;
+        if (field === 'priority') return (verified.priority ?? 0) === value;
+        if (field === 'due_date') return (normalizeZeroDate(verified.due_date) || null) === value;
+        return verified[field] === value;
+      });
+      if (!applied) throw error;
+      rawUpdated = verified;
+    }
     const task = normalizeTask(rawUpdated, taskRef.project, webUrl);
     const action =
       fields.done === true && !currentTask.done
@@ -1005,7 +1046,7 @@ export async function patchTaskFields(
 
 export async function deleteTask(
   client: VikunjaApiClient,
-  taskSelector: string | number,
+  taskSelector: TaskSelectorInput,
   projectSelector?: { id?: number; title?: string },
 ): Promise<WriteEcho> {
   const taskRef = await resolveTask(client, taskSelector, projectSelector);
@@ -1033,50 +1074,45 @@ export interface CloseWithEvidenceResult {
 
 export async function closeWithEvidence(
   client: VikunjaApiClient,
-  taskSelector: string | number,
+  taskSelector: TaskSelectorInput,
   evidenceComment: string,
   projectSelector?: { id?: number; title?: string },
   idempotencyKey?: string,
   actor?: string,
 ): Promise<CloseWithEvidenceResult> {
-  const projectKey = projectSelector?.id ?? projectSelector?.title?.toLowerCase() ?? 'global';
-  const cacheKey = idempotencyKey
-    ? `close-with-evidence:${projectKey}:${String(taskSelector).trim()}:${idempotencyKey}`
-    : '';
-  if (cacheKey) {
-    const cached = idempotency.get(cacheKey);
-    if (cached) return cached;
-  }
-  const taskRef = await resolveTask(client, taskSelector, projectSelector);
-  const composedCalls = [];
+  const payload = { taskSelector, projectSelector, evidenceComment, actor };
+  const execute = async (): Promise<CloseWithEvidenceResult> => {
+    const taskRef = await resolveTask(client, taskSelector, projectSelector);
+    const composedCalls = [];
 
-  // 1. Post evidence comment
-  composedCalls.push(`POST /tasks/${taskRef.id}/comments`);
-  const comment = await createComment(
-    client,
-    taskRef.id,
-    evidenceComment,
-    undefined,
-    idempotencyKey ? `close-with-evidence:${idempotencyKey}` : undefined,
-    actor,
-  );
+    composedCalls.push(`POST /tasks/${taskRef.id}/comments`);
+    const comment = await createComment(
+      client,
+      taskRef.id,
+      evidenceComment,
+      undefined,
+      idempotencyKey ? `close-with-evidence:${idempotencyKey}` : undefined,
+      actor,
+    );
 
-  // 2. Close task (if comment succeeds)
-  const taskEcho = await updateTask(client, taskRef.id, { done: true });
-  if (taskEcho.action !== 'unchanged') composedCalls.push(`PATCH /tasks/${taskRef.id}`);
+    const taskEcho = await updateTask(client, taskRef.id, { done: true });
+    if (taskEcho.action !== 'unchanged') composedCalls.push(`PATCH /tasks/${taskRef.id}`);
 
-  const result: CloseWithEvidenceResult = {
-    comment: {
-      id: comment.id,
-      author: comment.author,
-      created: comment.created,
-    },
-    task: taskEcho,
-    changed: taskEcho.action === 'unchanged' ? ['comment'] : ['comment', 'done'],
-    composedCalls,
+    return {
+      comment: {
+        id: comment.id,
+        author: comment.author,
+        created: comment.created,
+      },
+      task: taskEcho,
+      changed: taskEcho.action === 'unchanged' ? ['comment'] : ['comment', 'done'],
+      composedCalls,
+    };
   };
-  if (cacheKey) idempotency.set(cacheKey, result);
-  return result;
+
+  return idempotencyKey
+    ? runDurableOperation('close-with-evidence', idempotencyKey, payload, execute)
+    : execute();
 }
 
 export async function resolveUser(
@@ -1205,7 +1241,7 @@ export async function resolveOrCreateLabel(
 
 export async function assignTask(
   client: VikunjaApiClient,
-  taskSelector: string | number,
+  taskSelector: TaskSelectorInput,
   userSelector: string | number,
   projectSelector?: { id?: number; title?: string },
 ): Promise<WriteEcho> {
@@ -1235,7 +1271,7 @@ export async function assignTask(
 
 export async function unassignTask(
   client: VikunjaApiClient,
-  taskSelector: string | number,
+  taskSelector: TaskSelectorInput,
   userSelector: string | number,
   projectSelector?: { id?: number; title?: string },
 ): Promise<WriteEcho> {
@@ -1263,7 +1299,7 @@ export async function unassignTask(
 
 export async function listAssignees(
   client: VikunjaApiClient,
-  taskSelector: string | number,
+  taskSelector: TaskSelectorInput,
   projectSelector?: { id?: number; title?: string },
 ): Promise<any[]> {
   const taskRef = await resolveTask(client, taskSelector, projectSelector);
@@ -1276,7 +1312,7 @@ export async function listAssignees(
 
 export async function applyLabel(
   client: VikunjaApiClient,
-  taskSelector: string | number,
+  taskSelector: TaskSelectorInput,
   labelTitle: string | number,
   projectSelector?: { id?: number; title?: string },
 ): Promise<WriteEcho> {
@@ -1313,7 +1349,7 @@ export async function applyLabel(
 
 export async function removeLabel(
   client: VikunjaApiClient,
-  taskSelector: string | number,
+  taskSelector: TaskSelectorInput,
   labelTitle: string | number,
   projectSelector?: { id?: number; title?: string },
 ): Promise<WriteEcho> {
@@ -1345,7 +1381,7 @@ export async function removeLabel(
 
 export async function listLabels(
   client: VikunjaApiClient,
-  taskSelector: string | number,
+  taskSelector: TaskSelectorInput,
   projectSelector?: { id?: number; title?: string },
 ): Promise<any[]> {
   const taskRef = await resolveTask(client, taskSelector, projectSelector);
@@ -1364,7 +1400,7 @@ export interface SetStatusResult extends WriteEcho {
 
 export async function setTaskStatus(
   client: VikunjaApiClient,
-  taskSelector: string | number,
+  taskSelector: TaskSelectorInput,
   statusLabel: string,
   projectSelector?: { id?: number; title?: string },
   createIfMissing = false,
@@ -1446,17 +1482,20 @@ const VALID_RELATION_KINDS = [
  * Portal/short refs (#n / PRJ-n) need project context from the primary call.
  */
 function otherTaskProjectContext(
-  otherTaskSelector: string | number,
+  otherTaskSelector: TaskSelectorInput,
   projectSelector?: { id?: number; title?: string },
 ): { id?: number; title?: string } | undefined {
-  const otherIsPortal = !/^\d+$/.test(String(otherTaskSelector).trim());
-  return otherIsPortal ? projectSelector : undefined;
+  const isGlobal =
+    typeof otherTaskSelector === 'object'
+      ? 'globalId' in otherTaskSelector
+      : /^\d+$/.test(String(otherTaskSelector).trim());
+  return isGlobal ? undefined : projectSelector;
 }
 
 export async function relateTask(
   client: VikunjaApiClient,
-  taskSelector: string | number,
-  otherTaskSelector: string | number,
+  taskSelector: TaskSelectorInput,
+  otherTaskSelector: TaskSelectorInput,
   relationKind: string,
   projectSelector?: { id?: number; title?: string },
 ): Promise<WriteEcho> {
@@ -1499,8 +1538,8 @@ export async function relateTask(
 
 export async function unrelateTask(
   client: VikunjaApiClient,
-  taskSelector: string | number,
-  otherTaskSelector: string | number,
+  taskSelector: TaskSelectorInput,
+  otherTaskSelector: TaskSelectorInput,
   relationKind: string,
   projectSelector?: { id?: number; title?: string },
 ): Promise<WriteEcho> {
@@ -1541,7 +1580,7 @@ export async function unrelateTask(
 
 export async function listRelations(
   client: VikunjaApiClient,
-  taskSelector: string | number,
+  taskSelector: TaskSelectorInput,
   projectSelector?: { id?: number; title?: string },
   requestedResponseMode?: ResponseMode,
 ): Promise<any[]> {

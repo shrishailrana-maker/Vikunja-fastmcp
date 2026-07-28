@@ -114,10 +114,10 @@ Keep only:
 zod
 ```
 
-Node 20 supplies `fetch`, streams, `URL`, filesystem APIs, and
-`crypto.randomUUID`. Do not add `node-vikunja`, an HTTP wrapper, database,
-retry library, circuit breaker, HTML framework, or attachment encoding
-library.
+Node 24 supplies `fetch`, streams, `URL`, filesystem APIs,
+`crypto.randomUUID`, and `node:sqlite`. Do not add `node-vikunja`, an HTTP
+wrapper, database package, retry library, circuit breaker, HTML framework, or
+attachment encoding library.
 
 ## Included Features
 
@@ -223,7 +223,8 @@ must survive operating-system temporary-file cleanup.
   references.
 * Allow cross-project reads only through explicit read-only `projects: [...]`
   or deliberate read-only `allProjects`; keep pagination grouped per project.
-* Resolve task identity once and use the global ID for all child operations.
+* Accept only explicit `{globalId}`, `{identifier}`, or `{projectIndex}` task
+  selectors, then resolve once and use the global ID for child operations.
 * Read and echo project, title, portal reference, and global ID on every write.
 * Warn or reject global-ID mutations without explicit project scope according
   to `VIKUNJA_MUTATION_SCOPE_MODE`; always reject a supplied project mismatch.
@@ -231,11 +232,13 @@ must survive operating-system temporary-file cleanup.
   evidence in compact write receipts.
 * Replace configured status labels in one bulk request while preserving every
   unrelated label; never create the target label unless explicitly requested.
-* Bound process-local import ledgers and make ledger loss degrade only to
-  duplicate risk, never task deletion or overwrite.
+* Persist idempotency and import receipts in a bounded-lifetime SQLite/WAL
+  ledger scoped to the configured server URL; ledger loss degrades only to
+  duplicate risk, never deletion.
 * Preserve 401, 403, 404, 405, and 409 meanings and safe server details.
 * Redact credentials before logs or responses are constructed.
-* Support process-local idempotency for create, comment, and attachment retry.
+* Require payload-bound durable idempotency for create, comment, attachment,
+  evidence-close, import, and mutating bulk retries.
 * Use an isolated operating-system temporary directory when no download
   destination is supplied, and never overwrite an existing file without
   explicit permission.

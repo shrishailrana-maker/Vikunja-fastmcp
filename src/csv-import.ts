@@ -5,10 +5,10 @@ import fs from 'node:fs/promises';
 import { VikunjaApiClient } from './api.js';
 import { DEFAULT_MAX_ATTACHMENT_BYTES } from './config.js';
 import { VikunjaError } from './errors.js';
+import { idempotency } from './idempotency.js';
 import { applyLabel, createTask } from './tasks.js';
 
 const MAX_IDEMPOTENT_ROWS = 1000;
-const MAX_IMPORT_LEDGER_KEYS = 100;
 const SUPPORTED_ATTRIBUTES = new Set([
   'title',
   'description',
@@ -44,8 +44,6 @@ interface ParsedImportTask {
   project?: string;
   rowNumber: number;
 }
-
-const importLedger = new Map<string, Map<string, number>>();
 
 function importError(code: string, message: string, path = 'config'): VikunjaError {
   return new VikunjaError({
@@ -321,17 +319,17 @@ function rowProject(
   );
 }
 
-function ledgerFor(idempotencyKey: string): Map<string, number> {
-  const existing = importLedger.get(idempotencyKey);
-  if (existing) return existing;
+function importLedgerKey(idempotencyKey: string): string {
+  const keyHash = crypto.createHash('sha256').update(idempotencyKey).digest('hex');
+  return `csv-import-ledger:${keyHash}`;
+}
 
-  if (importLedger.size >= MAX_IMPORT_LEDGER_KEYS) {
-    const oldestKey = importLedger.keys().next().value;
-    if (oldestKey !== undefined) importLedger.delete(oldestKey);
-  }
-  const ledger = new Map<string, number>();
-  importLedger.set(idempotencyKey, ledger);
-  return ledger;
+function ledgerFor(idempotencyKey: string): Record<string, number> {
+  return idempotency.get(importLedgerKey(idempotencyKey)) ?? {};
+}
+
+function saveLedger(idempotencyKey: string, ledger: Record<string, number>): void {
+  idempotency.set(importLedgerKey(idempotencyKey), ledger);
 }
 
 export async function previewIdempotentCsvImport(
@@ -384,7 +382,7 @@ export async function importCsvIdempotently(
     try {
       const project = rowProject(row, projectSelector);
       const hash = rowHash(project, row);
-      if (ledger.has(hash)) {
+      if (ledger[hash] !== undefined) {
         skipped += 1;
         continue;
       }
@@ -402,11 +400,12 @@ export async function importCsvIdempotently(
         undefined,
         actor,
       );
-      ledger.set(hash, result.target.id);
+      ledger[hash] = result.target.id;
+      saveLedger(idempotencyKey, ledger);
       created += 1;
       for (const label of row.labels) {
         try {
-          await applyLabel(client, result.target.id, label, project);
+          await applyLabel(client, { globalId: result.target.id }, label, project);
         } catch (error) {
           warnings.push({
             row: row.rowNumber,
@@ -437,15 +436,15 @@ export async function importCsvIdempotently(
 }
 
 export function clearIdempotentImportLedger(): void {
-  importLedger.clear();
+  idempotency.deletePrefix('csv-import-ledger:');
 }
 
 export function getIdempotentImportStatus(idempotencyKey: string) {
-  const ledger = importLedger.get(idempotencyKey);
+  const ledger = idempotency.get(importLedgerKey(idempotencyKey)) as Record<string, number> | null;
   return {
     mode: 'idempotent' as const,
     idempotent: true,
     ledgerPresent: Boolean(ledger),
-    trackedRows: ledger?.size ?? 0,
+    trackedRows: ledger ? Object.keys(ledger).length : 0,
   };
 }

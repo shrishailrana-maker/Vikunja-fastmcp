@@ -24,7 +24,8 @@ the Vikunja service is upgraded; never substitute the old SDK or v1 docs.
 2. Keep runtime source flat and minimal: merge trivial pass-through files, but
    split a file when it contains distinct responsibilities or becomes hard to
    review and test.
-3. Use Node 20 `fetch` directly. Do not add an API SDK or framework around it.
+3. Use Node 24 `fetch` and `node:sqlite` directly. Do not add an API SDK,
+   database package, or framework around them.
 4. Register one canonical task tool: `vikunja_tasks`.
 5. Require an explicit project title or ID on every project-scoped call.
 6. Use server-side filtering, sorting, and pagination. Never fetch every task
@@ -127,7 +128,7 @@ server may be newer than the committed snapshot.
 | `vikunja_users` | `current`, `search` |
 | `vikunja_teams` | `list`, `get`, `create`, `update`, `delete`, `add-member`, `remove-member`, `set-member-admin` |
 | `vikunja_filters` | `create`, `get`, `update`, `delete` |
-| `vikunja_task_bulk` | `update`, `create`, `delete` |
+| `vikunja_task_bulk` | `update`, `create`, `delete`, `assign`, `unassign`, `status` |
 | `vikunja_task_reminders` | `list`, `add`, `remove` |
 | `vikunja_batch_import` | `detect`, `preview`, `import`, `status` |
 | `vikunja_export_project` | one project export to JSON or CSV |
@@ -147,13 +148,13 @@ other task wrapper.
 The limits are part of the public MCP contract rather than hidden truncation:
 
 * task pages default to 20 and are capped at 100 items per project page;
-* bulk update/close accepts at most 100 global task IDs;
+* bulk update accepts at most 100 explicit task selectors;
 * composed bulk create accepts at most 100 tasks and is non-atomic;
-* composed bulk delete accepts at most 100 global task IDs, is non-atomic, and
+* composed bulk delete accepts at most 100 explicit task selectors, is non-atomic, and
   requires `confirm: true`;
 * CSV import and file upload/download use `VIKUNJA_MAX_ATTACHMENT_BYTES`, 100
   MiB by default; native migration uses Vikunja's row limits, while MCP
-  idempotent import is capped at 1,000 rows and 100 process-local ledger keys;
+  idempotent import is capped at 1,000 rows;
 * ordinary API calls time out after 30 seconds by default through
   `VIKUNJA_REQUEST_TIMEOUT_MS`; streamed and multipart transfers use the
   60-second `VIKUNJA_TRANSFER_TIMEOUT_MS` default.
@@ -265,16 +266,17 @@ Vikunja has two useful task identities:
   A project with an empty short identifier displays only `#305`, and that same
   portal number can exist in every project.
 
-The MCP always displays both:
+Human summaries display the project identifier:
 
 ```text
-Investigate sync issue (#305 · id 9005)
+PRJ-305 - Investigate sync issue
 ```
 
-It accepts a numeric global ID without project scope because that ID is unique
-across the server. It accepts `#305` only with an explicit project title or ID
-and resolves it to the global ID before any read-modify-write. A full
-identifier, when the project has one, must agree with the resolved project.
+Inputs use exactly one explicit selector: `{ "globalId": 9005 }`,
+`{ "identifier": "PRJ-305" }`, or `{ "projectIndex": 305 }`. A project index
+also requires an explicit project title or ID. Bare numbers and strings are
+rejected, so a human portal reference cannot be silently treated as a global
+database ID. A full identifier must agree with an optional project guard.
 Legacy `#NNN` text inside a title is never parsed or changed.
 
 Before a write, the MCP resolves and reads the target once. Every write result
@@ -295,14 +297,18 @@ echoes the action and target identity:
 
 Every write echo names the project and task and includes global ID, portal
 index, and full identifier when available. Missing, ambiguous, or mismatched
-targets fail before mutation. `create`,
-comment creation, and attachment upload accept an optional process-local
-`idempotencyKey`. The compound `close_with_evidence` operation also accepts an
-idempotency key so a retry in the same MCP process does not duplicate the
-evidence comment. Task creation, comment creation, `close_with_evidence`, and
-idempotent CSV import also accept an optional `actor`; the MCP appends `(by
-Actor)` once without echoing submitted evidence in compact receipts. `update`
-may accept `expectedUpdatedAt`; because v2 does not
+targets fail before mutation. Task creation, comment creation, attachment
+upload, `close_with_evidence`, and mutating bulk operations require an
+`idempotencyKey`. Receipts persist in a local SQLite/WAL ledger for 30 days by
+default and survive MCP restarts and concurrent processes on the same machine.
+Reusing one caller key with a different payload fails with
+`IDEMPOTENCY_KEY_REUSED`. An atomic local execution lease prevents concurrent
+same-key writes on one machine; this is not a distributed lock across
+machines. The default database filename is scoped to `VIKUNJA_URL`.
+Task creation, every comment mutation, closing, import, and mutating bulk
+operations require `actor`; stored descriptions/comments receive `(by Actor)`
+once and compact receipts do not echo submitted evidence. `update` requires
+`expectedUpdatedAt` when replacing title or description; because v2 does not
 advertise an atomic conditional PATCH, this is documented as a best-effort
 pre-write conflict check, not a server-side lock.
 On a detected mismatch it returns `409 CONFLICT`. Success and error wording
@@ -477,14 +483,22 @@ Count-only success example:
 only when no match exists.
 
 This is best-effort duplicate prevention, not a distributed uniqueness lock.
-Two concurrent MCP processes or windows can both search before either creates,
-so Vikunja may still receive two tasks. A process-local `idempotencyKey`
-protects retries handled by that process; it does not provide cross-process
-locking.
+Two machines can still search before either creates, so Vikunja may receive two
+tasks. The durable local ledger protects same-machine retries and parallel
+local agents; stable-key `upsert` is preferred when an external identity exists.
 
 `close_with_evidence` resolves and verifies the task, creates the audit or
 verification comment, then closes it. The result reports both steps. A comment
 failure prevents the close.
+
+Mutating bulk operations persist a receipt after every row and return an
+`operationId`. Repeating the identical action, payload, and `idempotencyKey`
+resumes failed rows and skips recorded successes. `status` reads the receipt
+without performing writes. A short renewable execution lease prevents two
+local MCP processes from running the same operation concurrently; an expired
+lease permits recovery after a crashed process. Because Vikunja does not offer
+distributed idempotency, a response lost between a successful server write and
+the local receipt can still require manual reconciliation.
 
 `set_status` resolves and project-verifies the task, preserves non-status
 labels, removes every label sharing `VIKUNJA_STATUS_LABEL_PREFIX` (default
@@ -497,10 +511,10 @@ server-visible entities rather than project-owned records.
 CSV import has two explicit modes. Native migration is the fast server path
 and is not idempotent. MCP idempotent mode validates and creates rows through
 normal task APIs, hashes normalized project/title/description, and stores
-`idempotencyKey -> row hash -> task id` in a bounded process-local ledger. A
-same-key rerun skips recorded rows and reports created/skipped/failed counts.
-Losing process state can permit duplicates but cannot delete or overwrite
-tasks. Preview performs validation without writes in both modes.
+`idempotencyKey -> row hash -> task id` in the durable local ledger. A same-key
+rerun skips recorded rows and reports created/skipped/failed counts. Deleting
+the ledger can permit duplicates but cannot delete or overwrite tasks. Preview
+performs validation without writes in both modes.
 
 These are MCP workflows, not new Vikunja endpoints.
 

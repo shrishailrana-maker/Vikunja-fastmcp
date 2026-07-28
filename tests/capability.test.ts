@@ -233,11 +233,14 @@ describe('packaged Vikunja skill', () => {
     expect(normalizedSkill).toContain('Use `q` for ordinary free-text task search');
     expect(normalizedSkill).toContain('`search` is an equivalent alias');
     expect(normalizedSkill).toContain('Do not run `self_check` or probe filter syntax');
-    expect(normalizedSkill).toContain('A bare numeric selector means the global database ID');
-    expect(normalizedSkill).toContain('Fetch ALPHA-517 directly with `taskSelector: "ALPHA-517"`');
+    expect(normalizedSkill).toContain('Bare numbers and strings are rejected');
     expect(normalizedSkill).toContain(
-      'A bare portal reference such as `taskSelector: "#517"` still requires',
+      'Fetch ALPHA-517 with `taskSelector: { identifier: "ALPHA-517" }`',
     );
+    expect(normalizedSkill).toContain('Use `taskSelector: { projectIndex: 517 }` only with');
+    expect(normalizedSkill).toContain('Use `taskSelector: { globalId: 9005 }` only');
+    expect(normalizedSkill).toContain('durable SQLite receipts survive local MCP restarts');
+    expect(normalizedSkill).toContain('`expectedUpdatedAt`');
     expect(normalizedSkill).toContain('Task-list `perPage` must not exceed 100');
     expect(normalizedSkill).toContain(
       'Wrap file paths, commands, and code identifiers in inline backticks',

@@ -2,6 +2,7 @@
 
 import type { MutationScopeMode } from './config.js';
 import { VikunjaError } from './errors.js';
+import type { TaskSelectorInput } from './identity.js';
 
 export interface ProjectSelector {
   id?: number;
@@ -14,8 +15,10 @@ function hasProjectScope(project: ProjectSelector | undefined): boolean {
   return project?.id !== undefined || Boolean(project?.title?.trim());
 }
 
-function isGlobalTaskId(selector: string | number | undefined): boolean {
-  return selector !== undefined && /^\d+$/.test(String(selector).trim());
+function isGlobalTaskId(selector: TaskSelectorInput | undefined): boolean {
+  if (selector === undefined) return false;
+  if (typeof selector === 'object') return 'globalId' in selector;
+  return /^\d+$/.test(String(selector).trim());
 }
 
 function defaultWarningSink(message: string): void {
@@ -25,13 +28,17 @@ function defaultWarningSink(message: string): void {
 export function enforceMutationProjectScope(
   mode: MutationScopeMode,
   operation: string,
-  taskSelector: string | number | undefined,
+  taskSelector: TaskSelectorInput | undefined,
   projectSelector?: ProjectSelector,
   warn: WarningSink = defaultWarningSink,
 ): void {
   if (mode === 'off' || !isGlobalTaskId(taskSelector) || hasProjectScope(projectSelector)) return;
 
-  const message = `${operation} received global task id ${String(taskSelector).trim()} without projectSelector.`;
+  const globalId =
+    typeof taskSelector === 'object' && 'globalId' in taskSelector
+      ? taskSelector.globalId
+      : String(taskSelector).trim();
+  const message = `${operation} received global task id ${globalId} without projectSelector.`;
   if (mode === 'warn') {
     warn(
       `${message} Allowed because VIKUNJA_MUTATION_SCOPE_MODE=warn; add explicit project scope.`,
