@@ -98,6 +98,9 @@ requests or legacy tracker scripts while the MCP is available.
 - Pass a stable `idempotencyKey` on task creation, comment creation, attachment
   upload, evidence-close, and every mutating bulk call. Reuse the same key only
   for the identical payload.
+- If `IDEMPOTENCY_OPERATION_IN_PROGRESS` is returned, wait briefly and retry
+  the identical payload with the same key. Never invent a second key for the
+  same intended write.
 - Use bulk `status` with the returned `operationId`, or rerun the same bulk
   payload and key, to resume failed rows without repeating recorded successes.
 - Before replacing a task title or full description, run `get` and pass its

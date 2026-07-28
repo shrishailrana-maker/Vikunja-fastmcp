@@ -240,7 +240,10 @@ describe('packaged Vikunja skill', () => {
     expect(normalizedSkill).toContain('Use `taskSelector: { projectIndex: 517 }` only with');
     expect(normalizedSkill).toContain('Use `taskSelector: { globalId: 9005 }` only');
     expect(normalizedSkill).toContain('durable SQLite receipts survive local MCP restarts');
+    expect(normalizedSkill).toContain('`IDEMPOTENCY_OPERATION_IN_PROGRESS` is returned');
+    expect(normalizedSkill).toContain('identical payload with the same key');
     expect(normalizedSkill).toContain('`expectedUpdatedAt`');
+    expect(normalizedSkill).toContain('`VIKUNJA_SUBSCRIPTION_SCHEMA_BUG` means');
     expect(normalizedSkill).toContain('Task-list `perPage` must not exceed 100');
     expect(normalizedSkill).toContain(
       'Wrap file paths, commands, and code identifiers in inline backticks',
