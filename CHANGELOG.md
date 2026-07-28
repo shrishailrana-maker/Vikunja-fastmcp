@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.4.102 - 2026-07-28
 
 - Replace overloaded numeric/string task inputs with explicit `{globalId}`,
   `{identifier}`, or `{projectIndex}` selectors; bare values are rejected.
