@@ -96,6 +96,9 @@ requests or legacy tracker scripts while the MCP is available.
 - Add verification evidence before closing work. Use `close_with_evidence` when appropriate.
 - Pass `actor` on create, every comment mutation, close, import, and every
   mutating bulk call. These operations reject missing attribution.
+- Treat structured `actor` as the only attribution source. Do not also write
+  `by <agent>` or `Actor: <agent>` in the description or comment text; the MCP
+  appends one canonical suffix.
 - Pass a stable `idempotencyKey` on task creation, comment creation, attachment
   upload, evidence-close, and every mutating bulk call. Reuse the same key only
   for the identical payload.
@@ -125,6 +128,11 @@ requests or legacy tracker scripts while the MCP is available.
 
 - Upload evidence through attachment operations and download through the MCP's
   sandboxed path. Do not put bearer tokens in download URLs.
+- Prefer the typed `vikunja_task_attachments` tool. Bound large lists with
+  `page` and `perPage`, or use `countOnly`/`filenamePrefix`.
+- Delete an attachment only with its task, explicit project scope,
+  `confirm:true`, `actor`, and a stable `idempotencyKey`. The MCP verifies the
+  attachment belongs to that task before deleting it.
 - A `401` means the token or API URL is invalid or expired. A `403` means the
   authenticated identity lacks permission. Preserve the real status.
 - `VIKUNJA_SUBSCRIPTION_SCHEMA_BUG` means Vikunja returned the known invalid

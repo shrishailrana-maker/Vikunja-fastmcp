@@ -205,14 +205,61 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     {
       action: 'list-attachments',
       required: ['taskSelector'],
-      optional: taskSelector,
-      execution: 'Direct GET after identity resolution',
+      optional: [...taskSelector, 'page', 'perPage', 'countOnly', 'filenamePrefix'],
+      execution: 'Direct paginated GET or bounded MCP-side prefix page after identity resolution',
+      note: 'Calls without paging/filter arguments retain the legacy attachment-array response.',
     },
     {
       action: 'download-attachment',
       required: ['taskSelector', 'attachmentId'],
       optional: [...taskSelector, 'destinationPath', 'overwrite'],
       execution: 'Authenticated streaming GET to sandboxed local disk',
+    },
+    {
+      action: 'delete-attachment',
+      required: [
+        'taskSelector',
+        'projectSelector',
+        'attachmentId',
+        'confirm',
+        'actor',
+        'idempotencyKey',
+      ],
+      execution: 'Resolve task, verify attachment ownership, then direct DELETE',
+      note: 'confirm must be true; durable retries return the original deletion receipt.',
+    },
+  ],
+  vikunja_task_attachments: [
+    {
+      action: 'attach',
+      required: ['taskSelector', 'filePaths or base64Content+filename', 'idempotencyKey'],
+      optional: [...taskSelector, 'mimeType'],
+      execution: 'Multipart POST per file after identity resolution',
+    },
+    {
+      action: 'list',
+      required: ['taskSelector'],
+      optional: [...taskSelector, 'page', 'perPage', 'countOnly', 'filenamePrefix'],
+      execution: 'Bounded direct GET or MCP-side prefix page after identity resolution',
+    },
+    {
+      action: 'download',
+      required: ['taskSelector', 'attachmentId'],
+      optional: [...taskSelector, 'destinationPath', 'overwrite'],
+      execution: 'Authenticated streaming GET to sandboxed local disk',
+    },
+    {
+      action: 'delete',
+      required: [
+        'taskSelector',
+        'projectSelector',
+        'attachmentId',
+        'confirm',
+        'actor',
+        'idempotencyKey',
+      ],
+      execution: 'Resolve task, verify attachment ownership, then direct DELETE',
+      note: 'Never deletes an attachment that is absent from the resolved task.',
     },
   ],
   vikunja_task_comments: [

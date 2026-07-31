@@ -168,6 +168,9 @@ as independent tracker writers.
 - `vikunja_tasks` — CRUD, stable-key upsert, open-task lists, project summary,
   create-if-absent, assignees, labels, status switching, relations, and
   attachments.
+- `vikunja_task_attachments` — typed upload, bounded list/count, authenticated
+  download, and ownership-verified deletion. Existing attachment actions on
+  `vikunja_tasks` remain compatible.
 - `vikunja_task_comments` — paginated comment lists with a 20-item default and
   100-item maximum.
 - `vikunja_labels` — global labels (title or id)
@@ -193,7 +196,7 @@ resume without repeating recorded successes.
 
 Task updates, assignment changes, and label removal return `unchanged` when the
 requested state already exists. Task create, create-if-absent, comment create,
-attachment upload, evidence-close, and every mutating bulk call require a
+attachment upload/deletion, evidence-close, and every mutating bulk call require a
 stable `idempotencyKey`. Reusing one key with a different payload is rejected.
 Receipts survive MCP restarts and concurrent local agent processes. They are
 protected by an atomic local execution lease, but are not a distributed lock
@@ -221,6 +224,13 @@ Create, comment-create/update/delete, close, evidence-close, import, and
 mutating bulk operations require `actor` attribution. `summary` returns project
 counts by done state, priority, label, and configured status label without
 returning task bodies.
+
+Attachment deletion additionally requires explicit `projectSelector`,
+`confirm:true`, and `actor`. The MCP resolves the task, verifies the attachment
+belongs to it, and returns the deleted metadata plus the remaining count. Use
+`page`, `perPage`, `countOnly`, and `filenamePrefix` for bounded attachment
+lists; an old `vikunja_tasks list-attachments` call without these options keeps
+its original simple array response.
 
 `set_status` replaces every task label matching `VIKUNJA_STATUS_LABEL_PREFIX`
 with the requested existing visible label in one bulk-label request. It repairs

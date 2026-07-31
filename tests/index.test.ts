@@ -55,7 +55,7 @@ describe('MCP Server Registration and Dispatching tests', () => {
     const response = await handler({
       method: 'tools/list',
     });
-    expect(response.tools.length).toBe(17);
+    expect(response.tools.length).toBe(18);
 
     for (const name of [
       'vikunja_task_bulk',
@@ -151,6 +151,44 @@ describe('MCP Server Registration and Dispatching tests', () => {
     expect(createBranch.required).toContain('actor');
     expect(createBranch.required).toContain('idempotencyKey');
     expect(closeBranch.required).toContain('actor');
+
+    const attachmentTool = response.tools.find(
+      (tool: any) => tool.name === 'vikunja_task_attachments',
+    );
+    expect(attachmentTool).toBeDefined();
+    expect(
+      attachmentTool.inputSchema.oneOf.map((branch: any) => branch.properties.action.const),
+    ).toEqual(expect.arrayContaining(['attach', 'list', 'download', 'delete']));
+    const attachmentDeleteBranch = attachmentTool.inputSchema.oneOf.find(
+      (branch: any) => branch.properties.action.const === 'delete',
+    );
+    expect(attachmentDeleteBranch.required).toEqual(
+      expect.arrayContaining([
+        'taskSelector',
+        'projectSelector',
+        'attachmentId',
+        'confirm',
+        'actor',
+        'idempotencyKey',
+      ]),
+    );
+    expect(attachmentDeleteBranch.additionalProperties).toBe(false);
+    const attachmentListBranch = attachmentTool.inputSchema.oneOf.find(
+      (branch: any) => branch.properties.action.const === 'list',
+    );
+    expect(attachmentListBranch.properties).toEqual(
+      expect.objectContaining({
+        page: { type: 'number' },
+        perPage: { type: 'number' },
+        countOnly: { type: 'boolean' },
+        filenamePrefix: { type: 'string' },
+      }),
+    );
+    expect(
+      taskTool.inputSchema.oneOf.some(
+        (branch: any) => branch.properties.action.const === 'delete-attachment',
+      ),
+    ).toBe(true);
 
     const commentTool = response.tools.find((t: any) => t.name === 'vikunja_task_comments');
     const commentCreateBranch = commentTool.inputSchema.oneOf.find(

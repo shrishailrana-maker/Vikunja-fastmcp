@@ -122,7 +122,8 @@ server may be newer than the committed snapshot.
 | --- | --- |
 | `vikunja_auth` | `status`, `self-check` |
 | `vikunja_projects` | `list`, `get` |
-| `vikunja_tasks` | `create`, `create_if_absent`, `get`, `list`, `summary`, `update`, `delete`, `close`, `reopen`, `close_with_evidence`, `assign`, `unassign`, `list-assignees`, `apply-label`, `remove-label`, `list-labels`, `set_status`, `relate`, `unrelate`, `list-relations`, `attach`, `list-attachments`, `download-attachment` |
+| `vikunja_tasks` | `create`, `create_if_absent`, `get`, `list`, `summary`, `update`, `delete`, `close`, `reopen`, `close_with_evidence`, `assign`, `unassign`, `list-assignees`, `apply-label`, `remove-label`, `list-labels`, `set_status`, `relate`, `unrelate`, `list-relations`, `attach`, `list-attachments`, `download-attachment`, `delete-attachment` |
+| `vikunja_task_attachments` | `attach`, `list`, `download`, `delete` |
 | `vikunja_task_comments` | `create`, `list`, `get`, `update`, `delete`; list defaults to page 1 with 20 comments and caps `perPage` at 100 |
 | `vikunja_labels` | `list`, `get`, `create`, `update`, `delete` |
 | `vikunja_users` | `current`, `search` |
@@ -532,11 +533,23 @@ updating a bug:
   values, or from base64 plus explicit filenames, and returns attachment
   metadata.
 * `list-attachments` returns attachment IDs, names, sizes, and URLs without
-  file bytes.
+  file bytes. `page`, `perPage`, `countOnly`, and `filenamePrefix` provide a
+  bounded response. Existing calls without those options retain the simple
+  attachment-array response.
 * `download-attachment` downloads through the authenticated MCP connection to
   an explicit local `destinationPath` or, when omitted, a safe directory under
   the operating-system temporary folder. It returns the local path, filename,
   media type, size, checksum, and source metadata.
+* `delete-attachment` and the typed attachment tool's `delete` action require
+  `taskSelector`, explicit `projectSelector`, `attachmentId`, `confirm:true`,
+  `actor`, and `idempotencyKey`. The MCP resolves the task, reads every
+  attachment page, verifies the attachment belongs to that task, and only then
+  calls `DELETE /tasks/{task}/attachments/{attachment}`. The receipt includes
+  deleted metadata and `remainingAttachmentCount`; an identical retry returns
+  the durable receipt without another API request.
+
+`vikunja_task_attachments` is the preferred discoverable attachment surface.
+The attachment actions on `vikunja_tasks` remain supported for compatibility.
 
 The default local path is deterministic:
 

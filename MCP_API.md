@@ -48,7 +48,7 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 ### `vikunja_tasks`
 * **Description**: Create, update, delete, close, assign, label, relate, or attach files to tasks.
 * **Parameters**:
-  * `action`: enum ["create", "create_if_absent", "upsert", "get", "list", "summary", "update", "delete", "close", "reopen", "close_with_evidence", "assign", "unassign", "list-assignees", "apply-label", "remove-label", "list-labels", "set_status", "relate", "unrelate", "list-relations", "attach", "list-attachments", "download-attachment"] (required)
+  * `action`: enum ["create", "create_if_absent", "upsert", "get", "list", "summary", "update", "delete", "close", "reopen", "close_with_evidence", "assign", "unassign", "list-assignees", "apply-label", "remove-label", "list-labels", "set_status", "relate", "unrelate", "list-relations", "attach", "list-attachments", "download-attachment", "delete-attachment"] (required)
   * `taskSelector`: object (optional)
   * `projectSelector`: object (optional)
   * `projects`: array (optional)
@@ -85,6 +85,8 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
   * `attachmentId`: number (optional); integer, min 0
   * `destinationPath`: string (optional)
   * `overwrite`: boolean (optional)
+  * `filenamePrefix`: string (optional); max 255
+  * `confirm`: boolean (optional)
   * `idempotencyKey`: string (optional); min 1, max 200
   * `externalKey`: string (optional)
 
@@ -114,8 +116,39 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 | `unrelate` | taskSelector, otherTaskSelector, relationKind | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), responseMode | Resolve both tasks then DELETE relation |
 | `list-relations` | taskSelector | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), responseMode (compact default; standard/full explicit) | MCP-composed from task related_tasks data |
 | `attach` | taskSelector, filePaths or base64Content+filename, idempotencyKey | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), mimeType, responseMode | Multipart POST per file after identity resolution |
-| `list-attachments` | taskSelector | projectSelector (required with taskSelector.projectIndex; optional guard otherwise) | Direct GET after identity resolution |
+| `list-attachments` | taskSelector | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), page, perPage, countOnly, filenamePrefix | Direct paginated GET or bounded MCP-side prefix page after identity resolution. Calls without paging/filter arguments retain the legacy attachment-array response. |
 | `download-attachment` | taskSelector, attachmentId | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), destinationPath, overwrite | Authenticated streaming GET to sandboxed local disk |
+| `delete-attachment` | taskSelector, projectSelector, attachmentId, confirm, actor, idempotencyKey | none | Resolve task, verify attachment ownership, then direct DELETE. confirm must be true; durable retries return the original deletion receipt. |
+
+### `vikunja_task_attachments`
+* **Description**: Typed task attachment operations: upload, bounded list/count, authenticated download, and ownership-safe deletion.
+* **Parameters**:
+  * `action`: enum ["attach", "list", "download", "delete"] (required)
+  * `taskSelector`: object (required)
+  * `projectSelector`: object (optional)
+  * `filename`: string (optional)
+  * `mimeType`: string (optional)
+  * `base64Content`: string (optional)
+  * `filePaths`: array (optional)
+  * `attachmentId`: number (optional); integer, min 0
+  * `destinationPath`: string (optional)
+  * `overwrite`: boolean (optional)
+  * `page`: number (optional); integer, min 1
+  * `perPage`: number (optional); integer, min 1, max 1000
+  * `countOnly`: boolean (optional)
+  * `filenamePrefix`: string (optional); max 255
+  * `confirm`: boolean (optional)
+  * `actor`: string (optional); min 1, max 80
+  * `idempotencyKey`: string (optional); min 1, max 200
+
+#### Operations
+
+| Action | Required | Optional | Execution |
+| --- | --- | --- | --- |
+| `attach` | taskSelector, filePaths or base64Content+filename, idempotencyKey | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), mimeType | Multipart POST per file after identity resolution |
+| `list` | taskSelector | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), page, perPage, countOnly, filenamePrefix | Bounded direct GET or MCP-side prefix page after identity resolution |
+| `download` | taskSelector, attachmentId | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), destinationPath, overwrite | Authenticated streaming GET to sandboxed local disk |
+| `delete` | taskSelector, projectSelector, attachmentId, confirm, actor, idempotencyKey | none | Resolve task, verify attachment ownership, then direct DELETE. Never deletes an attachment that is absent from the resolved task. |
 
 ### `vikunja_task_comments`
 * **Description**: Manage task comments (create, list, get, update, delete).

@@ -12,6 +12,7 @@
 import { loadConfig } from './config.js';
 import { VikunjaApiClient } from './api.js';
 import { fetchAllCollectionItems, normalizePagination } from './format.js';
+import { redactSecrets } from './errors.js';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -122,7 +123,7 @@ export async function runSelfCheck(
       ok: false,
       diagnostics: {
         ...diagnostics,
-        connectionError: `Configuration error: ${err.message}`,
+        connectionError: `Configuration error: ${redactSecrets(err.message)}`,
       },
     };
   }
@@ -139,7 +140,7 @@ export async function runSelfCheck(
     diagnostics.attachmentDownloadRootWritable = true;
   } catch (err: any) {
     diagnostics.attachmentDownloadRootWritable = false;
-    diagnostics.connectionError = `Download root write failure: ${err.message}`;
+    diagnostics.connectionError = `Download root write failure: ${redactSecrets(err.message, config.vikunjaToken)}`;
   }
 
   // 2. Verify authenticated server access and return compact project orientation.
@@ -168,7 +169,10 @@ export async function runSelfCheck(
   } catch (err: any) {
     diagnostics.authenticationState = err?.status === 401 ? 'unauthenticated' : 'unknown';
     diagnostics.connectionStatus = err?.code === 'NETWORK_ERROR' ? 'offline' : 'online';
-    diagnostics.connectionError = err.message || 'Failed to connect to Vikunja server';
+    diagnostics.connectionError = redactSecrets(
+      err.message || 'Failed to connect to Vikunja server',
+      config.vikunjaToken,
+    );
   }
 
   // If download directory is not writable or connection is offline, ok is false

@@ -67,6 +67,16 @@ describe('workflow policy and compact project workflows', () => {
     expect(withActorAttribution('Verified.\n\n(by Codex)', 'Codex')).toBe(
       'Verified.\n\n(by Codex)',
     );
+    expect(withActorAttribution('Verified.\n\nby Codex', 'Codex')).toBe('Verified.\n\n(by Codex)');
+    expect(withActorAttribution('Verified.\n\nActor: Codex', 'Codex')).toBe(
+      'Verified.\n\n(by Codex)',
+    );
+    expect(withActorAttribution('Verified.\n\nby Codex (as example-user)', 'Codex')).toBe(
+      'Verified.\n\n(by Codex)',
+    );
+    expect(withActorAttribution('Verified.\n\n(by Codex)\n\n(by Codex)', 'Codex')).toBe(
+      'Verified.\n\n(by Codex)',
+    );
 
     mockFetch
       .mockResolvedValueOnce({
@@ -84,7 +94,7 @@ describe('workflow policy and compact project workflows', () => {
     await createTask(
       client,
       { id: 7 },
-      { title: 'Attributed task', description: 'Created from a verified report.' },
+      { title: 'Attributed task', description: 'Created from a verified report.\n\nby Codex' },
       undefined,
       undefined,
       'Codex',
@@ -92,9 +102,10 @@ describe('workflow policy and compact project workflows', () => {
     const taskPost = mockFetch.mock.calls.find(
       (call) => (call[1] as RequestInit)?.method === 'POST',
     );
-    expect(JSON.parse((taskPost![1] as RequestInit).body as string).description).toContain(
-      '(by Codex)',
-    );
+    const taskDescription = JSON.parse((taskPost![1] as RequestInit).body as string)
+      .description as string;
+    expect(taskDescription).toContain('(by Codex)');
+    expect(taskDescription.match(/by Codex/g)).toHaveLength(1);
 
     mockFetch.mockReset();
     mockFetch
@@ -122,13 +133,14 @@ describe('workflow policy and compact project workflows', () => {
           }),
       } as Response);
 
-    await createComment(client, 42, 'Evidence.', undefined, undefined, 'Claude');
+    await createComment(client, 42, 'Evidence.\n\nActor: Claude', undefined, undefined, 'Claude');
     const commentPost = mockFetch.mock.calls.find(
       (call) => (call[1] as RequestInit)?.method === 'POST',
     );
-    expect(JSON.parse((commentPost![1] as RequestInit).body as string).comment).toContain(
-      '(by Claude)',
-    );
+    const commentBody = JSON.parse((commentPost![1] as RequestInit).body as string)
+      .comment as string;
+    expect(commentBody).toContain('(by Claude)');
+    expect(commentBody.match(/by Claude/g)).toHaveLength(1);
   });
 
   it('returns a project-only aggregate without task bodies', async () => {

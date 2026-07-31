@@ -14,7 +14,7 @@ import { resolveTaskInput as resolveTask, type TaskSelectorInput } from './ident
 import { redactSecrets, VikunjaError } from './errors.js';
 import { runDurableOperation } from './idempotency.js';
 import { DEFAULT_MAX_ATTACHMENT_BYTES } from './config.js';
-import { toItemArray } from './format.js';
+import { fetchAllCollectionItems, normalizePagination, toItemArray } from './format.js';
 import path from 'path';
 import fs from 'fs/promises';
 import crypto from 'crypto';
@@ -26,6 +26,75 @@ export interface AttachmentInfo {
   mime: string;
   fileSize: number;
   created: string;
+}
+
+export interface AttachmentListOptions {
+  page?: number;
+  perPage?: number;
+  countOnly?: boolean;
+  filenamePrefix?: string;
+}
+
+export interface AttachmentListResult {
+  task: { id: number; portalRef: string; title: string };
+  attachments: AttachmentInfo[];
+  page: number;
+  perPage: number;
+  total: number;
+  hasMore: boolean;
+  nextPage: number | null;
+  countOnly: boolean;
+}
+
+export interface DeleteAttachmentResult {
+  action: 'deleted';
+  task: { id: number; portalRef: string; title: string };
+  attachment: AttachmentInfo;
+  remainingAttachmentCount: number;
+  actor: string;
+}
+
+function normalizeAttachment(att: any): AttachmentInfo {
+  return {
+    id: att.id,
+    fileName: att.file?.name || att.file_name || 'unknown',
+    mime: att.file?.mime || att.mime || 'application/octet-stream',
+    fileSize: att.file?.size || att.file_size || 0,
+    created: att.created,
+  };
+}
+
+function attachmentTaskSummary(task: {
+  id: number;
+  index: number;
+  identifier?: string;
+  title: string;
+}): { id: number; portalRef: string; title: string } {
+  return {
+    id: task.id,
+    portalRef: task.identifier || `#${task.index}`,
+    title: task.title,
+  };
+}
+
+async function fetchAllAttachments(
+  client: VikunjaApiClient,
+  taskId: number,
+  filenamePrefix?: string,
+): Promise<AttachmentInfo[]> {
+  const prefix = filenamePrefix?.trim();
+  const query = prefix ? `?q=${encodeURIComponent(prefix)}` : '';
+  const raw = await fetchAllCollectionItems<any>(
+    (requestPath) => client.request<any>('GET', requestPath),
+    `/tasks/${taskId}/attachments${query}`,
+    1000,
+  );
+  const normalized = raw.map(normalizeAttachment);
+  if (!prefix) return normalized;
+  const foldedPrefix = prefix.toLocaleLowerCase();
+  return normalized.filter((attachment) =>
+    attachment.fileName.toLocaleLowerCase().startsWith(foldedPrefix),
+  );
 }
 
 // Minimal extension→MIME map for local-file uploads where the caller did not
@@ -676,15 +745,136 @@ export async function listAttachments(
   client: VikunjaApiClient,
   taskSelector: TaskSelectorInput,
   projectSelector?: { id?: number; title?: string },
-): Promise<AttachmentInfo[]> {
+): Promise<AttachmentInfo[]>;
+export async function listAttachments(
+  client: VikunjaApiClient,
+  taskSelector: TaskSelectorInput,
+  projectSelector: { id?: number; title?: string } | undefined,
+  options: AttachmentListOptions,
+): Promise<AttachmentListResult>;
+export async function listAttachments(
+  client: VikunjaApiClient,
+  taskSelector: TaskSelectorInput,
+  projectSelector?: { id?: number; title?: string },
+  options?: AttachmentListOptions,
+): Promise<AttachmentInfo[] | AttachmentListResult> {
   const task = await resolveTask(client, taskSelector, projectSelector);
-  const rawList = await client.request<any>('GET', `/tasks/${task.id}/attachments`);
+  if (options === undefined) {
+    const rawList = await client.request<any>('GET', `/tasks/${task.id}/attachments`);
+    return toItemArray(rawList).map(normalizeAttachment);
+  }
 
-  return toItemArray(rawList).map((att) => ({
-    id: att.id,
-    fileName: att.file?.name || att.file_name || 'unknown',
-    mime: att.file?.mime || att.mime || 'application/octet-stream',
-    fileSize: att.file?.size || att.file_size || 0,
-    created: att.created,
-  }));
+  const page = options.page ?? 1;
+  const perPage = options.perPage ?? 20;
+  const countOnly = options.countOnly === true;
+  const prefix = options.filenamePrefix?.trim();
+  let attachments: AttachmentInfo[];
+  let total: number;
+
+  if (prefix) {
+    const matches = await fetchAllAttachments(client, task.id, prefix);
+    total = matches.length;
+    const start = (page - 1) * perPage;
+    attachments = countOnly ? [] : matches.slice(start, start + perPage);
+  } else {
+    const requestPage = countOnly ? 1 : page;
+    const requestPerPage = countOnly ? 1 : perPage;
+    const rawList = await client.request<any>(
+      'GET',
+      `/tasks/${task.id}/attachments?page=${requestPage}&per_page=${requestPerPage}`,
+    );
+    total = normalizePagination(rawList).total;
+    attachments = countOnly ? [] : toItemArray(rawList).map(normalizeAttachment);
+  }
+
+  const totalPages = total === 0 ? 0 : Math.ceil(total / perPage);
+  const hasMore = page < totalPages;
+  return {
+    task: attachmentTaskSummary(task),
+    attachments,
+    page,
+    perPage,
+    total,
+    hasMore,
+    nextPage: hasMore ? page + 1 : null,
+    countOnly,
+  };
+}
+
+export async function deleteAttachment(
+  client: VikunjaApiClient,
+  taskSelector: TaskSelectorInput,
+  attachmentId: number,
+  projectSelector: { id?: number; title?: string },
+  confirm: boolean,
+  actor: string,
+  idempotencyKey: string,
+): Promise<DeleteAttachmentResult> {
+  if (!projectSelector || (!projectSelector.id && !projectSelector.title?.trim())) {
+    throw new VikunjaError({
+      status: 400,
+      code: 'PROJECT_SCOPE_REQUIRED',
+      method: 'DELETE',
+      path: '/attachments',
+      message: 'projectSelector is required for attachment deletion.',
+      fieldErrors: [],
+    });
+  }
+  if (confirm !== true) {
+    throw new VikunjaError({
+      status: 400,
+      code: 'CONFIRMATION_REQUIRED',
+      method: 'DELETE',
+      path: '/attachments',
+      message: 'confirm:true is required for attachment deletion.',
+      fieldErrors: [],
+    });
+  }
+  if (!actor?.trim()) {
+    throw new VikunjaError({
+      status: 400,
+      code: 'ACTOR_REQUIRED',
+      method: 'DELETE',
+      path: '/attachments',
+      message: 'actor is required for attachment deletion.',
+      fieldErrors: [],
+    });
+  }
+  if (!idempotencyKey?.trim()) {
+    throw new VikunjaError({
+      status: 400,
+      code: 'IDEMPOTENCY_KEY_REQUIRED',
+      method: 'DELETE',
+      path: '/attachments',
+      message: 'idempotencyKey is required for attachment deletion.',
+      fieldErrors: [],
+    });
+  }
+
+  const payload = { taskSelector, projectSelector, attachmentId, actor: actor.trim() };
+  return runDurableOperation('attachment-delete', idempotencyKey, payload, async () => {
+    const task = await resolveTask(client, taskSelector, projectSelector);
+    const attachments = await fetchAllAttachments(client, task.id);
+    const attachment = attachments.find((candidate) => candidate.id === attachmentId);
+    const apiPath = `/tasks/${task.id}/attachments/${attachmentId}`;
+    if (!attachment) {
+      throw new VikunjaError({
+        status: 404,
+        code: 'ATTACHMENT_NOT_FOUND',
+        method: 'DELETE',
+        path: apiPath,
+        message: `Attachment ${attachmentId} was not found on the resolved task; nothing was deleted.`,
+        fieldErrors: [],
+      });
+    }
+
+    await client.request('DELETE', apiPath);
+    return {
+      action: 'deleted',
+      task: attachmentTaskSummary(task),
+      attachment,
+      remainingAttachmentCount: attachments.length - 1,
+      actor: actor.trim(),
+    };
+  });
 }

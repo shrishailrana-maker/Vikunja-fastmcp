@@ -15,10 +15,12 @@ import {
   uploadAttachment,
   attachFiles,
   downloadAttachment,
+  deleteAttachment,
   listAttachments,
   resolveSafePath,
 } from '../src/attachments.js';
 import { idempotency } from '../src/idempotency.js';
+import { cache } from '../src/identity.js';
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
@@ -38,6 +40,7 @@ describe('Attachment Upload, Verification and Download tests', () => {
     client = new VikunjaApiClient(config);
     mockFetch = jest.spyOn(global, 'fetch');
     idempotency.clear();
+    cache.clearProjects();
   });
 
   afterEach(() => {
@@ -281,6 +284,246 @@ describe('Attachment Upload, Verification and Download tests', () => {
       const list = await listAttachments(client, 9005);
       expect(list.length).toBe(1);
       expect(list[0].fileName).toBe('test.txt');
+    });
+
+    it('returns an exact bounded page and count for a filename prefix', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            id: 9005,
+            index: 305,
+            identifier: 'ALPHA-305',
+            title: 'Build evidence',
+            project_id: 101,
+            project: { title: 'Alpha' },
+          }),
+      } as Response);
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            items: [
+              { id: 3001, created: 't1', file: { name: 'build-a.zip', size: 10 } },
+              { id: 3002, created: 't2', file: { name: 'notes.txt', size: 20 } },
+              { id: 3003, created: 't3', file: { name: 'build-b.zip', size: 30 } },
+            ],
+            page: 1,
+            per_page: 1000,
+            total: 3,
+            total_pages: 1,
+          }),
+      } as Response);
+
+      const result = await listAttachments(client, { globalId: 9005 }, undefined, {
+        page: 2,
+        perPage: 1,
+        filenamePrefix: 'BUILD-',
+      });
+
+      expect(result).toMatchObject({
+        task: { id: 9005, portalRef: 'ALPHA-305', title: 'Build evidence' },
+        page: 2,
+        perPage: 1,
+        total: 2,
+        hasMore: false,
+        nextPage: null,
+        countOnly: false,
+      });
+      expect(result.attachments).toEqual([
+        expect.objectContaining({ id: 3003, fileName: 'build-b.zip' }),
+      ]);
+      expect(String(mockFetch.mock.calls[1][0])).toContain('q=BUILD-');
+    });
+
+    it('returns count-only attachment metadata without item bodies', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            id: 9005,
+            index: 305,
+            identifier: 'ALPHA-305',
+            title: 'Build evidence',
+            project_id: 101,
+            project: { title: 'Alpha' },
+          }),
+      } as Response);
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            items: [{ id: 3001, file: { name: 'build.zip', size: 10 } }],
+            page: 1,
+            per_page: 1,
+            total: 41,
+            total_pages: 41,
+          }),
+      } as Response);
+
+      const result = await listAttachments(client, { globalId: 9005 }, undefined, {
+        countOnly: true,
+      });
+
+      expect(result).toMatchObject({ total: 41, hasMore: true, nextPage: 2, countOnly: true });
+      expect(result.attachments).toEqual([]);
+      expect(String(mockFetch.mock.calls[1][0])).toContain('per_page=1');
+    });
+  });
+
+  describe('Delete Attachment', () => {
+    const taskResponse = {
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          id: 9005,
+          index: 305,
+          identifier: 'ALPHA-305',
+          title: 'Build evidence',
+          project_id: 101,
+        }),
+    } as Response;
+    const projectResponse = {
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ id: 101, title: 'Alpha' }),
+    } as Response;
+    const attachmentResponse = (items: any[]) =>
+      ({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            items,
+            page: 1,
+            per_page: 1000,
+            total: items.length,
+            total_pages: items.length > 0 ? 1 : 0,
+          }),
+      }) as Response;
+
+    it('requires confirmation, project scope, actor, and an idempotency key before I/O', async () => {
+      await expect(
+        deleteAttachment(
+          client,
+          { globalId: 9005 },
+          3001,
+          { id: 101 },
+          false,
+          'Codex',
+          'delete-old-build',
+        ),
+      ).rejects.toMatchObject({ code: 'CONFIRMATION_REQUIRED' });
+      await expect(
+        deleteAttachment(
+          client,
+          { globalId: 9005 },
+          3001,
+          {} as any,
+          true,
+          'Codex',
+          'delete-old-build',
+        ),
+      ).rejects.toMatchObject({ code: 'PROJECT_SCOPE_REQUIRED' });
+      await expect(
+        deleteAttachment(
+          client,
+          { globalId: 9005 },
+          3001,
+          { id: 101 },
+          true,
+          '',
+          'delete-old-build',
+        ),
+      ).rejects.toMatchObject({ code: 'ACTOR_REQUIRED' });
+      await expect(
+        deleteAttachment(client, { globalId: 9005 }, 3001, { id: 101 }, true, 'Codex', ''),
+      ).rejects.toMatchObject({ code: 'IDEMPOTENCY_KEY_REQUIRED' });
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('verifies ownership, deletes once, and returns a durable retry receipt', async () => {
+      mockFetch
+        .mockResolvedValueOnce(taskResponse)
+        .mockResolvedValueOnce(projectResponse)
+        .mockResolvedValueOnce(
+          attachmentResponse([
+            {
+              id: 3001,
+              created: '2026-07-31T00:00:00Z',
+              file: { name: 'old-build.zip', mime: 'application/zip', size: 50 },
+            },
+            {
+              id: 3002,
+              created: '2026-07-31T00:01:00Z',
+              file: { name: 'current-build.zip', mime: 'application/zip', size: 60 },
+            },
+          ]),
+        )
+        .mockResolvedValueOnce({ ok: true, status: 204, text: async () => '' } as Response);
+
+      const first = await deleteAttachment(
+        client,
+        { globalId: 9005 },
+        3001,
+        { id: 101 },
+        true,
+        'Codex',
+        'delete-old-build',
+      );
+      const callsAfterFirst = mockFetch.mock.calls.length;
+      const second = await deleteAttachment(
+        client,
+        { globalId: 9005 },
+        3001,
+        { id: 101 },
+        true,
+        'Codex',
+        'delete-old-build',
+      );
+
+      expect(first).toEqual(second);
+      expect(first).toMatchObject({
+        action: 'deleted',
+        task: { id: 9005, portalRef: 'ALPHA-305', title: 'Build evidence' },
+        attachment: { id: 3001, fileName: 'old-build.zip' },
+        remainingAttachmentCount: 1,
+        actor: 'Codex',
+      });
+      expect(mockFetch.mock.calls).toHaveLength(callsAfterFirst);
+      expect(mockFetch.mock.calls.filter((call: any) => call[1]?.method === 'DELETE')).toHaveLength(
+        1,
+      );
+      expect(String(mockFetch.mock.calls.at(-1)?.[0])).toMatch(/\/tasks\/9005\/attachments\/3001$/);
+    });
+
+    it('never deletes an attachment that is not listed on the resolved task', async () => {
+      mockFetch
+        .mockResolvedValueOnce(taskResponse)
+        .mockResolvedValueOnce(projectResponse)
+        .mockResolvedValueOnce(
+          attachmentResponse([
+            { id: 4001, created: 't', file: { name: 'belongs-here.txt', size: 1 } },
+          ]),
+        );
+
+      await expect(
+        deleteAttachment(
+          client,
+          { globalId: 9005 },
+          3001,
+          { id: 101 },
+          true,
+          'Codex',
+          'wrong-task-attachment',
+        ),
+      ).rejects.toMatchObject({ status: 404, code: 'ATTACHMENT_NOT_FOUND' });
+      expect(mockFetch.mock.calls.some((call: any) => call[1]?.method === 'DELETE')).toBe(false);
     });
   });
 

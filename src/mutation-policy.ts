@@ -59,7 +59,22 @@ export function enforceMutationProjectScope(
 export function withActorAttribution(text: string | undefined, actor?: string): string | undefined {
   if (!actor) return text;
   const suffix = `(by ${actor})`;
-  const body = text?.trimEnd() ?? '';
-  if (body.endsWith(suffix)) return body;
+  let body = text?.trimEnd() ?? '';
+  const escapedActor = actor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const attributionLine = new RegExp(
+    `^(?:\\(\\s*by\\s+${escapedActor}(?:\\s+\\(as\\s+[^)\\r\\n]+\\))?\\s*\\)|by\\s+${escapedActor}(?:\\s+\\(as\\s+[^)\\r\\n]+\\))?|actor\\s*:\\s*${escapedActor})[.!]?$`,
+    'iu',
+  );
+  const lines = body.split(/\r?\n/);
+  while (lines.length > 0) {
+    const last = lines.at(-1)?.trim() ?? '';
+    if (last === '') {
+      lines.pop();
+      continue;
+    }
+    if (!attributionLine.test(last)) break;
+    lines.pop();
+  }
+  body = lines.join('\n').trimEnd();
   return body ? `${body}\n\n${suffix}` : suffix;
 }

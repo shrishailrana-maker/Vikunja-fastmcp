@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.4.103 - 2026-07-31
+
+- Add the typed `vikunja_task_attachments` tool for upload, bounded listing,
+  authenticated download, and ownership-safe deletion.
+- Add compatible `delete-attachment`, paging, count-only, and filename-prefix
+  options to the existing `vikunja_tasks` attachment actions.
+- Require explicit project scope, `confirm:true`, actor attribution, and a
+  durable idempotency key before deleting an attachment.
+- Verify attachment ownership before deletion and return deleted metadata plus
+  the remaining attachment count; identical retries perform no API requests.
+- Canonicalize trailing actor text to exactly one `(by actor)` suffix and make
+  structured `actor` the only attribution source in the packaged skill.
+- Redact configured tokens and bearer values from API errors, self-check
+  diagnostics, attachment failures, stack text, and all MCP tool envelopes.
+
 ## 2.4.102 - 2026-07-28
 
 - Replace overloaded numeric/string task inputs with explicit `{globalId}`,

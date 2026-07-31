@@ -10,7 +10,7 @@
  */
 
 import { Config, DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_TRANSFER_TIMEOUT_MS } from './config.js';
-import { VikunjaError, mapStatusToCode } from './errors.js';
+import { VikunjaError, mapStatusToCode, redactSecrets } from './errors.js';
 
 export class VikunjaApiClient {
   private readonly config: Config;
@@ -103,6 +103,11 @@ export class VikunjaApiClient {
         } catch {
           // If response is not JSON, we keep the default status text
         }
+        detail = redactSecrets(String(detail), this.config.vikunjaToken);
+        fieldErrors = fieldErrors.map((fieldError) => ({
+          location: redactSecrets(fieldError.location, this.config.vikunjaToken),
+          message: redactSecrets(fieldError.message, this.config.vikunjaToken),
+        }));
 
         const subscriptionSchemaFailure = fieldErrors.some(
           (fieldError) =>
@@ -187,7 +192,7 @@ export class VikunjaApiClient {
         code: err.status ? mapStatusToCode(err.status) : 'NETWORK_ERROR',
         method,
         path,
-        message: err.message || 'Network request failed',
+        message: redactSecrets(err.message || 'Network request failed', this.config.vikunjaToken),
         fieldErrors: [],
       });
     }

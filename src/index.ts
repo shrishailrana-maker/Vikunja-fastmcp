@@ -59,7 +59,13 @@ import {
   updateComment,
   deleteComment,
 } from './comments.js';
-import { attachFiles, downloadAttachment, listAttachments, AttachFileSpec } from './attachments.js';
+import {
+  attachFiles,
+  deleteAttachment,
+  downloadAttachment,
+  listAttachments,
+  AttachFileSpec,
+} from './attachments.js';
 import {
   createTeam,
   getTeam,
@@ -297,6 +303,10 @@ function safeSummaryText(value: unknown): string {
     .trim();
 }
 
+function safeEnvelopeText(text: string, configuredToken?: string): string {
+  return redactSecrets(text, configuredToken ?? process.env.VIKUNJA_API_TOKEN);
+}
+
 // Handler precondition failures are caller mistakes (missing/invalid args), so
 // they must surface as a 400 VALIDATION_ERROR, not a generic 500 from the
 // non-VikunjaError branch of toErrorEnvelope.
@@ -497,6 +507,7 @@ export const TOOLS: McpToolDefinition[] = [
         'attach',
         'list-attachments',
         'download-attachment',
+        'delete-attachment',
       ]),
       taskSelector: taskSelectorSchema.optional(),
       projectSelector: z
@@ -572,6 +583,8 @@ export const TOOLS: McpToolDefinition[] = [
       attachmentId: z.number().int().positive().optional(),
       destinationPath: z.string().optional(),
       overwrite: z.boolean().optional(),
+      filenamePrefix: z.string().max(255).optional(),
+      confirm: z.boolean().optional(),
       idempotencyKey: z.string().trim().min(1).max(200).optional(),
       externalKey: z.string().regex(EXTERNAL_KEY_PATTERN).optional(),
     }),
@@ -809,7 +822,20 @@ export const TOOLS: McpToolDefinition[] = [
         }
         case 'list-attachments':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
-          return listAttachments(client, args.taskSelector, args.projectSelector);
+          if (
+            args.page === undefined &&
+            args.perPage === undefined &&
+            args.countOnly === undefined &&
+            args.filenamePrefix === undefined
+          ) {
+            return listAttachments(client, args.taskSelector, args.projectSelector);
+          }
+          return listAttachments(client, args.taskSelector, args.projectSelector, {
+            page: args.page,
+            perPage: args.perPage,
+            countOnly: args.countOnly,
+            filenamePrefix: args.filenamePrefix,
+          });
         case 'download-attachment':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
           if (args.attachmentId === undefined) throw badRequest('attachmentId is required.');
@@ -821,8 +847,112 @@ export const TOOLS: McpToolDefinition[] = [
             args.projectSelector,
             { overwrite: args.overwrite },
           );
+        case 'delete-attachment':
+          if (!args.taskSelector) throw badRequest('taskSelector is required.');
+          if (args.attachmentId === undefined) throw badRequest('attachmentId is required.');
+          if (!args.projectSelector) throw badRequest('projectSelector is required.');
+          return deleteAttachment(
+            client,
+            args.taskSelector,
+            args.attachmentId,
+            args.projectSelector,
+            args.confirm,
+            requireActor(args.actor, 'attachment deletion'),
+            requireIdempotencyKey(args.idempotencyKey, 'attachment deletion'),
+          );
         default:
           throw badRequest(`Unknown tasks action: ${args.action}`);
+      }
+    },
+  },
+  {
+    name: 'vikunja_task_attachments',
+    description:
+      'Typed task attachment operations: upload, bounded list/count, authenticated download, and ownership-safe deletion.',
+    inputSchema: z.object({
+      action: z.enum(['attach', 'list', 'download', 'delete']),
+      taskSelector: taskSelectorSchema,
+      projectSelector: z
+        .object({
+          id: z.number().int().positive().optional(),
+          title: z.string().trim().min(1).optional(),
+        })
+        .optional(),
+      filename: z.string().optional(),
+      mimeType: z.string().optional(),
+      base64Content: z.string().optional(),
+      filePaths: z.array(z.string()).optional(),
+      attachmentId: z.number().int().positive().optional(),
+      destinationPath: z.string().optional(),
+      overwrite: z.boolean().optional(),
+      page: z.number().int().min(1).optional(),
+      perPage: z.number().int().min(1).max(1000).optional(),
+      countOnly: z.boolean().optional(),
+      filenamePrefix: z.string().max(255).optional(),
+      confirm: z.boolean().optional(),
+      actor: actorSchema,
+      idempotencyKey: z.string().trim().min(1).max(200).optional(),
+    }),
+    handler: async (args, client) => {
+      switch (args.action) {
+        case 'attach': {
+          requireIdempotencyKey(args.idempotencyKey, 'attachment upload');
+          const files: AttachFileSpec[] = [];
+          if (Array.isArray(args.filePaths)) {
+            for (const filePath of args.filePaths) files.push({ filePath });
+          }
+          if (args.base64Content) {
+            if (!args.filename) {
+              throw badRequest('filename is required when attaching base64Content.');
+            }
+            files.push({
+              filename: args.filename,
+              mimeType: args.mimeType,
+              base64Content: args.base64Content,
+            });
+          }
+          if (files.length === 0) {
+            throw badRequest('Provide filePaths[] and/or base64Content with a filename to attach.');
+          }
+          return attachFiles(
+            client,
+            args.taskSelector,
+            files,
+            args.projectSelector,
+            args.idempotencyKey,
+          );
+        }
+        case 'list':
+          return listAttachments(client, args.taskSelector, args.projectSelector, {
+            page: args.page,
+            perPage: args.perPage,
+            countOnly: args.countOnly,
+            filenamePrefix: args.filenamePrefix,
+          });
+        case 'download':
+          if (args.attachmentId === undefined) throw badRequest('attachmentId is required.');
+          return downloadAttachment(
+            client,
+            args.taskSelector,
+            args.attachmentId,
+            args.destinationPath,
+            args.projectSelector,
+            { overwrite: args.overwrite },
+          );
+        case 'delete':
+          if (args.attachmentId === undefined) throw badRequest('attachmentId is required.');
+          if (!args.projectSelector) throw badRequest('projectSelector is required.');
+          return deleteAttachment(
+            client,
+            args.taskSelector,
+            args.attachmentId,
+            args.projectSelector,
+            args.confirm,
+            requireActor(args.actor, 'attachment deletion'),
+            requireIdempotencyKey(args.idempotencyKey, 'attachment deletion'),
+          );
+        default:
+          throw badRequest(`Unknown attachment action: ${args.action}`);
       }
     },
   },
@@ -1534,6 +1664,7 @@ const TASK_MUTATIONS = new Set([
   'relate',
   'unrelate',
   'attach',
+  'delete-attachment',
 ]);
 
 function enforceToolMutationScope(
@@ -1543,6 +1674,13 @@ function enforceToolMutationScope(
 ): void {
   const mode = client.getConfig().mutationScopeMode ?? 'require';
   if (name === 'vikunja_tasks' && TASK_MUTATIONS.has(args.action)) {
+    enforceMutationProjectScope(
+      mode,
+      `${name}.${args.action}`,
+      args.taskSelector,
+      args.projectSelector,
+    );
+  } else if (name === 'vikunja_task_attachments' && ['attach', 'delete'].includes(args.action)) {
     enforceMutationProjectScope(
       mode,
       `${name}.${args.action}`,
@@ -1618,9 +1756,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const tool = TOOLS.find((t) => t.name === name);
 
   if (!tool) {
-    const envelope = formatFailureEnvelope(
-      'Unknown tool.',
-      toErrorEnvelope(badRequest(`Tool not found: ${name}`)).error,
+    const envelope = safeEnvelopeText(
+      formatFailureEnvelope(
+        'Unknown tool.',
+        toErrorEnvelope(badRequest(`Tool not found: ${name}`)).error,
+      ),
     );
     return {
       isError: true,
@@ -1633,18 +1773,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   try {
     parsedArgs = tool.inputSchema.strict().parse(args || {});
   } catch (err: any) {
-    const envelope = formatFailureEnvelope(
-      'Invalid tool arguments.',
-      toErrorEnvelope(
-        new VikunjaError({
-          status: 400,
-          code: 'VALIDATION_ERROR',
-          method: 'TOOLS_CALL',
-          path: name,
-          message: err.message || 'Invalid tool arguments',
-          fieldErrors: [],
-        }),
-      ).error,
+    const envelope = safeEnvelopeText(
+      formatFailureEnvelope(
+        'Invalid tool arguments.',
+        toErrorEnvelope(
+          new VikunjaError({
+            status: 400,
+            code: 'VALIDATION_ERROR',
+            method: 'TOOLS_CALL',
+            path: name,
+            message: err.message || 'Invalid tool arguments',
+            fieldErrors: [],
+          }),
+        ).error,
+      ),
     );
     return {
       isError: true,
@@ -1667,7 +1809,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         attachmentDownloadRoot: '/tmp',
       });
     } else {
-      const envelope = formatFailureEnvelope('Configuration error.', toErrorEnvelope(err).error);
+      const envelope = safeEnvelopeText(
+        formatFailureEnvelope('Configuration error.', toErrorEnvelope(err).error),
+      );
       return {
         isError: true,
         content: [{ type: 'text', text: envelope }],
@@ -1702,22 +1846,36 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
       return {
         isError: true,
-        content: [{ type: 'text', text: formatFailureEnvelope(summary, errorPayload) }],
+        content: [
+          {
+            type: 'text',
+            text: safeEnvelopeText(
+              formatFailureEnvelope(summary, errorPayload),
+              client.getConfig().vikunjaToken,
+            ),
+          },
+        ],
       };
     }
     return {
       content: [
         {
           type: 'text',
-          text: formatSuccessEnvelope(summary, result),
+          text: safeEnvelopeText(
+            formatSuccessEnvelope(summary, result),
+            client.getConfig().vikunjaToken,
+          ),
         },
       ],
     };
   } catch (err: any) {
-    const failure = toErrorEnvelope(err, process.env.VIKUNJA_API_TOKEN);
-    const envelope = formatFailureEnvelope(
-      `ERROR ${failure.error.code}: ${safeSummaryText(failure.error.message)}`,
-      failure.error,
+    const failure = toErrorEnvelope(err, client.getConfig().vikunjaToken);
+    const envelope = safeEnvelopeText(
+      formatFailureEnvelope(
+        `ERROR ${failure.error.code}: ${safeSummaryText(failure.error.message)}`,
+        failure.error,
+      ),
+      client.getConfig().vikunjaToken,
     );
     return {
       isError: true,
