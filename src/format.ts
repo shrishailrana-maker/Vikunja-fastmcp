@@ -162,21 +162,38 @@ export async function fetchAllCollectionItems<T = any>(
   return items;
 }
 
-export function formatSuccessEnvelope(summary: string, data: any): string {
+export interface EnvelopeFormatOptions {
+  structuredOnly?: boolean;
+}
+
+function renderEnvelope(summary: string, envelope: unknown, options?: EnvelopeFormatOptions): string {
+  const jsonBlock = `\`\`\`json\n${stringifyEnvelope(envelope)}\n\`\`\``;
+  return options?.structuredOnly ? jsonBlock : `${summary}\n\n${jsonBlock}`;
+}
+
+export function formatSuccessEnvelope(
+  summary: string,
+  data: any,
+  options?: EnvelopeFormatOptions,
+): string {
   const normalizedData = normalizeDatesAndNulls(data);
   const envelope = {
     ok: true,
     data: normalizedData,
   };
-  return `${summary}\n\n\`\`\`json\n${stringifyEnvelope(envelope)}\n\`\`\``;
+  return renderEnvelope(summary, envelope, options);
 }
 
-export function formatFailureEnvelope(summary: string, errorDetails: any): string {
+export function formatFailureEnvelope(
+  summary: string,
+  errorDetails: any,
+  options?: EnvelopeFormatOptions,
+): string {
   const envelope = {
     ok: false,
     error: errorDetails,
   };
-  return `${summary}\n\n\`\`\`json\n${stringifyEnvelope(envelope)}\n\`\`\``;
+  return renderEnvelope(summary, envelope, options);
 }
 
 function stringifyEnvelope(envelope: unknown): string {

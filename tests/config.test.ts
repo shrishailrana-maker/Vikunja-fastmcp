@@ -68,7 +68,7 @@ describe('Config tests', () => {
       expect(config.vikunjaUrl).toBe('https://vikunja.example.com/api/v2');
       expect(config.vikunjaToken).toBe(TEST_TOKEN);
       expect(config.vikunjaWebUrl).toBe('https://vikunja-web.example.com/');
-      expect(config.responseMode).toBe('compact');
+      expect(config.responseMode).toBe('minimal');
       expect(config.requestTimeoutMs).toBe(30_000);
       expect(config.transferTimeoutMs).toBe(60_000);
     });
@@ -77,10 +77,10 @@ describe('Config tests', () => {
       const config = loadConfig({
         VIKUNJA_URL: 'https://vikunja.example.com/api/v2',
         VIKUNJA_API_TOKEN: TEST_TOKEN,
-        VIKUNJA_MCP_RESPONSE_MODE: 'compact',
+        VIKUNJA_MCP_RESPONSE_MODE: 'receipt',
       });
 
-      expect(config.responseMode).toBe('compact');
+      expect(config.responseMode).toBe('receipt');
     });
 
     it('rejects an invalid MCP response mode', () => {

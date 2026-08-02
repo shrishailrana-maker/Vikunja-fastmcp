@@ -175,6 +175,18 @@ describe('Format and Markdown tests', () => {
       expect(output).not.toContain('\n  "ok"');
     });
 
+    it('emits one machine envelope without duplicated prose in structured-only mode', () => {
+      const output = formatSuccessEnvelope(
+        'This summary must not be repeated',
+        { task: 'ALPHA-5', action: 'created' },
+        { structuredOnly: true },
+      );
+
+      expect(output).toMatch(/^```json\n\{"ok":true/);
+      expect(output).not.toContain('This summary must not be repeated');
+      expect(output.match(/```json/g)).toHaveLength(1);
+    });
+
     it('should format failure response correctly', () => {
       const summary = 'Failure summary';
       const error = { status: 404, message: 'Not found' };

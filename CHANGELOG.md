@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Add structured-only `minimal` read and `receipt` write response modes, now the
+  default, while preserving explicit compact, standard, and full compatibility.
+- Add task field projection, opt-in URLs, bounded title length, response-size
+  budgets, and resumable cursors for task lists.
+- Enforce response-character budgets in the release benchmark for self-check,
+  projected task reads, large lists, writes, and errors.
+
 ## 2.4.103 - 2026-07-31
 
 - Add the typed `vikunja_task_attachments` tool for upload, bounded listing,

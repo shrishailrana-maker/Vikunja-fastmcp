@@ -31,12 +31,9 @@ const standardTasks = Array.from({ length: 100 }, (_, offset) => ({
   taskUrl: `https://vikunja.example.com/tasks/${9000 + offset}`,
   projectUrl: 'https://vikunja.example.com/projects/101',
 }));
-const compactTasks = standardTasks.map((task) => ({
-  id: task.id,
+const projectedTasks = standardTasks.map((task) => ({
   portalRef: task.identifier,
   title: task.title,
-  done: task.done,
-  priority: task.priority,
 }));
 const pagination = {
   page: 1,
@@ -162,33 +159,51 @@ const unauthorized = {
 const forbidden = { ...unauthorized, status: 403, code: 'PERMISSION_DENIED' };
 
 const unchanged = (text: string): Measurement => measure(text, text);
-const createText = formatSuccessEnvelope('created task', createReceipt);
-const identityText = formatFailureEnvelope('identity mismatch', identityError);
-const unauthorizedText = formatFailureEnvelope('unauthorized', unauthorized);
-const forbiddenText = formatFailureEnvelope('forbidden', forbidden);
+const structured = { structuredOnly: true } as const;
+
+function boundedProjectedTaskList(maxChars: number) {
+  const tasks: typeof projectedTasks = [];
+  const build = () => ({
+    project,
+    tasks,
+    returnedCount: tasks.length,
+    totalCount: pagination.total,
+    nextCursor: tasks.length < projectedTasks.length ? `page:1:offset:${tasks.length}` : 'page:2',
+    incomplete: true,
+  });
+  for (const task of projectedTasks) {
+    tasks.push(task);
+    if (formatSuccessEnvelope('', build(), structured).length > maxChars) {
+      tasks.pop();
+      break;
+    }
+  }
+  return build();
+}
+
+const minimalTaskList = boundedProjectedTaskList(4_000);
+const createText = formatSuccessEnvelope('created task', createReceipt, structured);
+const identityText = formatFailureEnvelope('identity mismatch', identityError, structured);
+const unauthorizedText = formatFailureEnvelope('unauthorized', unauthorized, structured);
+const forbiddenText = formatFailureEnvelope('forbidden', forbidden, structured);
 
 const results = {
   selfCheck: measure(
     formatSuccessEnvelope('self-check', fullDiagnostic),
-    formatSuccessEnvelope('self-check', basicDiagnostic),
+    formatSuccessEnvelope('self-check', basicDiagnostic, structured),
   ),
   taskGet: measure(
     formatSuccessEnvelope('task detail', fullTask),
-    formatSuccessEnvelope('task detail', compactTask),
+    formatSuccessEnvelope('task detail', compactTask, structured),
   ),
   taskSearch100: measure(
     formatSuccessEnvelope('task list', { project, tasks: standardTasks, pagination }),
-    formatSuccessEnvelope('task list', {
-      project,
-      tasks: compactTasks,
-      pagination,
-      truncated: true,
-    }),
+    formatSuccessEnvelope('task list', minimalTaskList, structured),
   ),
   createIfAbsent: unchanged(createText),
   commentAndClose: measure(
     formatSuccessEnvelope('closed task', legacyClose),
-    formatSuccessEnvelope('closed task', compactClose),
+    formatSuccessEnvelope('closed task', compactClose, structured),
   ),
   identityMismatch: unchanged(identityText),
   unauthorized401: unchanged(unauthorizedText),
@@ -200,5 +215,22 @@ console.log(JSON.stringify(results, null, 2));
 for (const name of ['selfCheck', 'taskGet', 'taskSearch100', 'commentAndClose'] as const) {
   if (results[name].reductionPercent < 60) {
     throw new Error(`${name} response reduction fell below the 60% regression threshold.`);
+  }
+}
+
+const budgets = {
+  selfCheck: 400,
+  taskGet: 1_200,
+  taskSearch100: 4_000,
+  createIfAbsent: 1_000,
+  commentAndClose: 1_000,
+  identityMismatch: 1_000,
+  unauthorized401: 1_000,
+  permissionDenied403: 1_000,
+} as const;
+
+for (const [name, budget] of Object.entries(budgets) as [keyof typeof results, number][]) {
+  if (results[name].afterChars > budget) {
+    throw new Error(`${name} response is ${results[name].afterChars} chars; budget is ${budget}.`);
   }
 }

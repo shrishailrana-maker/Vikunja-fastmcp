@@ -12,7 +12,7 @@
 import os from 'os';
 import path from 'path';
 
-export type ResponseMode = 'compact' | 'standard' | 'full';
+export type ResponseMode = 'minimal' | 'receipt' | 'compact' | 'standard' | 'full';
 export type MutationScopeMode = 'off' | 'warn' | 'require';
 
 export interface Config {
@@ -23,7 +23,7 @@ export interface Config {
   // Upper bound (bytes) for a single attachment upload or download. Optional so
   // existing Config literals keep compiling; consumers fall back to a default.
   maxAttachmentBytes?: number;
-  // Optional so existing Config literals keep compiling; consumers use compact
+  // Optional so existing Config literals keep compiling; consumers use minimal
   // when no explicit mode is supplied.
   responseMode?: ResponseMode;
   // Per-request timeout for ordinary JSON API calls.
@@ -149,10 +149,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const maxAttachmentBytes =
     Number.isFinite(rawMax) && rawMax > 0 ? rawMax : DEFAULT_MAX_ATTACHMENT_BYTES;
 
-  let responseMode: ResponseMode = 'compact';
+  let responseMode: ResponseMode = 'minimal';
   if (rawResponseMode) {
-    if (!['compact', 'standard', 'full'].includes(rawResponseMode)) {
-      throw new Error('VIKUNJA_MCP_RESPONSE_MODE must be one of: compact, standard, full.');
+    if (!['minimal', 'receipt', 'compact', 'standard', 'full'].includes(rawResponseMode)) {
+      throw new Error(
+        'VIKUNJA_MCP_RESPONSE_MODE must be one of: minimal, receipt, compact, standard, full.',
+      );
     }
     responseMode = rawResponseMode as ResponseMode;
   }

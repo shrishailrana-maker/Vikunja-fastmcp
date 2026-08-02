@@ -35,6 +35,28 @@ import { attachFiles, AttachmentInfo } from './attachments.js';
 import { withActorAttribution } from './mutation-policy.js';
 
 const MAX_AGENT_PAGE_SIZE = 100;
+const DEFAULT_MINIMAL_RESPONSE_CHARS = 4_000;
+
+export const TASK_READ_FIELDS = [
+  'id',
+  'portalRef',
+  'title',
+  'done',
+  'priority',
+  'creator',
+  'project',
+  'labels',
+  'assignees',
+  'dueDate',
+  'updated',
+] as const;
+export type TaskReadField = (typeof TASK_READ_FIELDS)[number];
+
+export interface TaskProjectionOptions {
+  fields?: TaskReadField[];
+  includeUrl?: boolean;
+  titleMaxChars?: number;
+}
 
 export interface Task {
   id: number;
@@ -148,6 +170,11 @@ export interface ListTasksOptions {
   countOnly?: boolean;
   filter?: string;
   responseMode?: ResponseMode;
+  fields?: TaskReadField[];
+  includeUrl?: boolean;
+  titleMaxChars?: number;
+  maxResponseChars?: number;
+  cursor?: string;
 }
 
 export function escapeFilterString(val: string): string {
@@ -280,7 +307,121 @@ function selectedResponseMode(
   client: VikunjaApiClient,
   requested: ResponseMode | undefined,
 ): ResponseMode {
-  return requested ?? client.getConfig().responseMode ?? 'compact';
+  return requested ?? client.getConfig().responseMode ?? 'minimal';
+}
+
+interface ListCursor {
+  projectId: number;
+  page: number;
+  offset: number;
+}
+
+function encodeListCursor(cursor: ListCursor): string {
+  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+}
+
+function decodeListCursor(value: string | undefined): ListCursor | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as ListCursor;
+    if (
+      !Number.isInteger(parsed.projectId) ||
+      parsed.projectId <= 0 ||
+      !Number.isInteger(parsed.page) ||
+      parsed.page <= 0 ||
+      !Number.isInteger(parsed.offset) ||
+      parsed.offset < 0
+    ) {
+      throw new Error('invalid cursor values');
+    }
+    return parsed;
+  } catch {
+    throw new VikunjaError({
+      status: 400,
+      code: 'INVALID_CURSOR',
+      method: 'GET',
+      path: '/tasks',
+      message: 'The task-list cursor is invalid or expired. Restart from page 1.',
+      fieldErrors: [],
+    });
+  }
+}
+
+function truncateTitle(title: string, maxChars: number | undefined): string {
+  if (!maxChars || title.length <= maxChars) return title;
+  return `${title.slice(0, Math.max(1, maxChars - 3)).trimEnd()}...`;
+}
+
+function projectTask(
+  task: any,
+  project: ProjectRef,
+  webUrl: string,
+  options: TaskProjectionOptions,
+): Record<string, unknown> {
+  const requested = new Set<TaskReadField>(
+    options.fields ?? ['portalRef', 'title', 'project', 'done', 'priority'],
+  );
+  const result: Record<string, unknown> = {};
+  const portalRef = task.identifier || `#${task.index}`;
+  const values: Record<TaskReadField, unknown> = {
+    id: task.id,
+    portalRef,
+    title: truncateTitle(String(task.title ?? ''), options.titleMaxChars),
+    done: !!task.done,
+    priority: task.priority || 0,
+    creator: task.created_by?.username ?? null,
+    project: { id: project.id, title: project.title },
+    labels: Array.isArray(task.labels)
+      ? task.labels.map((label: any) => ({ id: label.id, title: label.title }))
+      : [],
+    assignees: Array.isArray(task.assignees)
+      ? task.assignees.map((assignee: any) => ({ id: assignee.id, username: assignee.username }))
+      : [],
+    dueDate: normalizeZeroDate(task.due_date ?? task.dueDate ?? null),
+    updated: task.updated ?? task.updatedAt ?? null,
+  };
+  for (const field of requested) result[field] = values[field];
+  if (options.includeUrl) result.taskUrl = `${webUrl}tasks/${task.id}`;
+  return result;
+}
+
+function boundedMinimalList(
+  project: ProjectRef,
+  tasks: Record<string, unknown>[],
+  pagination: ReturnType<typeof normalizePagination>,
+  startOffset: number,
+  maxResponseChars: number,
+): Record<string, unknown> {
+  const envelopeOverhead = '```json\n{"ok":true,"data":}\n```'.length;
+  const selected: Record<string, unknown>[] = [];
+  const remaining = tasks.slice(startOffset);
+  const makeCursor = (consumed: number): string | null => {
+    const nextOffset = startOffset + consumed;
+    if (nextOffset < tasks.length) {
+      return encodeListCursor({ projectId: project.id, page: pagination.page, offset: nextOffset });
+    }
+    return pagination.hasMore
+      ? encodeListCursor({ projectId: project.id, page: pagination.page + 1, offset: 0 })
+      : null;
+  };
+  const build = (items: Record<string, unknown>[]) => {
+    const nextCursor = makeCursor(items.length);
+    return {
+      project: { id: project.id, title: project.title },
+      tasks: items,
+      returnedCount: items.length,
+      totalCount: pagination.total,
+      nextCursor,
+      incomplete: nextCursor !== null,
+    };
+  };
+
+  for (const task of remaining) {
+    const candidate = [...selected, task];
+    if (JSON.stringify(build(candidate)).length + envelopeOverhead > maxResponseChars) break;
+    selected.push(task);
+  }
+  return build(selected);
 }
 
 async function listProjectTasksInternal(
@@ -317,6 +458,7 @@ async function listProjectTasksInternal(
 export async function listTasks(client: VikunjaApiClient, options: ListTasksOptions): Promise<any> {
   const webUrl = client.getConfig().vikunjaWebUrl;
   const responseMode = selectedResponseMode(client, options.responseMode);
+  const cursor = decodeListCursor(options.cursor);
   const effectiveOptions =
     options.label !== undefined
       ? { ...options, label: await resolveLabel(client, options.label) }
@@ -370,8 +512,29 @@ export async function listTasks(client: VikunjaApiClient, options: ListTasksOpti
   }
 
   const results = [];
+  if (cursor && projectsToQuery.length !== 1) {
+    throw new VikunjaError({
+      status: 400,
+      code: 'CURSOR_SCOPE_REQUIRED',
+      method: 'GET',
+      path: '/tasks',
+      message: 'A continuation cursor must be resumed with exactly one project scope.',
+      fieldErrors: [],
+    });
+  }
   for (const proj of projectsToQuery) {
-    const rawRes = await listProjectTasksInternal(client, proj, effectiveOptions);
+    if (cursor && cursor.projectId !== proj.id) {
+      throw new VikunjaError({
+        status: 400,
+        code: 'CURSOR_SCOPE_MISMATCH',
+        method: 'GET',
+        path: `/projects/${proj.id}/tasks`,
+        message: 'The continuation cursor belongs to a different project.',
+        fieldErrors: [],
+      });
+    }
+    const projectOptions = cursor ? { ...effectiveOptions, page: cursor.page } : effectiveOptions;
+    const rawRes = await listProjectTasksInternal(client, proj, projectOptions);
     const pagination = normalizePagination(rawRes);
 
     if (options.countOnly) {
@@ -381,6 +544,25 @@ export async function listTasks(client: VikunjaApiClient, options: ListTasksOpti
       });
     } else {
       const rawTasks = toItemArray(rawRes);
+      if (responseMode === 'minimal' || responseMode === 'receipt') {
+        const projected = rawTasks.map((task: any) =>
+          projectTask(task, proj, webUrl, {
+            fields: options.fields,
+            includeUrl: options.includeUrl,
+            titleMaxChars: options.titleMaxChars,
+          }),
+        );
+        results.push(
+          boundedMinimalList(
+            proj,
+            projected,
+            pagination,
+            cursor?.offset ?? 0,
+            options.maxResponseChars ?? DEFAULT_MINIMAL_RESPONSE_CHARS,
+          ),
+        );
+        continue;
+      }
       const tasks = rawTasks.map((task: any) => {
         if (responseMode === 'compact') {
           return normalizeCompactTaskListItem(task);
@@ -810,9 +992,18 @@ export function getTask(
 export function getTask(
   client: VikunjaApiClient,
   taskSelector: TaskSelectorInput,
+  projectSelector: { id?: number; title?: string } | undefined,
+  commentLimit: number,
+  requestedResponseMode: 'minimal' | 'receipt',
+  projectionOptions?: TaskProjectionOptions,
+): Promise<{ task: Record<string, unknown> }>;
+export function getTask(
+  client: VikunjaApiClient,
+  taskSelector: TaskSelectorInput,
   projectSelector?: { id?: number; title?: string },
   commentLimit?: number,
   requestedResponseMode?: ResponseMode,
+  projectionOptions?: TaskProjectionOptions,
 ): Promise<ConsolidatedTaskDetails | StandardTaskDetails | CompactTaskDetails>;
 export async function getTask(
   client: VikunjaApiClient,
@@ -820,7 +1011,13 @@ export async function getTask(
   projectSelector?: { id?: number; title?: string },
   commentLimit = 5,
   requestedResponseMode?: ResponseMode,
-): Promise<ConsolidatedTaskDetails | StandardTaskDetails | CompactTaskDetails> {
+  projectionOptions: TaskProjectionOptions = {},
+): Promise<
+  | ConsolidatedTaskDetails
+  | StandardTaskDetails
+  | CompactTaskDetails
+  | { task: Record<string, unknown> }
+> {
   const taskRef = await resolveTask(client, taskSelector, projectSelector, {
     includeRawTask: true,
   });
@@ -836,6 +1033,10 @@ export async function getTask(
     includeBundledDetails && commentLimit > 0
       ? await client.request<any>('GET', taskPath)
       : taskRef.rawTask;
+
+  if (responseMode === 'minimal' || responseMode === 'receipt') {
+    return { task: projectTask(rawTask, taskRef.project, webUrl, projectionOptions) };
+  }
 
   if (responseMode === 'compact') {
     return { task: normalizeCompactTask(rawTask, taskRef.project, webUrl) };
@@ -1610,7 +1811,7 @@ export async function listRelations(
         relations.push({
           relationKind: kind,
           task:
-            responseMode === 'compact'
+            ['minimal', 'receipt', 'compact'].includes(responseMode)
               ? normalizeCompactTask(t, project, webUrl)
               : responseMode === 'full'
                 ? normalizeTask(t, project, webUrl)

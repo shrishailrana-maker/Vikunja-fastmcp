@@ -51,6 +51,7 @@ import {
   listRelations,
   projectSummary,
   setTaskStatus,
+  TASK_READ_FIELDS,
 } from './tasks.js';
 import {
   createComment,
@@ -551,17 +552,24 @@ export const TOOLS: McpToolDefinition[] = [
         .describe('Free-text task search alias for q; no filter DSL lookup is needed.'),
       countOnly: z.boolean().optional(),
       filter: z.string().optional(),
-      responseMode: z.enum(['compact', 'standard', 'full']).optional(),
+      responseMode: z.enum(['minimal', 'receipt', 'compact', 'standard', 'full']).optional(),
       fields: z
-        .object({
-          title: z.string().trim().min(1).optional(),
-          description: z.string().optional(),
-          appendDescription: z.string().optional(),
-          done: z.boolean().optional(),
-          priority: z.number().int().min(0).max(5).optional(),
-          dueDate: z.string().nullable().optional(),
-        })
+        .union([
+          z.object({
+            title: z.string().trim().min(1).optional(),
+            description: z.string().optional(),
+            appendDescription: z.string().optional(),
+            done: z.boolean().optional(),
+            priority: z.number().int().min(0).max(5).optional(),
+            dueDate: z.string().nullable().optional(),
+          }),
+          z.array(z.enum(TASK_READ_FIELDS)).min(1),
+        ])
         .optional(),
+      includeUrl: z.boolean().optional(),
+      titleMaxChars: z.number().int().min(8).max(500).optional(),
+      maxResponseChars: z.number().int().min(500).max(100_000).optional(),
+      cursor: z.string().min(1).optional(),
       expectedUpdatedAt: z.string().optional(),
       evidenceComment: z.string().trim().min(1).optional(),
       actor: actorSchema,
@@ -611,6 +619,11 @@ export const TOOLS: McpToolDefinition[] = [
             countOnly: args.countOnly,
             filter: args.filter,
             responseMode: args.responseMode,
+            fields: Array.isArray(args.fields) ? args.fields : undefined,
+            includeUrl: args.includeUrl,
+            titleMaxChars: args.titleMaxChars,
+            maxResponseChars: args.maxResponseChars,
+            cursor: args.cursor,
           });
         case 'summary':
           if (!args.projectSelector) throw badRequest('projectSelector is required for summary.');
@@ -680,6 +693,11 @@ export const TOOLS: McpToolDefinition[] = [
             args.projectSelector,
             args.commentLimit ?? 5,
             args.responseMode,
+            {
+              fields: Array.isArray(args.fields) ? args.fields : undefined,
+              includeUrl: args.includeUrl,
+              titleMaxChars: args.titleMaxChars,
+            },
           );
         case 'update':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
@@ -1751,6 +1769,15 @@ function compactWriteEchoes(result: any): any {
   return compact;
 }
 
+function structuredOnlyMode(mode: unknown): boolean {
+  return mode === 'minimal' || mode === 'receipt';
+}
+
+function requestedResponseMode(args: any): string {
+  if (typeof args?.responseMode === 'string') return args.responseMode;
+  return process.env.VIKUNJA_MCP_RESPONSE_MODE?.trim() || 'minimal';
+}
+
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
   const tool = TOOLS.find((t) => t.name === name);
@@ -1760,6 +1787,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       formatFailureEnvelope(
         'Unknown tool.',
         toErrorEnvelope(badRequest(`Tool not found: ${name}`)).error,
+        { structuredOnly: structuredOnlyMode(requestedResponseMode(args)) },
       ),
     );
     return {
@@ -1786,6 +1814,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             fieldErrors: [],
           }),
         ).error,
+        { structuredOnly: structuredOnlyMode(requestedResponseMode(args)) },
       ),
     );
     return {
@@ -1810,7 +1839,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       });
     } else {
       const envelope = safeEnvelopeText(
-        formatFailureEnvelope('Configuration error.', toErrorEnvelope(err).error),
+        formatFailureEnvelope('Configuration error.', toErrorEnvelope(err).error, {
+          structuredOnly: structuredOnlyMode(requestedResponseMode(parsedArgs)),
+        }),
       );
       return {
         isError: true,
@@ -1823,9 +1854,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     enforceToolMutationScope(name, parsedArgs, client);
     const rawResult = await tool.handler(parsedArgs, client);
     const effectiveResponseMode =
-      parsedArgs.responseMode ?? client.getConfig().responseMode ?? 'compact';
+      parsedArgs.responseMode ?? client.getConfig().responseMode ?? 'minimal';
     const result =
-      ['vikunja_tasks', 'vikunja_task_bulk'].includes(name) && effectiveResponseMode === 'compact'
+      ['vikunja_tasks', 'vikunja_task_bulk'].includes(name) &&
+      ['minimal', 'receipt', 'compact'].includes(effectiveResponseMode)
         ? compactWriteEchoes(rawResult)
         : rawResult;
     const summary = summaryFor(name, parsedArgs, result, client.getConfig().vikunjaWebUrl);
@@ -1850,7 +1882,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           {
             type: 'text',
             text: safeEnvelopeText(
-              formatFailureEnvelope(summary, errorPayload),
+              formatFailureEnvelope(summary, errorPayload, {
+                structuredOnly: structuredOnlyMode(effectiveResponseMode),
+              }),
               client.getConfig().vikunjaToken,
             ),
           },
@@ -1862,7 +1896,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         {
           type: 'text',
           text: safeEnvelopeText(
-            formatSuccessEnvelope(summary, result),
+            formatSuccessEnvelope(summary, result, {
+              structuredOnly: ['minimal', 'receipt'].includes(effectiveResponseMode),
+            }),
             client.getConfig().vikunjaToken,
           ),
         },
@@ -1874,6 +1910,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       formatFailureEnvelope(
         `ERROR ${failure.error.code}: ${safeSummaryText(failure.error.message)}`,
         failure.error,
+        {
+          structuredOnly: structuredOnlyMode(
+            parsedArgs.responseMode ?? client.getConfig().responseMode ?? 'minimal',
+          ),
+        },
       ),
       client.getConfig().vikunjaToken,
     );

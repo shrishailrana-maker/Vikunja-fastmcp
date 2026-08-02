@@ -183,7 +183,11 @@ describe('Tasks List and Scoping tests', () => {
             }),
         } as Response);
 
-      const result = await listTasks(client, { project: { id: 101 }, perPage: 1000 });
+      const result = await listTasks(client, {
+        project: { id: 101 },
+        perPage: 1000,
+        responseMode: 'compact',
+      });
       expect(mockFetch.mock.calls[1][0]).toContain('per_page=100');
       expect(result.pagination).toMatchObject({
         perPage: 100,
@@ -235,6 +239,26 @@ describe('Tasks List and Scoping tests', () => {
           ok: true,
           status: 200,
           text: async () => JSON.stringify(listResponse),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: 101, title: 'Alpha' }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify(listResponse),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: 101, title: 'Alpha' }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify(listResponse),
         } as Response);
 
       const standard = await listTasks(client, {
@@ -245,6 +269,15 @@ describe('Tasks List and Scoping tests', () => {
       const compact = await listTasks(client, {
         project: { id: 101 },
         perPage: 100,
+        responseMode: 'compact',
+      });
+      const minimal = await listTasks(client, {
+        project: { id: 101 },
+        perPage: 100,
+        responseMode: 'minimal',
+        fields: ['portalRef', 'title'],
+        titleMaxChars: 32,
+        maxResponseChars: 3800,
       });
 
       expect(compact.tasks[0]).toEqual({
@@ -257,6 +290,29 @@ describe('Tasks List and Scoping tests', () => {
       });
       expect(compact.truncated).toBe(true);
       expect(JSON.stringify(compact).length).toBeLessThan(JSON.stringify(standard).length * 0.4);
+      expect(minimal.tasks[0]).toEqual({
+        portalRef: 'ALPHA-300',
+        title: 'Example task 1 with a realist...',
+      });
+      expect(minimal.project).toEqual({ id: 101, title: 'Alpha' });
+      expect(minimal.returnedCount).toBeLessThan(100);
+      expect(minimal.totalCount).toBe(225);
+      expect(minimal.incomplete).toBe(true);
+      expect(minimal.nextCursor).toEqual(expect.any(String));
+      expect(JSON.stringify(minimal).length).toBeLessThanOrEqual(3800);
+
+      const resumed = await listTasks(client, {
+        project: { id: 101 },
+        perPage: 100,
+        responseMode: 'minimal',
+        fields: ['portalRef', 'title'],
+        titleMaxChars: 32,
+        maxResponseChars: 3800,
+        cursor: minimal.nextCursor,
+      });
+      expect(resumed.tasks[0].portalRef).toBe(
+        `ALPHA-${300 + minimal.returnedCount}`,
+      );
     });
 
     it('should group subset query results by project with independent pagination', async () => {
@@ -309,6 +365,7 @@ describe('Tasks List and Scoping tests', () => {
         projects: [{ id: 101 }, { title: 'Beta' }],
         page: 1,
         perPage: 2,
+        responseMode: 'compact',
       });
 
       expect(result.projects.length).toBe(2);
@@ -758,7 +815,7 @@ describe('Tasks List and Scoping tests', () => {
       expect(urls.some((u: string) => /\/comments$/.test(u))).toBe(false);
     });
 
-    it('defaults to a compact task without fetching comments or attachments', async () => {
+    it('defaults to a minimal projected task without fetching comments or attachments', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         status: 200,
@@ -783,16 +840,11 @@ describe('Tasks List and Scoping tests', () => {
 
       expect(details).toEqual({
         task: {
-          id: 9005,
-          index: 305,
-          identifier: 'ALPHA-305',
           portalRef: 'ALPHA-305',
           project: { id: 101, title: 'Alpha' },
           title: 'Task Title',
           done: false,
           priority: 4,
-          creator: 'example-tester',
-          taskUrl: 'https://vikunja.example.com/tasks/9005',
         },
       });
       expect(mockFetch).toHaveBeenCalledTimes(1);

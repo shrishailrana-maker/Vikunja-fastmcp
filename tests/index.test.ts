@@ -29,6 +29,7 @@ describe('MCP Server Registration and Dispatching tests', () => {
     delete process.env.VIKUNJA_URL;
     delete process.env.VIKUNJA_API_TOKEN;
     delete process.env.VIKUNJA_MUTATION_SCOPE_MODE;
+    delete process.env.VIKUNJA_MCP_RESPONSE_MODE;
   });
 
   it('recognizes an entry point reached through a junction or symlink', () => {
@@ -105,7 +106,7 @@ describe('MCP Server Registration and Dispatching tests', () => {
     ).toBe(false);
     expect(taskTool.inputSchema.properties.responseMode).toMatchObject({
       type: 'string',
-      enum: ['compact', 'standard', 'full'],
+      enum: ['minimal', 'receipt', 'compact', 'standard', 'full'],
     });
     const applyLabelBranch = taskTool.inputSchema.oneOf.find(
       (branch: any) => branch.properties.action.const === 'apply-label',
@@ -123,6 +124,17 @@ describe('MCP Server Registration and Dispatching tests', () => {
       type: 'string',
       description: expect.stringContaining('alias for q'),
     });
+    expect(listBranch.properties.fields.anyOf).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: 'array' })]),
+    );
+    expect(listBranch.properties).toEqual(
+      expect.objectContaining({
+        includeUrl: { type: 'boolean' },
+        titleMaxChars: { type: 'number' },
+        maxResponseChars: { type: 'number' },
+        cursor: { type: 'string' },
+      }),
+    );
     expect(
       taskTool.inputSchema.oneOf.some(
         (branch: any) => branch.properties.action.const === 'summary',
@@ -299,7 +311,12 @@ describe('MCP Server Registration and Dispatching tests', () => {
       method: 'tools/call',
       params: {
         name: 'vikunja_tasks',
-        arguments: { action: 'list', projectSelector: { id: 101 }, perPage: 1000 },
+        arguments: {
+          action: 'list',
+          projectSelector: { id: 101 },
+          perPage: 1000,
+          responseMode: 'compact',
+        },
       },
     });
 
@@ -369,6 +386,7 @@ describe('MCP Server Registration and Dispatching tests', () => {
         arguments: {
           action: 'update',
           taskSelector: { globalId: 99 },
+          responseMode: 'compact',
           fields: { done: true },
         },
       },
@@ -496,6 +514,8 @@ describe('MCP Server Registration and Dispatching tests', () => {
     });
 
     expect(response.isError).toBe(true);
+    expect(response.content[0].text).toMatch(/^```json\n/);
+    expect(response.content[0].text).not.toContain('Invalid tool arguments.');
     expect(response.content[0].text).toContain('```json');
     expect(response.content[0].text).toContain('VALIDATION_ERROR');
   });
@@ -544,7 +564,11 @@ describe('MCP Server Registration and Dispatching tests', () => {
       method: 'tools/call',
       params: {
         name: 'vikunja_tasks',
-        arguments: { action: 'get', taskSelector: { globalId: 99 } },
+        arguments: {
+          action: 'get',
+          taskSelector: { globalId: 99 },
+          responseMode: 'compact',
+        },
       },
     });
 
@@ -565,7 +589,7 @@ describe('MCP Server Registration and Dispatching tests', () => {
     });
   });
 
-  it('uses portal-first summaries and compact write echoes by default', async () => {
+  it('uses one structured receipt and a compact write echo by default', async () => {
     const handler = (server as any)._requestHandlers.get('tools/call');
     mockFetch
       .mockResolvedValueOnce({
@@ -602,8 +626,9 @@ describe('MCP Server Registration and Dispatching tests', () => {
     const text = response.content[0].text as string;
     const envelope = JSON.parse(text.match(/```json\n([\s\S]*?)\n```/)![1]);
 
-    expect(text).toContain('ALPHA-5 - Created task');
-    expect(text).toContain('[Open ALPHA-5](https://vikunja.example.com/tasks/99)');
+    expect(text).toMatch(/^```json\n/);
+    expect(text).not.toContain('ALPHA-5 - Created task');
+    expect(text).not.toContain('[Open ALPHA-5]');
     expect(text).not.toContain('id 99');
     expect(envelope.data.target).toEqual({
       id: 99,
