@@ -17,6 +17,12 @@ import { pathsReferToSameFile, server, TOOLS } from '../src/index.js';
 import { idempotency } from '../src/idempotency.js';
 import { cache } from '../src/identity.js';
 
+function schemaProperty(toolSchema: any, branch: any, name: string): any {
+  const property = branch.properties[name];
+  if (!property?.$ref) return property;
+  return toolSchema.$defs[property.$ref.split('/').at(-1)];
+}
+
 describe('MCP Server Registration and Dispatching tests', () => {
   let mockFetch: any;
 
@@ -153,16 +159,29 @@ describe('MCP Server Registration and Dispatching tests', () => {
       type: 'string',
       enum: ['all', 'title', 'description'],
     });
-    expect(listBranch.properties.fields.anyOf).toEqual(
+    expect(schemaProperty(taskTool.inputSchema, listBranch, 'fields').anyOf).toEqual(
       expect.arrayContaining([expect.objectContaining({ type: 'array' })]),
     );
-    expect(listBranch.properties).toEqual(
-      expect.objectContaining({
-        includeUrl: { type: 'boolean' },
-        titleMaxChars: { type: 'number' },
-        maxResponseChars: { type: 'number' },
-        cursor: { type: 'string' },
-      }),
+    expect(listBranch.properties.includeUrl).toMatchObject({ type: 'boolean' });
+    expect(listBranch.properties.titleMaxChars).toMatchObject({ type: 'integer' });
+    expect(listBranch.properties.maxResponseChars).toMatchObject({ type: 'integer' });
+    expect(listBranch.properties.cursor).toMatchObject({ type: 'string' });
+    expect(listBranch.properties.perPage).toMatchObject({
+      type: 'integer',
+      minimum: 1,
+      maximum: 100,
+    });
+    expect(listBranch.properties.changedSince).toMatchObject({
+      type: 'string',
+      format: 'date-time',
+    });
+    expect(listBranch.properties.titleMaxChars).toMatchObject({
+      type: 'integer',
+      minimum: 8,
+      maximum: 500,
+    });
+    expect(schemaProperty(taskTool.inputSchema, listBranch, 'fields').anyOf).toEqual(
+      expect.arrayContaining([expect.objectContaining({ minItems: 1 })]),
     );
     expect(
       taskTool.inputSchema.oneOf.some(
@@ -181,7 +200,10 @@ describe('MCP Server Registration and Dispatching tests', () => {
       expect.arrayContaining(['action', 'projectSelector', 'fields', 'externalKey']),
     );
     expect(applyLabelBranch.properties.labelTitle.anyOf).toEqual(
-      expect.arrayContaining([{ type: 'string' }, { type: 'number' }]),
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'string' }),
+        expect.objectContaining({ type: 'integer' }),
+      ]),
     );
     const createBranch = taskTool.inputSchema.oneOf.find(
       (branch: any) => branch.properties.action.const === 'create',
@@ -242,6 +264,7 @@ describe('MCP Server Registration and Dispatching tests', () => {
     const attachmentAttachBranch = attachmentTool.inputSchema.oneOf.find(
       (branch: any) => branch.properties.action.const === 'attach',
     );
+    expect(attachmentAttachBranch.properties.filePaths).toMatchObject({ maxItems: 20 });
     expect(attachmentAttachBranch.required).toEqual(
       expect.arrayContaining(['taskSelector', 'projectSelector', 'actor', 'idempotencyKey']),
     );
@@ -254,14 +277,10 @@ describe('MCP Server Registration and Dispatching tests', () => {
     const attachmentListBranch = attachmentTool.inputSchema.oneOf.find(
       (branch: any) => branch.properties.action.const === 'list',
     );
-    expect(attachmentListBranch.properties).toEqual(
-      expect.objectContaining({
-        page: { type: 'number' },
-        perPage: { type: 'number' },
-        countOnly: { type: 'boolean' },
-        filenamePrefix: { type: 'string' },
-      }),
-    );
+    expect(attachmentListBranch.properties.page).toMatchObject({ type: 'integer' });
+    expect(attachmentListBranch.properties.perPage).toMatchObject({ type: 'integer' });
+    expect(attachmentListBranch.properties.countOnly).toMatchObject({ type: 'boolean' });
+    expect(attachmentListBranch.properties.filenamePrefix).toMatchObject({ type: 'string' });
     expect(
       taskTool.inputSchema.oneOf.some(
         (branch: any) => branch.properties.action.const === 'delete-attachment',
@@ -284,14 +303,10 @@ describe('MCP Server Registration and Dispatching tests', () => {
     const commentListBranch = commentTool.inputSchema.oneOf.find(
       (branch: any) => branch.properties.action.const === 'list',
     );
-    expect(commentListBranch.properties).toEqual(
-      expect.objectContaining({
-        since: { type: 'string' },
-        countOnly: { type: 'boolean' },
-        includeLatest: { type: 'boolean' },
-        maxScanPages: { type: 'number' },
-      }),
-    );
+    expect(commentListBranch.properties.since).toMatchObject({ type: 'string' });
+    expect(commentListBranch.properties.countOnly).toMatchObject({ type: 'boolean' });
+    expect(commentListBranch.properties.includeLatest).toMatchObject({ type: 'boolean' });
+    expect(commentListBranch.properties.maxScanPages).toMatchObject({ type: 'integer' });
 
     const bulkTool = response.tools.find((t: any) => t.name === 'vikunja_task_bulk');
     expect(bulkTool.inputSchema.oneOf.map((branch: any) => branch.properties.action.const)).toEqual(
@@ -356,13 +371,17 @@ describe('MCP Server Registration and Dispatching tests', () => {
     const listBranch = readTool.inputSchema.oneOf.find(
       (branch: any) => branch.properties.action.const === 'list',
     );
-    expect(listBranch.properties.fields).toMatchObject({ type: 'array' });
-    expect(listBranch.properties.fields).not.toHaveProperty('anyOf');
+    expect(schemaProperty(readTool.inputSchema, listBranch, 'fields')).toMatchObject({
+      type: 'array',
+    });
+    expect(schemaProperty(readTool.inputSchema, listBranch, 'fields')).not.toHaveProperty('anyOf');
     const writeTool = core.tools.find((tool: any) => tool.name === 'vikunja_task_write');
     const createBranch = writeTool.inputSchema.oneOf.find(
       (branch: any) => branch.properties.action.const === 'create',
     );
-    expect(createBranch.properties.fields).toMatchObject({ type: 'object' });
+    expect(schemaProperty(writeTool.inputSchema, createBranch, 'fields')).toMatchObject({
+      type: 'object',
+    });
   });
 
   it('loads additional QA tools without exposing administrative tools', async () => {
@@ -576,7 +595,7 @@ describe('MCP Server Registration and Dispatching tests', () => {
     expect(request.mock.calls.filter(([method]) => method === 'POST')).toHaveLength(3);
   });
 
-  it('returns composed-create partial receipts and retries only the failed relation', async () => {
+  it('does not replay a composed relation with an ambiguous remote outcome', async () => {
     const taskTool = TOOLS.find((tool) => tool.name === 'vikunja_tasks')!;
     let relationAttempts = 0;
     const request = jest.fn(async (method: string, apiPath: string) => {
@@ -653,13 +672,17 @@ describe('MCP Server Registration and Dispatching tests', () => {
       ],
     });
     expect(second).toMatchObject({
-      outcome: 'completed',
-      idempotency: { state: 'recorded' },
+      outcome: 'partial',
+      idempotency: { state: 'retryable-partial' },
       relations: [
-        { status: 'created', relationKind: 'related', otherTask: { identifier: 'ALPHA-311' } },
+        {
+          status: 'failed',
+          relationKind: 'related',
+          error: { code: 'IDEMPOTENCY_OUTCOME_UNKNOWN' },
+        },
       ],
     });
-    expect(relationAttempts).toBe(2);
+    expect(relationAttempts).toBe(1);
     expect(
       request.mock.calls.filter(
         ([method, apiPath]) => method === 'POST' && apiPath === '/projects/101/tasks',
@@ -695,7 +718,7 @@ describe('MCP Server Registration and Dispatching tests', () => {
         arguments: {
           action: 'list',
           projectSelector: { id: 101 },
-          perPage: 1000,
+          perPage: 100,
           responseMode: 'compact',
         },
       },
@@ -1102,6 +1125,52 @@ describe('MCP Server Registration and Dispatching tests', () => {
     expect(response.isError).toBe(true);
     expect(response.content[0].text).toContain('VALIDATION_ERROR');
     expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects a read-projection array as task update fields', async () => {
+    const handler = (server as any)._requestHandlers.get('tools/call');
+    const response = await handler({
+      method: 'tools/call',
+      params: {
+        name: 'vikunja_tasks',
+        arguments: {
+          action: 'update',
+          taskSelector: { globalId: 99 },
+          projectSelector: { id: 101 },
+          fields: ['title'],
+          actor: 'Codex',
+          idempotencyKey: 'update-array-rejected',
+        },
+      },
+    });
+    expect(response.isError).toBe(true);
+    expect(response.content[0].text).toContain('writable field object');
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('does not render a tasks/undefined link for a dry-run create receipt', async () => {
+    const handler = (server as any)._requestHandlers.get('tools/call');
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ id: 101, title: 'Alpha' }),
+    } as Response);
+    const response = await handler({
+      method: 'tools/call',
+      params: {
+        name: 'vikunja_tasks',
+        arguments: {
+          action: 'create',
+          projectSelector: { id: 101 },
+          fields: { title: 'Preview task' },
+          actor: 'Codex',
+          idempotencyKey: 'preview-task',
+          dryRun: true,
+        },
+      },
+    });
+    expect(response.isError).not.toBe(true);
+    expect(response.content[0].text).not.toContain('tasks/undefined');
   });
 
   it('should fail self_check connection diagnostics gracefully if connection fails', async () => {

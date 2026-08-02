@@ -35,6 +35,7 @@ import { attachFiles, AttachmentInfo } from './attachments.js';
 import { withActorAttribution } from './mutation-policy.js';
 
 const MAX_AGENT_PAGE_SIZE = 100;
+const MAX_PROJECT_SCOPE = 25;
 const DEFAULT_MINIMAL_RESPONSE_CHARS = 4_000;
 
 export const TASK_READ_FIELDS = [
@@ -56,6 +57,8 @@ export interface TaskProjectionOptions {
   fields?: TaskReadField[];
   includeUrl?: boolean;
   titleMaxChars?: number;
+  attachmentLimit?: number;
+  maxResponseChars?: number;
 }
 
 export interface Task {
@@ -119,6 +122,7 @@ export interface WriteEcho {
   // Present only when the caller supplied attachments to create/create_if_absent.
   attachments?: AttachmentInfo[];
   attachmentErrors?: { file: string; error: string }[];
+  attachmentUnknown?: { file: string; error: string; code: string }[];
 }
 
 export interface UpsertEcho extends WriteEcho {
@@ -134,6 +138,8 @@ async function attachToEcho(
   client: VikunjaApiClient,
   echo: WriteEcho,
   attachments?: string[],
+  idempotencyKey?: string,
+  actor?: string,
 ): Promise<WriteEcho> {
   if (!attachments || attachments.length === 0) {
     return echo;
@@ -142,10 +148,16 @@ async function attachToEcho(
     client,
     echo.target.id,
     attachments.map((filePath) => ({ filePath })),
+    undefined,
+    idempotencyKey,
+    { actor },
   );
   echo.attachments = result.uploaded;
   if (result.failed.length > 0) {
     echo.attachmentErrors = result.failed;
+  }
+  if (result.unknown.length > 0) {
+    echo.attachmentUnknown = result.unknown;
   }
   return echo;
 }
@@ -331,6 +343,7 @@ interface ListCursor {
   projectId: number;
   page?: number;
   offset?: number;
+  perPage?: number;
   updated?: string;
   id?: number;
   scopeProjectIds?: number[];
@@ -351,7 +364,10 @@ function decodeListCursor(value: string | undefined): ListCursor | undefined {
         (Number.isInteger(parsed.page) &&
           parsed.page! > 0 &&
           Number.isInteger(parsed.offset) &&
-          parsed.offset! >= 0) ||
+          parsed.offset! >= 0 &&
+          Number.isInteger(parsed.perPage) &&
+          parsed.perPage! > 0 &&
+          parsed.perPage! <= MAX_AGENT_PAGE_SIZE) ||
         (typeof parsed.updated === 'string' &&
           Number.isFinite(Date.parse(parsed.updated)) &&
           Number.isInteger(parsed.id) &&
@@ -468,6 +484,7 @@ function boundedMinimalPages(
       projectId: page.project.id,
       page: page.pagination.page,
       offset,
+      perPage: page.pagination.perPage,
       scopeProjectIds: cursorScope,
     });
   };
@@ -496,6 +513,7 @@ function boundedMinimalPages(
         projectId: page.project.id,
         page: page.pagination.page + 1,
         offset: 0,
+        perPage: page.pagination.perPage,
         scopeProjectIds: cursorScope,
       });
     }
@@ -505,6 +523,7 @@ function boundedMinimalPages(
           projectId: nextPage.project.id,
           page: nextPage.pagination.page,
           offset: nextPage.startOffset,
+          perPage: nextPage.pagination.perPage,
           scopeProjectIds: cursorScope,
         })
       : null;
@@ -587,6 +606,7 @@ function boundedMinimalPages(
             projectId: page.project.id,
             page: page.pagination.page + 1,
             offset: 0,
+            perPage: page.pagination.perPage,
             scopeProjectIds: cursorScope,
           }),
       );
@@ -672,6 +692,16 @@ export async function listTasks(client: VikunjaApiClient, options: ListTasksOpti
         fieldErrors: [],
       });
     }
+    if (options.projects.length > MAX_PROJECT_SCOPE) {
+      throw new VikunjaError({
+        status: 400,
+        code: 'PROJECT_SCOPE_TOO_LARGE',
+        method: 'GET',
+        path: '/tasks',
+        message: `Explicit project subsets accept at most ${MAX_PROJECT_SCOPE} projects.`,
+        fieldErrors: [],
+      });
+    }
     const resolved = await Promise.all(options.projects.map((p) => resolveProject(client, p)));
     projectsToQuery = [...new Map(resolved.map((project) => [project.id, project])).values()];
   } else if (options.allProjects) {
@@ -722,6 +752,20 @@ export async function listTasks(client: VikunjaApiClient, options: ListTasksOpti
       });
     }
   }
+  if (
+    cursor?.page !== undefined &&
+    options.perPage !== undefined &&
+    Math.min(options.perPage, MAX_AGENT_PAGE_SIZE) !== cursor.perPage
+  ) {
+    throw new VikunjaError({
+      status: 400,
+      code: 'CURSOR_PAGE_SIZE_MISMATCH',
+      method: 'GET',
+      path: '/tasks',
+      message: `Resume this cursor with perPage ${cursor.perPage}.`,
+      fieldErrors: [],
+    });
+  }
 
   const results = [];
   const minimalPages: MinimalProjectPage[] = [];
@@ -739,7 +783,7 @@ export async function listTasks(client: VikunjaApiClient, options: ListTasksOpti
               afterUpdated: cursor!.updated,
               afterId: cursor!.id,
             }
-          : { ...effectiveOptions, page: cursor!.page }
+          : { ...effectiveOptions, page: cursor!.page, perPage: cursor!.perPage }
         : effectiveOptions;
     const rawRes = await listProjectTasksInternal(client, proj, projectOptions);
     const pagination = normalizePagination(rawRes);
@@ -799,11 +843,23 @@ export async function listTasks(client: VikunjaApiClient, options: ListTasksOpti
     );
   }
 
-  if (options.project) {
-    return results[0];
-  } else {
-    return { projects: results };
+  const response = options.project ? results[0] : { projects: results };
+  if (
+    options.maxResponseChars !== undefined &&
+    JSON.stringify(response).length + '```json\n{"ok":true,"data":}\n```'.length >
+      options.maxResponseChars
+  ) {
+    throw new VikunjaError({
+      status: 413,
+      code: 'RESPONSE_TOO_LARGE',
+      method: 'GET',
+      path: '/tasks',
+      message:
+        'The requested responseMode exceeds maxResponseChars. Use minimal mode, fewer fields, or a smaller page.',
+      fieldErrors: [],
+    });
   }
+  return response;
 }
 
 interface LabelAggregate {
@@ -956,19 +1012,29 @@ export async function programmeSnapshot(
       fieldErrors: [],
     });
   }
+  const changedSinceMs = options.changedSince ? Date.parse(options.changedSince) : undefined;
   const allChanged = options.changedSince
     ? tasks
-        .filter((task) => String(task.updated ?? '') >= options.changedSince!)
+        .filter((task) => {
+          const updatedMs = Date.parse(String(task.updated ?? ''));
+          return (
+            Number.isFinite(updatedMs) &&
+            Number.isFinite(changedSinceMs) &&
+            updatedMs >= changedSinceMs!
+          );
+        })
         .sort(
           (left, right) =>
-            String(left.updated ?? '').localeCompare(String(right.updated ?? '')) ||
+            Date.parse(String(left.updated ?? '')) - Date.parse(String(right.updated ?? '')) ||
             left.id - right.id,
         )
     : [];
   const remainingChanged = cursor?.updated
     ? allChanged.filter((task) => {
         const updated = String(task.updated ?? '');
-        return updated > cursor.updated! || (updated === cursor.updated && task.id > cursor.id!);
+        const updatedMs = Date.parse(updated);
+        const cursorMs = Date.parse(cursor.updated!);
+        return updatedMs > cursorMs || (updatedMs === cursorMs && task.id > cursor.id!);
       })
     : allChanged;
   const changedLimit = Math.min(Math.max(options.changedLimit ?? 20, 1), 100);
@@ -1047,7 +1113,13 @@ export async function verifyTaskState(
   taskSelector: TaskSelectorInput,
   projectSelector?: { id?: number; title?: string },
 ) {
-  const taskRef = await resolveTask(client, taskSelector, undefined, { includeRawTask: true });
+  const resolutionProject =
+    typeof taskSelector === 'object' && 'projectIndex' in taskSelector
+      ? projectSelector
+      : undefined;
+  const taskRef = await resolveTask(client, taskSelector, resolutionProject, {
+    includeRawTask: true,
+  });
   if (projectSelector?.id !== undefined && projectSelector.id !== taskRef.project.id) {
     throw new VikunjaError({
       status: 400,
@@ -1074,7 +1146,7 @@ export async function verifyTaskState(
   const rawTask = taskRef.rawTask ?? {};
   const commentsRaw = await client.request<any>(
     'GET',
-    `/tasks/${taskRef.id}/comments?page=1&per_page=5&order_by=desc`,
+    `/tasks/${taskRef.id}/comments?sort_by=created&order_by=desc&page=1&per_page=5`,
   );
   const attachmentRaw = await client.request<any>(
     'GET',
@@ -1113,6 +1185,7 @@ export async function verifyTaskState(
     assignees: taskRef.assignees.map((assignee) => assignee.username),
     attachmentCount: Number(attachmentRaw.total ?? attachments.length),
     attachments,
+    attachmentsIncomplete: Number(attachmentRaw.total ?? attachments.length) > attachments.length,
     relationCount: relations.length,
     relations,
     commentCount: Number(commentsRaw.total ?? comments.length),
@@ -1143,17 +1216,17 @@ export async function createTask(
   dryRun = false,
 ): Promise<any> {
   if (idempotencyKey && !dryRun) {
-    return runDurableOperation(
+    const echo = await runDurableOperation(
       'task-create',
       idempotencyKey,
       {
         projectSelector,
         fields,
-        attachments,
         actor,
       },
-      () => createTask(client, projectSelector, fields, undefined, attachments, actor, false),
+      () => createTask(client, projectSelector, fields, undefined, undefined, actor, false),
     );
+    return attachToEcho(client, echo, attachments, idempotencyKey, actor);
   }
 
   const project = await resolveProject(client, projectSelector);
@@ -1213,7 +1286,7 @@ export async function createTask(
 
   // Upload any attachments to the new task, then cache the full echo so a
   // retry with the same idempotencyKey never creates a second task.
-  await attachToEcho(client, echo, attachments);
+  await attachToEcho(client, echo, attachments, idempotencyKey, actor);
 
   return echo;
 }
@@ -1234,17 +1307,19 @@ export async function createIfAbsent(
   dryRun = false,
 ): Promise<any> {
   if (idempotencyKey && !dryRun) {
-    return runDurableOperation(
+    const echo = await runDurableOperation(
       'task-create-absent',
       idempotencyKey,
       {
         projectSelector,
         fields,
-        attachments,
         actor,
       },
-      () => createIfAbsent(client, projectSelector, fields, undefined, attachments, actor, false),
+      () => createIfAbsent(client, projectSelector, fields, undefined, undefined, actor, false),
     );
+    return echo.action === 'created'
+      ? attachToEcho(client, echo, attachments, idempotencyKey, actor)
+      : echo;
   }
 
   const project = await resolveProject(client, projectSelector);
@@ -1545,6 +1620,8 @@ export interface ConsolidatedTaskDetails {
   task: Task;
   comments: any[];
   attachments: any[];
+  commentPagination: Record<string, unknown>;
+  attachmentPagination: Record<string, unknown>;
   composedCalls: string[];
 }
 
@@ -1554,6 +1631,24 @@ export interface CompactTaskDetails {
 
 export interface StandardTaskDetails {
   task: Task;
+}
+
+function enforceTaskResponseBudget<T>(value: T, maxResponseChars?: number): T {
+  if (
+    maxResponseChars !== undefined &&
+    JSON.stringify(value).length + '```json\n{"ok":true,"data":}\n```'.length > maxResponseChars
+  ) {
+    throw new VikunjaError({
+      status: 413,
+      code: 'RESPONSE_TOO_LARGE',
+      method: 'GET',
+      path: '/tasks',
+      message:
+        'The requested task response exceeds maxResponseChars. Request minimal mode, fewer fields, or smaller comment/attachment limits.',
+      fieldErrors: [],
+    });
+  }
+  return value;
 }
 
 export function getTask(
@@ -1576,6 +1671,7 @@ export function getTask(
   projectSelector: { id?: number; title?: string } | undefined,
   commentLimit: number,
   requestedResponseMode: 'full',
+  projectionOptions?: TaskProjectionOptions,
 ): Promise<ConsolidatedTaskDetails>;
 export function getTask(
   client: VikunjaApiClient,
@@ -1612,48 +1708,58 @@ export async function getTask(
   const webUrl = client.getConfig().vikunjaWebUrl;
   const responseMode = selectedResponseMode(client, requestedResponseMode);
 
-  const includeBundledDetails = responseMode === 'full';
-  const taskPath =
-    includeBundledDetails && commentLimit > 0
-      ? `/tasks/${taskRef.id}?expand=comments`
-      : `/tasks/${taskRef.id}`;
-  const rawTask =
-    includeBundledDetails && commentLimit > 0
-      ? await client.request<any>('GET', taskPath)
-      : taskRef.rawTask;
+  const taskPath = `/tasks/${taskRef.id}`;
+  const rawTask = taskRef.rawTask;
 
   if (responseMode === 'minimal' || responseMode === 'receipt') {
-    return {
-      task: projectTask(rawTask, taskRef.project, webUrl, {
-        ...projectionOptions,
-        fields: projectionOptions.fields ?? ['portalRef', 'project', 'title', 'done', 'priority'],
-      }),
-    };
+    return enforceTaskResponseBudget(
+      {
+        task: projectTask(rawTask, taskRef.project, webUrl, {
+          ...projectionOptions,
+          fields: projectionOptions.fields ?? ['portalRef', 'project', 'title', 'done', 'priority'],
+        }),
+      },
+      projectionOptions.maxResponseChars,
+    );
   }
 
   if (responseMode === 'compact') {
-    return { task: normalizeCompactTask(rawTask, taskRef.project, webUrl) };
+    return enforceTaskResponseBudget(
+      { task: normalizeCompactTask(rawTask, taskRef.project, webUrl) },
+      projectionOptions.maxResponseChars,
+    );
   }
 
   const task = normalizeTask(rawTask, taskRef.project, webUrl);
 
   if (responseMode === 'standard') {
-    return { task };
+    return enforceTaskResponseBudget({ task }, projectionOptions.maxResponseChars);
   }
 
   const composedCalls = [`GET ${taskPath}`];
   let comments: any[] = [];
   let attachments: any[] = [];
+  let commentPagination: Record<string, unknown> = {
+    returnedCount: 0,
+    totalCount: 0,
+    incomplete: false,
+    nextPage: null,
+  };
+  let attachmentPagination: Record<string, unknown> = {
+    returnedCount: 0,
+    totalCount: 0,
+    incomplete: false,
+    nextPage: null,
+  };
 
   if (commentLimit > 0) {
-    // Prefer the comments embedded by expand; fall back to the dedicated
-    // endpoint only if this server did not populate them.
-    let rawComments: any = rawTask.comments;
-    if (!Array.isArray(rawComments)) {
-      composedCalls.push(`GET /tasks/${task.id}/comments`);
-      rawComments = await client.request<any>('GET', `/tasks/${task.id}/comments`);
-    }
-    const commentItems = Array.isArray(rawComments) ? rawComments : toItemArray(rawComments);
+    const commentPath = `/tasks/${task.id}/comments?sort_by=created&order_by=desc&page=1&per_page=${commentLimit}`;
+    composedCalls.push(`GET ${commentPath}`);
+    const rawComments = await client.request<any>('GET', commentPath);
+    const pagination = normalizePagination(rawComments);
+    const allCommentItems = toItemArray(rawComments);
+    const commentItems = allCommentItems.slice(0, commentLimit);
+    const commentTotal = Math.max(pagination.total, allCommentItems.length);
     comments = normalizeDatesAndNulls(commentItems)
       .map((c: any) => ({
         id: c.id,
@@ -1663,24 +1769,48 @@ export async function getTask(
       }))
       .sort((a: any, b: any) => String(b.created || '').localeCompare(String(a.created || '')))
       .slice(0, commentLimit);
+    commentPagination = {
+      returnedCount: comments.length,
+      totalCount: commentTotal,
+      incomplete: commentTotal > comments.length,
+      nextPage: commentTotal > comments.length ? 2 : null,
+    };
   }
 
-  composedCalls.push(`GET /tasks/${task.id}/attachments`);
-  const rawAttachments = await client.request<any>('GET', `/tasks/${task.id}/attachments`);
-  attachments = toItemArray(rawAttachments).map((att: any) => ({
-    id: att.id,
-    fileName: att.file?.name || att.file_name || 'unknown',
-    mime: att.file?.mime || att.mime || 'application/octet-stream',
-    fileSize: att.file?.size || att.file_size || 0,
-    created: att.created,
-  }));
+  const attachmentLimit = projectionOptions.attachmentLimit ?? 20;
+  if (attachmentLimit > 0) {
+    const attachmentPath = `/tasks/${task.id}/attachments?page=1&per_page=${attachmentLimit}`;
+    composedCalls.push(`GET ${attachmentPath}`);
+    const rawAttachments = await client.request<any>('GET', attachmentPath);
+    const pagination = normalizePagination(rawAttachments);
+    const allAttachmentItems = toItemArray(rawAttachments);
+    const attachmentTotal = Math.max(pagination.total, allAttachmentItems.length);
+    attachments = allAttachmentItems.slice(0, attachmentLimit).map((att: any) => ({
+      id: att.id,
+      fileName: att.file?.name || att.file_name || 'unknown',
+      mime: att.file?.mime || att.mime || 'application/octet-stream',
+      fileSize: att.file?.size || att.file_size || 0,
+      created: att.created,
+    }));
+    attachmentPagination = {
+      returnedCount: attachments.length,
+      totalCount: attachmentTotal,
+      incomplete: attachmentTotal > attachments.length,
+      nextPage: attachmentTotal > attachments.length ? 2 : null,
+    };
+  }
 
-  return {
-    task,
-    comments,
-    attachments,
-    composedCalls,
-  };
+  return enforceTaskResponseBudget(
+    {
+      task,
+      comments,
+      attachments,
+      commentPagination,
+      attachmentPagination,
+      composedCalls,
+    },
+    projectionOptions.maxResponseChars,
+  );
 }
 
 export async function updateTask(
@@ -1746,21 +1876,18 @@ export async function updateTask(
       body.description = htmlDesc;
     }
   } else if (fields.appendDescription !== undefined) {
-    const currentDescription = currentTask.description ?? '';
-    const lines = currentDescription.trimEnd().split('\n');
-    const trailingMarker = /^\[vfm-key:[A-Za-z0-9][A-Za-z0-9:_\-./#]{0,119}\]$/.test(
-      lines.at(-1)?.trim() ?? '',
-    )
-      ? lines.pop()!.trim()
-      : undefined;
-    const existingBody = lines.join('\n').trimEnd();
-    const appendedBody = existingBody
-      ? `${existingBody}\n\n${fields.appendDescription}`
-      : fields.appendDescription;
-    const nextDescription = trailingMarker
-      ? `${appendedBody.trimEnd()}\n\n${trailingMarker}`
-      : appendedBody;
-    const htmlDesc = markdownToHtml(nextDescription);
+    const currentHtml = String(currentRaw.description ?? '');
+    const appendHtml = markdownToHtml(fields.appendDescription);
+    const markerPattern =
+      /(?:<p(?:\s[^>]*)?>\s*)?\[vfm-key:[A-Za-z0-9][A-Za-z0-9:_\-./#]{0,119}\](?:\s*<\/p>)?\s*$/i;
+    const marker = currentHtml.match(markerPattern);
+    const insertionPoint = marker?.index ?? currentHtml.length;
+    const beforeMarker = currentHtml.slice(0, insertionPoint);
+    const markerAndTrailing = currentHtml.slice(insertionPoint);
+    const separator = beforeMarker.length > 0 && !beforeMarker.endsWith('\n') ? '\n' : '';
+    const htmlDesc = marker
+      ? `${beforeMarker}${separator}${appendHtml}\n${markerAndTrailing}`
+      : `${beforeMarker}${separator}${appendHtml}`;
     if (htmlDesc !== currentRaw.description) {
       body.description = htmlDesc;
     }
@@ -1955,8 +2082,9 @@ export async function closeWithEvidence(
   idempotencyKey?: string,
   actor?: string,
   dryRun = false,
+  expectedUpdatedAt?: string,
 ): Promise<any> {
-  const payload = { taskSelector, projectSelector, evidenceComment, actor };
+  const payload = { taskSelector, projectSelector, evidenceComment, actor, expectedUpdatedAt };
   const execute = async (): Promise<CloseWithEvidenceResult> => {
     const taskRef = await resolveTask(client, taskSelector, projectSelector, {
       includeRawTask: true,
@@ -1999,7 +2127,13 @@ export async function closeWithEvidence(
 
     let taskEcho: WriteEcho;
     try {
-      taskEcho = await updateTask(client, taskRef.id, { done: true });
+      taskEcho = await updateTask(
+        client,
+        taskRef.id,
+        { done: true },
+        projectSelector,
+        expectedUpdatedAt,
+      );
       if (taskEcho.action !== 'unchanged') composedCalls.push(`PATCH /tasks/${taskRef.id}`);
     } catch (error) {
       const taskStatus = await readBackTaskStatus(client, taskRef.id);
@@ -2377,7 +2511,13 @@ export async function resolveUser(
     async (path) => client.request<any>('GET', path),
     `/users?q=${encodeURIComponent(selectorStr)}`,
   );
-  const exact = items.find((u: any) => u.username.toLowerCase() === selectorStr.toLowerCase());
+  const exact = items.find(
+    (u: any) =>
+      typeof u?.username === 'string' &&
+      u.username.toLowerCase() === selectorStr.toLowerCase() &&
+      Number.isInteger(Number(u.id)) &&
+      Number(u.id) > 0,
+  );
 
   if (!exact) {
     throw new VikunjaError({
@@ -2869,6 +3009,10 @@ const VALID_RELATION_KINDS = [
   'copiedto',
 ];
 
+function taskSelectorForError(selector: TaskSelectorInput): string {
+  return typeof selector === 'object' ? JSON.stringify(selector) : String(selector);
+}
+
 /**
  * Global numeric task ids are self-sufficient and may point at another project.
  * Portal/short refs (#n / PRJ-n) need project context from the primary call.
@@ -2902,7 +3046,7 @@ export async function relateTask(
       status: 400,
       code: 'INVALID_RELATION_KIND',
       method: 'POST',
-      path: `/tasks/${taskSelector}/relations`,
+      path: `/tasks/${encodeURIComponent(taskSelectorForError(taskSelector))}/relations`,
       message: `Invalid relation kind: "${relationKind}". Valid kinds are: ${VALID_RELATION_KINDS.join(', ')}`,
       fieldErrors: [],
     });
@@ -2994,7 +3138,7 @@ export async function unrelateTask(
       status: 400,
       code: 'INVALID_RELATION_KIND',
       method: 'DELETE',
-      path: `/tasks/${taskSelector}/relations/${relationKind}/${otherTaskSelector}`,
+      path: `/tasks/${encodeURIComponent(taskSelectorForError(taskSelector))}/relations/${relationKind}/${encodeURIComponent(taskSelectorForError(otherTaskSelector))}`,
       message: `Invalid relation kind: "${relationKind}". Valid kinds are: ${VALID_RELATION_KINDS.join(', ')}`,
       fieldErrors: [],
     });

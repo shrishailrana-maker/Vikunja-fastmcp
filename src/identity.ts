@@ -29,6 +29,22 @@ export interface TaskRef {
   rawTask?: any;
 }
 
+function projectRefFromApi(project: any, apiPath: string): ProjectRef {
+  const id = Number(project?.id);
+  const title = typeof project?.title === 'string' ? project.title.trim() : '';
+  if (!Number.isInteger(id) || id <= 0 || title === '') {
+    throw new VikunjaError({
+      status: 502,
+      code: 'INVALID_API_RESPONSE',
+      method: 'GET',
+      path: apiPath,
+      message: 'Vikunja returned a project without a valid positive id and non-empty title.',
+      fieldErrors: [],
+    });
+  }
+  return { id, title };
+}
+
 export type TaskSelector = { globalId: number } | { identifier: string } | { projectIndex: number };
 export type TaskSelectorInput = TaskSelector | string | number;
 
@@ -55,22 +71,64 @@ interface CacheEntry<T> {
 
 export class IdentityCache {
   private projectCache = new Map<string, CacheEntry<ProjectRef>>();
+  private projectIdCache = new Map<number, CacheEntry<ProjectRef>>();
+  private ambiguousProjectCache = new Map<string, CacheEntry<ProjectRef[]>>();
   private projectIdentifierCache = new Map<string, ProjectRef[]>();
   private projectIdentifierCacheExpiresAt = 0;
   private labelCache = new Map<string, CacheEntry<number>>();
 
   getProject(title: string): ProjectRef | null {
+    const candidates = this.getProjectCandidates(title);
+    return candidates?.length === 1 ? candidates[0] : null;
+  }
+
+  getProjectCandidates(title: string): ProjectRef[] | null {
     const key = title.toLowerCase();
+    const ambiguous = this.ambiguousProjectCache.get(key);
+    if (ambiguous && ambiguous.expiresAt > Date.now()) return ambiguous.value;
+    this.ambiguousProjectCache.delete(key);
     const entry = this.projectCache.get(key);
     if (entry && entry.expiresAt > Date.now()) {
-      return entry.value;
+      return [entry.value];
     }
     this.projectCache.delete(key);
     return null;
   }
 
+  getProjectById(id: number): ProjectRef | null {
+    const entry = this.projectIdCache.get(id);
+    if (entry && entry.expiresAt > Date.now()) return entry.value;
+    this.projectIdCache.delete(id);
+    return null;
+  }
+
   setProject(title: string, ref: ProjectRef) {
+    if (typeof title !== 'string' || title.trim() === '') {
+      throw new VikunjaError({
+        status: 502,
+        code: 'INVALID_API_RESPONSE',
+        method: 'GET',
+        path: '/projects',
+        message: 'Vikunja returned a project without a valid title.',
+        fieldErrors: [],
+      });
+    }
     const key = title.toLowerCase();
+    const current = this.getProjectCandidates(title) ?? [];
+    const candidates = [...new Map([...current, ref].map((item) => [item.id, item])).values()];
+    this.projectIdCache.set(ref.id, {
+      value: { id: ref.id, title: ref.title },
+      expiresAt: Date.now() + 45000,
+    });
+    if (candidates.length > 1) {
+      this.projectCache.delete(key);
+      this.ambiguousProjectCache.set(key, {
+        value: candidates,
+        expiresAt: Date.now() + 45000,
+      });
+      return;
+    }
+    this.ambiguousProjectCache.delete(key);
     this.projectCache.set(key, {
       value: { id: ref.id, title: ref.title },
       expiresAt: Date.now() + 45000,
@@ -78,12 +136,18 @@ export class IdentityCache {
   }
 
   invalidateProject(title: string) {
+    for (const [id, entry] of this.projectIdCache) {
+      if (entry.value.title.toLowerCase() === title.toLowerCase()) this.projectIdCache.delete(id);
+    }
     this.projectCache.delete(title.toLowerCase());
+    this.ambiguousProjectCache.delete(title.toLowerCase());
     this.clearProjectIdentifiers();
   }
 
   clearProjects() {
     this.projectCache.clear();
+    this.projectIdCache.clear();
+    this.ambiguousProjectCache.clear();
     this.clearProjectIdentifiers();
   }
 
@@ -98,12 +162,12 @@ export class IdentityCache {
   setProjectIdentifiers(projects: { id: number; title: string; identifier?: string }[]) {
     this.projectIdentifierCache.clear();
     for (const project of projects) {
+      const ref = projectRefFromApi(project, '/projects');
+      this.setProject(ref.title, ref);
       const identifier = project.identifier?.trim();
       if (!identifier) continue;
-      const ref = { id: project.id, title: project.title };
       const key = identifier.toLowerCase();
       this.projectIdentifierCache.set(key, [...(this.projectIdentifierCache.get(key) ?? []), ref]);
-      this.setProject(project.title, ref);
     }
     this.projectIdentifierCacheExpiresAt = Date.now() + 45000;
   }
@@ -142,8 +206,17 @@ export class IdentityCache {
 
 export const cache = new IdentityCache();
 
+let projectCatalogInFlight: Promise<any[]> | null = null;
 async function listAllProjects(client: VikunjaApiClient): Promise<any[]> {
-  return fetchAllCollectionItems(async (path) => client.request<any>('GET', path), '/projects');
+  if (!projectCatalogInFlight) {
+    projectCatalogInFlight = fetchAllCollectionItems(
+      async (path) => client.request<any>('GET', path),
+      '/projects',
+    ).finally(() => {
+      projectCatalogInFlight = null;
+    });
+  }
+  return projectCatalogInFlight;
 }
 
 export async function listAllLabels(client: VikunjaApiClient): Promise<any[]> {
@@ -155,7 +228,16 @@ async function resolveProjectIdentifier(
   identifier: string,
 ): Promise<ProjectRef> {
   let matches = cache.getProjectsByIdentifier(identifier);
+  const usedCachedCatalog = matches !== null;
   if (matches === null) {
+    cache.setProjectIdentifiers(await listAllProjects(client));
+    matches = cache.getProjectsByIdentifier(identifier) ?? [];
+  }
+
+  // An identifier can be assigned while this long-running MCP holds a recent
+  // project catalog. Refresh once before returning an unknown-prefix error.
+  if (matches.length === 0 && usedCachedCatalog) {
+    cache.clearProjects();
     cache.setProjectIdentifiers(await listAllProjects(client));
     matches = cache.getProjectsByIdentifier(identifier) ?? [];
   }
@@ -201,22 +283,42 @@ export async function resolveProject(
       });
     }
 
-    try {
-      const project = await client.request<any>('GET', `/projects/${selector.id}`);
+    const cached = cache.getProjectById(selector.id);
+    if (cached) {
       if (
         selector.title !== undefined &&
-        project.title.toLowerCase() !== selector.title.toLowerCase()
+        cached.title.toLowerCase() !== selector.title.toLowerCase()
       ) {
         throw new VikunjaError({
           status: 400,
           code: 'PROJECT_SELECTOR_MISMATCH',
           method: 'GET',
           path: `/projects/${selector.id}`,
-          message: `Project ID ${selector.id} is "${project.title}", not "${selector.title}".`,
+          message: `Project ID ${selector.id} is "${cached.title}", not "${selector.title}".`,
           fieldErrors: [],
         });
       }
-      return { id: project.id, title: project.title };
+      return cached;
+    }
+
+    try {
+      const project = await client.request<any>('GET', `/projects/${selector.id}`);
+      const ref = projectRefFromApi(project, `/projects/${selector.id}`);
+      if (
+        selector.title !== undefined &&
+        ref.title.toLowerCase() !== selector.title.toLowerCase()
+      ) {
+        throw new VikunjaError({
+          status: 400,
+          code: 'PROJECT_SELECTOR_MISMATCH',
+          method: 'GET',
+          path: `/projects/${selector.id}`,
+          message: `Project ID ${selector.id} is "${ref.title}", not "${selector.title}".`,
+          fieldErrors: [],
+        });
+      }
+      cache.setProject(ref.title, ref);
+      return ref;
     } catch (err: any) {
       if (err instanceof VikunjaError && err.status === 404) {
         throw new VikunjaError({
@@ -233,12 +335,25 @@ export async function resolveProject(
   }
 
   if (selector.title !== undefined) {
-    const cached = cache.getProject(selector.title);
-    if (cached !== null) {
-      return cached;
+    const cached = cache.getProjectCandidates(selector.title);
+    if (cached && cached.length > 1) {
+      throw new VikunjaError({
+        status: 409,
+        code: 'PROJECT_TITLE_AMBIGUOUS',
+        method: 'GET',
+        path: '/projects',
+        message: `Multiple projects match exact title: "${selector.title}". Candidates: ${JSON.stringify(cached)}`,
+        fieldErrors: [],
+      });
+    }
+    if (cached?.length === 1) {
+      return cached[0];
     }
 
-    const projects = await listAllProjects(client);
+    const projects = (await listAllProjects(client)).map((project) => ({
+      ...project,
+      ...projectRefFromApi(project, '/projects'),
+    }));
     const exactMatches = projects.filter(
       (p) => p.title.toLowerCase() === selector.title!.toLowerCase(),
     );
@@ -266,6 +381,7 @@ export async function resolveProject(
       });
     }
 
+    cache.setProjectIdentifiers(projects);
     const resolved = exactMatches[0];
     const ref = { id: resolved.id, title: resolved.title };
     cache.setProject(selector.title, ref);

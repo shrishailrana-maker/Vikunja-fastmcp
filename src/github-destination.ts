@@ -38,7 +38,19 @@ function githubToken(): string {
 
 function normalizedApiUrl(value?: string): string {
   const url = (value?.trim() || 'https://api.github.com').replace(/\/+$/, '');
-  const parsed = new URL(url);
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new VikunjaError({
+      status: 400,
+      code: 'UNSAFE_GITHUB_API_URL',
+      method: 'TOOLS_CALL',
+      path: 'destination.apiUrl',
+      message: 'GitHub apiUrl must be a valid HTTPS URL on an approved host.',
+      fieldErrors: [],
+    });
+  }
   const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
   const configuredHosts = (process.env.VIKUNJA_GITHUB_API_HOSTS ?? '')
     .split(',')

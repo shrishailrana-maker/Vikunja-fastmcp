@@ -97,6 +97,7 @@ export interface DiagnosticResult {
     apiDocumentPath?: string;
     agentSkillPath?: string;
     attachmentDownloadRoot?: string;
+    attachmentSourceRoots?: string[];
     supportedTools?: string[];
     supportedSubcommands?: Record<string, string[]>;
     unsupportedOperations?: { operation: string; reason: string }[];
@@ -160,6 +161,7 @@ export async function runSelfCheck(
     if (detail === 'full') {
       diagnostics.tokenPresent = !!config.vikunjaToken;
       diagnostics.attachmentDownloadRoot = config.attachmentDownloadRoot;
+      diagnostics.attachmentSourceRoots = config.attachmentSourceRoots;
     }
   } catch (err: any) {
     return {
@@ -211,7 +213,8 @@ export async function runSelfCheck(
     }
   } catch (err: any) {
     diagnostics.authenticationState = err?.status === 401 ? 'unauthenticated' : 'unknown';
-    diagnostics.connectionStatus = err?.code === 'NETWORK_ERROR' ? 'offline' : 'online';
+    diagnostics.connectionStatus =
+      err?.code === 'NETWORK_ERROR' || err?.code === 'REQUEST_TIMEOUT' ? 'offline' : 'online';
     diagnostics.connectionError = redactSecrets(
       err.message || 'Failed to connect to Vikunja server',
       config.vikunjaToken,

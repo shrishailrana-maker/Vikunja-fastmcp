@@ -82,6 +82,65 @@ export function markdownToHtml(md: string): string {
     return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
+  function placeholderPrefix(text: string, kind: string): string {
+    let attempt = 0;
+    let prefix = `VFM${kind}${attempt}X`;
+    while (text.includes(prefix)) {
+      attempt += 1;
+      prefix = `VFM${kind}${attempt}X`;
+    }
+    return prefix;
+  }
+
+  function emphasis(text: string): string {
+    return text
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/__([^_]+)__/g, '<strong>$1</strong>')
+      .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+      .replace(/_([^_]+)_/g, '<em>$1</em>');
+  }
+
+  function extractLinks(text: string, prefix: string): { text: string; links: string[] } {
+    const links: string[] = [];
+    let output = '';
+    for (let index = 0; index < text.length;) {
+      const labelStart = text.indexOf('[', index);
+      if (labelStart < 0) {
+        output += text.slice(index);
+        break;
+      }
+      const labelEnd = text.indexOf('](', labelStart + 1);
+      if (labelEnd < 0) {
+        output += text.slice(index);
+        break;
+      }
+      let depth = 1;
+      let cursor = labelEnd + 2;
+      for (; cursor < text.length && depth > 0; cursor += 1) {
+        if (text[cursor] === '(') depth += 1;
+        else if (text[cursor] === ')') depth -= 1;
+      }
+      if (depth !== 0) {
+        output += text.slice(index);
+        break;
+      }
+      const label = text.slice(labelStart + 1, labelEnd);
+      const encodedUrl = text.slice(labelEnd + 2, cursor - 1);
+      const safeUrl = validateUrlScheme(decodeEntities(encodedUrl));
+      const attrSafeUrl = safeUrl
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+      output += text.slice(index, labelStart);
+      const linkIndex = links.length;
+      links.push(`<a href="${attrSafeUrl}">${emphasis(label)}</a>`);
+      output += `${prefix}${linkIndex}Z`;
+      index = cursor;
+    }
+    return { text: output, links };
+  }
+
   const flushBlock = () => {
     if (currentBlockLines.length === 0) return;
 
@@ -107,48 +166,26 @@ export function markdownToHtml(md: string): string {
   function parseInline(text: string): string {
     let escaped = escapeHtml(text);
 
-    // Extract inline code
+    // Protect code and links before applying emphasis so URL punctuation and
+    // literal placeholder-like text cannot be rewritten.
     const inlineCodes: string[] = [];
+    const codePrefix = placeholderPrefix(escaped, 'CODE');
     escaped = escaped.replace(/`([^`]+)`/g, (_, code) => {
       const idx = inlineCodes.length;
       inlineCodes.push(`<code>${code}</code>`);
-      return `@@INLINECODE${idx}@@`;
+      return `${codePrefix}${idx}Z`;
     });
-
-    // Bold
-    escaped = escaped.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-    escaped = escaped.replace(/__([^_]+)__/g, '<strong>$1</strong>');
-
-    // Italic
-    escaped = escaped.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-    escaped = escaped.replace(/_([^_]+)_/g, '<em>$1</em>');
-
-    // Links
-    let linkError: any = null;
-    escaped = escaped.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, label, url) => {
-      try {
-        const decodedUrl = decodeEntities(url);
-        const safeUrl = validateUrlScheme(decodedUrl);
-        // Re-encode for a double-quoted HTML attribute so a URL containing a
-        // quote or angle bracket cannot break out of href="..." and inject markup.
-        const attrSafeUrl = safeUrl
-          .replace(/&/g, '&amp;')
-          .replace(/"/g, '&quot;')
-          .replace(/</g, '&lt;')
-          .replace(/>/g, '&gt;');
-        return `<a href="${attrSafeUrl}">${label}</a>`;
-      } catch (e: any) {
-        linkError = e;
-        return match;
-      }
-    });
-
-    if (linkError) {
-      throw linkError;
-    }
-
-    // Restore inline code
-    escaped = escaped.replace(/@@INLINECODE(\d+)@@/g, (_, idx) => inlineCodes[Number(idx)]);
+    const linkPrefix = placeholderPrefix(escaped, 'LINK');
+    const extracted = extractLinks(escaped, linkPrefix);
+    escaped = emphasis(extracted.text);
+    escaped = escaped.replace(
+      new RegExp(`${linkPrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\d+)Z`, 'g'),
+      (_, idx) => extracted.links[Number(idx)],
+    );
+    escaped = escaped.replace(
+      new RegExp(`${codePrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\d+)Z`, 'g'),
+      (_, idx) => inlineCodes[Number(idx)],
+    );
 
     return escaped;
   }
@@ -222,25 +259,37 @@ export function htmlToMarkdown(html: string): string {
   md = md.replace(/\r\n/g, '\n');
   md = md.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, '');
 
+  const placeholderPrefix = (kind: string) => {
+    let attempt = 0;
+    let prefix = `VFM${kind}${attempt}X`;
+    while (md.includes(prefix)) {
+      attempt += 1;
+      prefix = `VFM${kind}${attempt}X`;
+    }
+    return prefix;
+  };
+
   // Extract pre blocks
   const preBlocks: string[] = [];
+  const prePrefix = placeholderPrefix('PRE');
   md = md.replace(/<pre><code>([\s\S]*?)<\/code><\/pre>/g, (_, code) => {
     const index = preBlocks.length;
     preBlocks.push(`\n\`\`\`\n${decodeEntities(code.trim())}\n\`\`\`\n`);
-    return `__PRE_BLOCK_${index}__`;
+    return `${prePrefix}${index}Z`;
   });
   md = md.replace(/<pre>([\s\S]*?)<\/pre>/g, (_, code) => {
     const index = preBlocks.length;
     preBlocks.push(`\n\`\`\`\n${decodeEntities(code.trim())}\n\`\`\`\n`);
-    return `__PRE_BLOCK_${index}__`;
+    return `${prePrefix}${index}Z`;
   });
 
   // Extract inline code
   const inlineCodes: string[] = [];
+  const codePrefix = placeholderPrefix('CODE');
   md = md.replace(/<code>(.*?)<\/code>/g, (_, code) => {
     const index = inlineCodes.length;
     inlineCodes.push(`\`${decodeEntities(code)}\``);
-    return `__CODE_${index}__`;
+    return `${codePrefix}${index}Z`;
   });
 
   // Headings
@@ -305,9 +354,16 @@ export function htmlToMarkdown(html: string): string {
   // Strip remaining HTML tags
   md = md.replace(/<[^>]+>/g, '');
 
-  // Restore codes & pre
-  md = md.replace(/__PRE_BLOCK_(\d+)__/g, (_, idx) => preBlocks[Number(idx)]);
-  md = md.replace(/__CODE_(\d+)__/g, (_, idx) => inlineCodes[Number(idx)]);
-
-  return decodeEntities(md.trim()).replace(/\n{3,}/g, '\n\n');
+  // Decode ordinary prose once, then restore already-decoded code payloads so
+  // entities inside code are never decoded a second time.
+  md = decodeEntities(md.trim()).replace(/\n{3,}/g, '\n\n');
+  md = md.replace(
+    new RegExp(`${prePrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\d+)Z`, 'g'),
+    (_, idx) => preBlocks[Number(idx)],
+  );
+  md = md.replace(
+    new RegExp(`${codePrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\d+)Z`, 'g'),
+    (_, idx) => inlineCodes[Number(idx)],
+  );
+  return md.replace(/\n{3,}/g, '\n\n');
 }

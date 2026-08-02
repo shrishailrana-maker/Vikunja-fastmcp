@@ -23,6 +23,7 @@ Set credentials only in the local process environment:
 ```powershell
 $env:VIKUNJA_URL = "https://vikunja.example.com/api/v2"
 $env:VIKUNJA_API_TOKEN = "<LOCAL_TOKEN>"
+$env:VIKUNJA_ATTACHMENT_SOURCE_ROOTS = "C:\safe\logs;$env:TEMP"
 ```
 
 Never put the token in this repository, command arguments, output files, or
@@ -63,6 +64,12 @@ python fallback\vikunja-cli.py vikunja_export_project export --project-id 2 --fo
   are not atomic.
 - Downloads and exports stay under `VIKUNJA_ATTACHMENT_DOWNLOAD_ROOT`, which
   defaults to the OS temporary directory.
+- Uploads and CSV imports must be regular, non-symlink files under one of the
+  path-delimited `VIKUNJA_ATTACHMENT_SOURCE_ROOTS`. The default roots are the
+  current working directory and the OS temporary directory.
+- Download/export paths reject symlink escapes, files are created with private
+  permissions where the OS supports them, multipart filenames cannot inject
+  headers, and CSV exports neutralize spreadsheet formulas.
 - Requests time out after 30 seconds by default. Override with
   `VIKUNJA_REQUEST_TIMEOUT_SECONDS`.
 - Arguments such as webhook secrets and export passwords may be visible in

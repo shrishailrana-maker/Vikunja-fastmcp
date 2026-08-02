@@ -15,7 +15,7 @@ import {
   upsertTask,
 } from './tasks.js';
 import { markdownToHtml } from './markdown.js';
-import { durableOperationKey, idempotency, payloadFingerprint } from './idempotency.js';
+import { idempotency, payloadFingerprint } from './idempotency.js';
 
 export interface BulkTaskFields {
   title?: string;
@@ -249,6 +249,7 @@ export function getBulkOperationStatus(
   const offset = cursor === undefined ? 0 : Number(cursor);
   if (!Number.isSafeInteger(offset) || offset < 0)
     throw validationError('cursor must be a non-negative integer string.');
+  if (offset > receipts.length) throw validationError('cursor exceeds total receipt count.');
   const safePerPage = Math.min(100, Math.max(1, perPage));
   if (countOnly) {
     return {
@@ -289,13 +290,17 @@ export async function bulkUpdateTasks(
   dryRun = false,
 ): Promise<any> {
   const values = apiFields(fields);
-  if (taskSelectors.length === 0 || Object.keys(values).length === 0) {
+  if (
+    taskSelectors.length === 0 ||
+    taskSelectors.length > 100 ||
+    Object.keys(values).length === 0
+  ) {
     throw new VikunjaError({
       status: 400,
       code: 'VALIDATION_ERROR',
       method: 'PUT',
       path: '/tasks/bulk',
-      message: 'Bulk update requires task selectors and at least one field.',
+      message: 'Bulk update requires 1-100 task selectors and at least one field.',
       fieldErrors: [],
     });
   }
@@ -335,13 +340,6 @@ export async function bulkUpdateTasks(
   }
   const legacyNative = taskSelectors.every((selector) => typeof selector !== 'object');
   if (!idempotencyKey) {
-    const cacheKey = idempotencyKey
-      ? durableOperationKey('bulk-update-legacy', idempotencyKey, payload)
-      : '';
-    if (cacheKey) {
-      const cached = idempotency.get(cacheKey);
-      if (cached) return cached;
-    }
     const taskIds: number[] = [];
     if (legacyNative && !project) {
       taskIds.push(...taskSelectors.map((selector) => Number(selector)));
@@ -368,7 +366,6 @@ export async function bulkUpdateTasks(
         }))
       : [];
     const result = { requested: taskSelectors.length, updated };
-    if (cacheKey) idempotency.set(cacheKey, result);
     return result;
   }
 
@@ -929,7 +926,9 @@ export async function bulkWorkflowTasks(
           taskSelector,
           options.evidenceComment!,
           project,
-          options.dryRun ? undefined : `${options.idempotencyKey}:row:${row}`,
+          options.dryRun || !options.idempotencyKey
+            ? undefined
+            : `${options.idempotencyKey}:row:${row}`,
           options.actor,
           options.dryRun ?? false,
         );

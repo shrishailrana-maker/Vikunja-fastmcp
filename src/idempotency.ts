@@ -39,6 +39,11 @@ interface StoredLease {
 
 const DEFAULT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const OPERATION_LEASE_MS = 120_000;
+let activeCredentialScope = 'default-credential';
+
+export function configureIdempotencyScope(token: string): void {
+  activeCredentialScope = createHash('sha256').update(token).digest('hex');
+}
 
 function operationLeaseLost(namespace: string): VikunjaError {
   return new VikunjaError({
@@ -50,6 +55,25 @@ function operationLeaseLost(namespace: string): VikunjaError {
       'Durable operation lease ownership was lost. No receipt was finalized; retry the identical operation with the same idempotencyKey.',
     fieldErrors: [],
   });
+}
+
+function operationOutcomeUnknown(namespace: string): VikunjaError {
+  return new VikunjaError({
+    status: 409,
+    code: 'IDEMPOTENCY_OUTCOME_UNKNOWN',
+    method: 'TOOLS_CALL',
+    path: namespace,
+    message:
+      'A previous identical operation may have reached Vikunja, but its result was not confirmed. Inspect the target or receipt before retrying with a new idempotencyKey.',
+    fieldErrors: [],
+  });
+}
+
+function hasAmbiguousRemoteOutcome(error: unknown): boolean {
+  const status = Number((error as any)?.status);
+  return (
+    !Number.isFinite(status) || status === 408 || status === 409 || status === 429 || status >= 500
+  );
 }
 
 function canonicalize(value: unknown): unknown {
@@ -74,7 +98,7 @@ export function durableOperationKey(
   callerKey: string,
   payload: unknown,
 ): string {
-  const callerHash = callerKeyHash(callerKey);
+  const callerHash = callerKeyHash(`${activeCredentialScope}\0${callerKey}`);
   const payloadHash = payloadFingerprint(payload);
   return `${namespace}:${callerHash}:${payloadHash}`;
 }
@@ -118,6 +142,7 @@ export async function runDurableOperation<T>(
   if (!leased.acquired) {
     if (leased.value?.status === 'completed') return leased.value.result as T;
     if (leased.value?.status === undefined) return leased.value as T;
+    if (leased.value?.status === 'outcome_unknown') throw operationOutcomeUnknown(namespace);
     throw new VikunjaError({
       status: 409,
       code: 'IDEMPOTENCY_OPERATION_IN_PROGRESS',
@@ -131,6 +156,7 @@ export async function runDurableOperation<T>(
   if (!leased.leaseToken) throw operationLeaseLost(namespace);
 
   let leaseLost = false;
+  let operationStarted = false;
   const renewLease = () => {
     if (
       leaseLost ||
@@ -156,6 +182,7 @@ export async function runDurableOperation<T>(
 
   try {
     if (!renewLease()) throw operationLeaseLost(namespace);
+    operationStarted = true;
     const result = await operation();
     if (!renewLease()) throw operationLeaseLost(namespace);
     const partial =
@@ -187,8 +214,12 @@ export async function runDurableOperation<T>(
     }
     return result;
   } catch (error) {
-    if (!leaseLost) {
-      idempotency.setIfLeaseOwner(operationKey, leased.leaseToken, { status: 'failed' });
+    if (operationStarted && (leaseLost || hasAmbiguousRemoteOutcome(error))) {
+      idempotency.markOutcomeUnknown(operationKey, leased.leaseToken);
+    } else if (!leaseLost) {
+      idempotency.setIfLeaseOwner(operationKey, leased.leaseToken, {
+        status: 'failed',
+      });
     }
     throw error;
   } finally {
@@ -205,6 +236,12 @@ function defaultDatabasePath(): string {
     process.env.LOCALAPPDATA ?? process.env.XDG_STATE_HOME ?? join(homedir(), '.local', 'state');
   const instanceHash = createHash('sha256')
     .update(process.env.VIKUNJA_URL?.trim() || 'default-instance')
+    .update('\0')
+    .update(
+      createHash('sha256')
+        .update(process.env.VIKUNJA_API_TOKEN?.trim() || 'default-credential')
+        .digest('hex'),
+    )
     .digest('hex')
     .slice(0, 16);
   return join(stateRoot, 'vikunja-fastmcp', `idempotency-${instanceHash}.sqlite`);
@@ -331,10 +368,21 @@ export class IdempotencyCache {
         .get(key) as unknown as StoredLease | undefined;
       const now = Date.now();
       const current = row && now - row.updated_at < this.ttlMs ? JSON.parse(row.result_json) : null;
+      if (current?.status === 'running' && (lease?.expires_at ?? 0) <= now) {
+        const unknown = { ...current, status: 'outcome_unknown' };
+        this.database
+          .prepare('UPDATE idempotency_records SET result_json = ?, updated_at = ? WHERE key = ?')
+          .run(JSON.stringify(unknown), now, key);
+        this.database.prepare('DELETE FROM idempotency_leases WHERE key = ?').run(key);
+        this.database.exec('COMMIT');
+        return { acquired: false, value: unknown };
+      }
       if (
         current &&
         (current.status === undefined ||
           current.status === 'completed' ||
+          current.status === 'outcome_unknown' ||
+          current.status === 'running' ||
           (lease?.expires_at ?? 0) > now)
       ) {
         this.database.exec('COMMIT');
@@ -367,6 +415,39 @@ export class IdempotencyCache {
         .run(key, leaseToken, now + leaseMs);
       this.database.exec('COMMIT');
       return { acquired: true, value: next, leaseToken };
+    } catch (error) {
+      this.database.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  markOutcomeUnknown(key: string, leaseToken: string): boolean {
+    const now = Date.now();
+    this.database.exec('BEGIN IMMEDIATE');
+    try {
+      const row = this.database
+        .prepare('SELECT result_json FROM idempotency_records WHERE key = ?')
+        .get(key) as unknown as Pick<StoredRow, 'result_json'> | undefined;
+      const lease = this.database
+        .prepare('SELECT token, expires_at FROM idempotency_leases WHERE key = ?')
+        .get(key) as unknown as StoredLease | undefined;
+      if (!lease || lease.token !== leaseToken) {
+        this.database.exec('COMMIT');
+        return false;
+      }
+      if (row) {
+        const current = JSON.parse(row.result_json);
+        if (current.status === 'running') {
+          this.database
+            .prepare('UPDATE idempotency_records SET result_json = ?, updated_at = ? WHERE key = ?')
+            .run(JSON.stringify({ ...current, status: 'outcome_unknown' }), now, key);
+        }
+      }
+      this.database
+        .prepare('DELETE FROM idempotency_leases WHERE key = ? AND token = ?')
+        .run(key, leaseToken);
+      this.database.exec('COMMIT');
+      return true;
     } catch (error) {
       this.database.exec('ROLLBACK');
       throw error;
@@ -528,7 +609,7 @@ export class IdempotencyCache {
 export const idempotency = new IdempotencyCache();
 
 export function lookupDurableOperationReceipt(namespace: string, callerKey: string) {
-  const prefix = `${namespace}:${callerKeyHash(callerKey)}:`;
+  const prefix = `${namespace}:${callerKeyHash(`${activeCredentialScope}\0${callerKey}`)}:`;
   const entry = idempotency.entries(prefix)[0];
   if (!entry) return null;
   return {

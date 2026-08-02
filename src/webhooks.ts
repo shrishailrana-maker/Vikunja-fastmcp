@@ -2,6 +2,7 @@ import { VikunjaApiClient } from './api.js';
 import { fetchAllCollectionItems } from './format.js';
 import { resolveProject } from './identity.js';
 import { VikunjaError } from './errors.js';
+import { isIP } from 'node:net';
 
 export interface WebhookSecrets {
   secret?: string;
@@ -19,17 +20,69 @@ function normalizeWebhook(webhook: any) {
   };
 }
 
+function unsafeWebhookHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return true;
+  if (isIP(host) === 4) {
+    const [a, b] = host.split('.').map(Number);
+    return (
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 198 && (b === 18 || b === 19)) ||
+      a >= 224
+    );
+  }
+  if (isIP(host) === 6) {
+    return (
+      host === '::' ||
+      host === '::1' ||
+      host.startsWith('fc') ||
+      host.startsWith('fd') ||
+      /^fe[89ab]/.test(host) ||
+      /^fe[c-f]/.test(host) ||
+      host.startsWith('::ffff:127.') ||
+      host.startsWith('::ffff:10.') ||
+      host.startsWith('::ffff:192.168.')
+    );
+  }
+  return false;
+}
+
 function webhookBody(targetUrl: string, events: string[], secrets: WebhookSecrets = {}) {
-  const url = new URL(targetUrl);
-  if (!['http:', 'https:'].includes(url.protocol))
+  let url: URL;
+  try {
+    url = new URL(targetUrl);
+  } catch {
     throw new VikunjaError({
       status: 400,
-      code: 'VALIDATION_ERROR',
+      code: 'UNSAFE_WEBHOOK_URL',
       method: 'TOOLS_CALL',
       path: 'targetUrl',
-      message: 'Webhook target must use http or https.',
+      message: 'Webhook target must be a valid credential-free HTTPS URL.',
       fieldErrors: [],
     });
+  }
+  if (
+    url.protocol !== 'https:' ||
+    url.username !== '' ||
+    url.password !== '' ||
+    unsafeWebhookHost(url.hostname)
+  ) {
+    throw new VikunjaError({
+      status: 400,
+      code: 'UNSAFE_WEBHOOK_URL',
+      method: 'TOOLS_CALL',
+      path: 'targetUrl',
+      message:
+        'Webhook target must use HTTPS, contain no URL credentials, and address a public host.',
+      fieldErrors: [],
+    });
+  }
   return {
     target_url: targetUrl,
     events,
@@ -61,10 +114,9 @@ export async function createWebhook(
   events: string[],
   secrets: WebhookSecrets = {},
 ) {
+  const body = webhookBody(targetUrl, events, secrets);
   const base = await collectionPath(client, project);
-  return normalizeWebhook(
-    await client.request('POST', base, { body: webhookBody(targetUrl, events, secrets) }),
-  );
+  return normalizeWebhook(await client.request('POST', base, { body }));
 }
 
 export async function updateWebhook(

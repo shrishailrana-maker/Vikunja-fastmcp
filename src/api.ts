@@ -10,13 +10,16 @@
  */
 
 import { Config, DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_TRANSFER_TIMEOUT_MS } from './config.js';
-import { VikunjaError, mapStatusToCode, redactSecrets } from './errors.js';
+import { VikunjaError, mapStatusToCode, redactSecrets, registerSecret } from './errors.js';
+import { configureIdempotencyScope } from './idempotency.js';
 
 export class VikunjaApiClient {
   private readonly config: Config;
 
   constructor(config: Config) {
     this.config = config;
+    registerSecret(config.vikunjaToken);
+    configureIdempotencyScope(config.vikunjaToken);
   }
 
   public getConfig(): Config {

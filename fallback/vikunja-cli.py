@@ -22,6 +22,7 @@ Environment:
     VIKUNJA_API_TOKEN              (required) API bearer token
     VIKUNJA_WEB_URL                (optional) Override web UI URL
     VIKUNJA_ATTACHMENT_DOWNLOAD_ROOT (optional) Sandbox dir for downloads
+    VIKUNJA_ATTACHMENT_SOURCE_ROOTS (optional) os.pathsep-delimited upload/import roots
     VIKUNJA_MAX_ATTACHMENT_BYTES   (optional) Max single-file size (default 100 MiB)
     VIKUNJA_TEMPLATE_FILE          (optional) Path to templates.json
     VIKUNJA_REQUEST_TIMEOUT_SECONDS (optional) HTTP timeout (default 30 seconds)
@@ -206,6 +207,11 @@ class Config:
         else:
             self.attachment_download_root = os.path.join(
                 tempfile.gettempdir(), "vikunja-fastmcp", "attachments")
+
+        raw_source_roots = os.environ.get("VIKUNJA_ATTACHMENT_SOURCE_ROOTS", "").strip()
+        self.attachment_source_roots = [
+            os.path.abspath(item) for item in raw_source_roots.split(os.pathsep) if item.strip()
+        ] or [os.path.abspath(os.getcwd()), os.path.abspath(tempfile.gettempdir())]
 
         raw_max = os.environ.get("VIKUNJA_MAX_ATTACHMENT_BYTES", "")
         try:
@@ -1038,22 +1044,97 @@ def infer_mime_type(filename: str) -> str:
     return MIME_BY_EXT.get(ext, "application/octet-stream")
 
 
+def _is_within(root: str, target: str) -> bool:
+    try:
+        return os.path.commonpath([root, target]) == root
+    except ValueError:
+        return False
+
+
+def ensure_private_dir(directory: str) -> str:
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(directory, 0o700)
+    except OSError:
+        pass
+    return directory
+
+
 def resolve_safe_path(root: str, target: str) -> str:
     abs_root = os.path.abspath(root)
+    ensure_private_dir(abs_root)
+    real_root = os.path.realpath(abs_root)
     abs_target = os.path.abspath(target) if os.path.isabs(target) else os.path.abspath(
-        os.path.join(root, target))
-    root_with_sep = abs_root if abs_root.endswith(os.sep) else abs_root + os.sep
-    if abs_target != abs_root and not abs_target.startswith(root_with_sep):
+        os.path.join(abs_root, target))
+    if not _is_within(abs_root, abs_target):
         raise VikunjaError(
             status=403, code="FORBIDDEN", method="GET", path="/attachments",
             message=f'Access denied. Target path "{target}" lies outside the allowed download directory "{root}".')
+    if os.path.lexists(abs_target) and os.path.islink(abs_target):
+        raise VikunjaError(status=403, code="FORBIDDEN", method="GET", path="/attachments",
+                           message=f'Access denied. Target path "{target}" is a symbolic link.')
+    existing_parent = os.path.dirname(abs_target)
+    while not os.path.exists(existing_parent):
+        parent = os.path.dirname(existing_parent)
+        if parent == existing_parent:
+            break
+        existing_parent = parent
+    if not _is_within(real_root, os.path.realpath(existing_parent)):
+        raise VikunjaError(status=403, code="FORBIDDEN", method="GET", path="/attachments",
+                           message=f'Access denied. Target path "{target}" crosses a symbolic link outside the download root.')
     return abs_target
+
+
+def resolve_safe_source_path(roots: List[str], target: str) -> str:
+    if not target:
+        raise VikunjaError(status=400, code="VALIDATION_ERROR", method="TOOLS_CALL",
+                           path="filePath", message="A source file path is required.")
+    absolute = os.path.abspath(target)
+    if os.path.islink(absolute) or not os.path.isfile(absolute):
+        raise VikunjaError(status=400, code="INVALID_CONTENT", method="TOOLS_CALL",
+                           path="filePath", message="Source path must be a regular, non-symlink file.")
+    real_target = os.path.realpath(absolute)
+    allowed = [os.path.realpath(os.path.abspath(root)) for root in roots]
+    if not any(_is_within(root, real_target) for root in allowed):
+        raise VikunjaError(status=403, code="SOURCE_PATH_FORBIDDEN", method="TOOLS_CALL",
+                           path="filePath", message="Source file lies outside VIKUNJA_ATTACHMENT_SOURCE_ROOTS.")
+    return real_target
+
+
+def sanitize_multipart_filename(filename: str) -> str:
+    leaf = str(filename).replace("\\", "/").split("/")[-1]
+    safe = re.sub(r'[\x00-\x1f\x7f"\\]', "_", leaf).strip(" .")[:255]
+    return safe or "attachment.bin"
+
+
+def open_private_file(file_path: str, mode: str, **kwargs):
+    binary = "b" in mode
+    exclusive = "x" in mode
+    flags = os.O_WRONLY | os.O_CREAT | (os.O_EXCL if exclusive else os.O_TRUNC)
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(file_path, flags, 0o600)
+    try:
+        os.chmod(file_path, 0o600)
+        stream_mode = ("w" + ("b" if binary else "")) if exclusive else mode.replace("x", "w")
+        return os.fdopen(descriptor, stream_mode, **kwargs)
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def csv_safe_cell(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    if value.lstrip().startswith(("=", "+", "-", "@")):
+        return "'" + value
+    return value
 
 
 def _upload_buffer_to_task(client: VikunjaApiClient, task_id: int,
                             filename: str, mime_type: str, file_bytes: bytes) -> dict:
     boundary = f"----VikunjaMcpBoundary{os.urandom(16).hex()}"
-    safe_fn = os.path.basename(filename).replace('"', '\\"')
+    safe_fn = sanitize_multipart_filename(filename)
     safe_mime = mime_type if re.match(
         r"^[A-Za-z0-9][A-Za-z0-9!#$&^_.+\-]*/[A-Za-z0-9][A-Za-z0-9!#$&^_.+\-]*$",
         mime_type) else "application/octet-stream"
@@ -1660,19 +1741,16 @@ def _attach_files_to_echo(client: VikunjaApiClient, echo: dict, file_paths: list
     max_bytes = client.config.max_attachment_bytes
     for fp in file_paths:
         try:
-            stat = os.stat(fp)
-            if not os.path.isfile(fp):
-                raise VikunjaError(status=400, code="INVALID_CONTENT", method="POST",
-                                   path=f"/tasks/{echo['target']['id']}/attachments",
-                                   message=f'Attachment path "{fp}" is not a regular file.')
+            safe_source = resolve_safe_source_path(client.config.attachment_source_roots, fp)
+            stat = os.stat(safe_source)
             if stat.st_size > max_bytes:
                 raise VikunjaError(
                     status=413, code="ATTACHMENT_TOO_LARGE", method="POST",
                     path=f"/tasks/{echo['target']['id']}/attachments",
                     message=f'Attachment "{fp}" is {stat.st_size} bytes, exceeding the {max_bytes}-byte limit.')
-            with open(fp, "rb") as f:
+            with open(safe_source, "rb") as f:
                 buf = f.read()
-            fn = os.path.basename(fp)
+            fn = os.path.basename(safe_source)
             mt = mime_type = infer_mime_type(fn)
             uploaded.append(_upload_buffer_to_task(client, echo['target']['id'], fn, mt, buf))
         except Exception as e:
@@ -1701,19 +1779,16 @@ def cmd_tasks_attach(client: VikunjaApiClient, args) -> Tuple[str, Any]:
     if file_paths:
         for fp in file_paths:
             try:
-                stat = os.stat(fp)
-                if not os.path.isfile(fp):
-                    raise VikunjaError(status=400, code="INVALID_CONTENT", method="POST",
-                                       path=f"/tasks/{task_ref['id']}/attachments",
-                                       message=f'Attachment path "{fp}" is not a regular file.')
+                safe_source = resolve_safe_source_path(client.config.attachment_source_roots, fp)
+                stat = os.stat(safe_source)
                 if stat.st_size > max_bytes:
                     raise VikunjaError(
                         status=413, code="ATTACHMENT_TOO_LARGE", method="POST",
                         path=f"/tasks/{task_ref['id']}/attachments",
                         message=f'Attachment "{fp}" is {stat.st_size} bytes, exceeding the {max_bytes}-byte limit.')
-                with open(fp, "rb") as f:
+                with open(safe_source, "rb") as f:
                     buf = f.read()
-                fn = os.path.basename(fp)
+                fn = os.path.basename(safe_source)
                 mt = mime or infer_mime_type(fn)
                 uploaded.append(_upload_buffer_to_task(client, task_ref["id"], fn, mt, buf))
             except Exception as e:
@@ -1808,11 +1883,12 @@ def cmd_tasks_download_attachment(client: VikunjaApiClient, args) -> Tuple[str, 
                 path=f"/tasks/{task_ref['id']}/attachments/{att_id}",
                 message=f"Attachment is {advertised} bytes, exceeding the {max_bytes}-byte download limit.")
 
-    os.makedirs(os.path.dirname(safe_dest), exist_ok=True)
+    ensure_private_dir(os.path.dirname(safe_dest))
+    safe_dest = resolve_safe_path(dl_root, safe_dest)
     h = hashlib.sha256()
     size = 0
     try:
-        with open(safe_dest, "wb") as f:
+        with open_private_file(safe_dest, "wb") as f:
             for chunk in resp.iter_content(chunk_size=8192):
                 size += len(chunk)
                 if size > max_bytes:
@@ -2372,9 +2448,7 @@ def cmd_import_status(client: VikunjaApiClient, _args) -> Tuple[str, Any]:
 
 def _csv_request(client: VikunjaApiClient, action: str, file_path: str,
                   config_data=None) -> dict:
-    if not os.path.isfile(file_path):
-        raise VikunjaError(status=400, code="VALIDATION_ERROR", method="TOOLS_CALL",
-                           path="filePath", message="CSV import file does not exist or cannot be read.")
+    file_path = resolve_safe_source_path(client.config.attachment_source_roots, file_path)
     size = os.path.getsize(file_path)
     if size > client.config.max_attachment_bytes:
         raise VikunjaError(status=400, code="VALIDATION_ERROR", method="TOOLS_CALL",
@@ -2386,7 +2460,7 @@ def _csv_request(client: VikunjaApiClient, action: str, file_path: str,
     if config_data is not None:
         parts.append(
             f'--{boundary}\r\nContent-Disposition: form-data; name="config"\r\n\r\n{json.dumps(config_data)}\r\n'.encode())
-    safe_name = os.path.basename(file_path).replace('"', '_').replace('\r', '_').replace('\n', '_')
+    safe_name = sanitize_multipart_filename(file_path)
     parts.append(
         f'--{boundary}\r\nContent-Disposition: form-data; name="import"; filename="{safe_name}"\r\nContent-Type: text/csv\r\n\r\n'.encode())
     parts.append(file_bytes)
@@ -2437,9 +2511,10 @@ def cmd_export_project(client: VikunjaApiClient, args) -> Tuple[str, Any]:
             ]
     file_name = dest or f"project-{project['id']}-tasks.{fmt}"
     destination = resolve_safe_path(client.config.attachment_download_root, file_name)
-    os.makedirs(os.path.dirname(destination), exist_ok=True)
+    ensure_private_dir(os.path.dirname(destination))
+    destination = resolve_safe_path(client.config.attachment_download_root, destination)
     if fmt == "json":
-        with open(destination, "x", encoding="utf-8") as f:
+        with open_private_file(destination, "x", encoding="utf-8") as f:
             json.dump({"project": project, "tasks": tasks}, f, indent=2)
     else:
         header = ["id", "index", "identifier", "title", "description", "done",
@@ -2447,7 +2522,7 @@ def cmd_export_project(client: VikunjaApiClient, args) -> Tuple[str, Any]:
                    "labels", "assignees"]
         if include_comments:
             header.append("comments")
-        with open(destination, "x", newline="", encoding="utf-8") as f:
+        with open_private_file(destination, "x", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
             w.writerow(header)
             for t in tasks:
@@ -2456,8 +2531,9 @@ def cmd_export_project(client: VikunjaApiClient, args) -> Tuple[str, Any]:
                        "creatorUsername": (t.get("creator") or {}).get("username", "")}
                 if include_comments:
                     row["comments"] = json.dumps(t.get("comments", []))
-                w.writerow([row.get(h) if not isinstance(row.get(h), list)
-                            else ";".join(row[h]) for h in header])
+                values = [row.get(h) if not isinstance(row.get(h), list)
+                          else ";".join(row[h]) for h in header]
+                w.writerow([csv_safe_cell(value) for value in values])
     return "Project exported.", {"project": project, "format": fmt, "path": destination,
                                  "taskCount": len(tasks)}
 
@@ -2496,9 +2572,10 @@ def cmd_user_export_download(client: VikunjaApiClient, args) -> Tuple[str, Any]:
         raise VikunjaError(status=413, code="ATTACHMENT_TOO_LARGE", method="POST",
                            path="/user/export/download",
                            message=f"User export is {cl} bytes, exceeding the {max_bytes}-byte limit.")
-    os.makedirs(os.path.dirname(destination), exist_ok=True)
+    ensure_private_dir(os.path.dirname(destination))
+    destination = resolve_safe_path(root, destination)
     size = 0
-    with open(destination, "xb") as f:
+    with open_private_file(destination, "xb") as f:
         for chunk in resp.iter_content(chunk_size=8192):
             size += len(chunk)
             if size > max_bytes:
@@ -2530,9 +2607,9 @@ class TemplateStore:
             return []
 
     def _write(self, templates: list):
-        os.makedirs(os.path.dirname(self.file_path), exist_ok=True)
+        ensure_private_dir(os.path.dirname(self.file_path))
         tmp = f"{self.file_path}.{os.getpid()}.tmp"
-        with open(tmp, "w") as f:
+        with open_private_file(tmp, "w", encoding="utf-8") as f:
             json.dump(templates, f, indent=2)
         os.replace(tmp, self.file_path)
 

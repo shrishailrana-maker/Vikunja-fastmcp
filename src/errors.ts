@@ -11,9 +11,22 @@
 
 import fs from 'node:fs';
 
-const PACKAGE_VERSION = String(
-  JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version,
-);
+let PACKAGE_VERSION = 'unknown';
+try {
+  PACKAGE_VERSION = String(
+    JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version,
+  );
+} catch {
+  // A packaged runtime can still return structured errors if metadata was
+  // removed or damaged; startup must not crash while constructing this module.
+}
+
+const REGISTERED_SECRETS = new Set<string>();
+
+export function registerSecret(value: string | undefined): void {
+  const normalized = value?.trim();
+  if (normalized) REGISTERED_SECRETS.add(normalized);
+}
 
 export interface FieldError {
   location: string;
@@ -72,14 +85,25 @@ export function redactSecrets(text: string, tokenToRedact?: string): string {
   if (!text) return text;
   let redacted = text;
 
-  const token = tokenToRedact || process.env.VIKUNJA_API_TOKEN;
-  if (token) {
+  const exactTokens = new Set(
+    [tokenToRedact, process.env.VIKUNJA_API_TOKEN, ...REGISTERED_SECRETS]
+      .map((token) => token?.trim())
+      .filter((token): token is string => Boolean(token)),
+  );
+  for (const token of exactTokens) {
     const escapedToken = token.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
     redacted = redacted.replace(new RegExp(escapedToken, 'g'), '[REDACTED_TOKEN]');
   }
 
   // Redact token pattern: tk_<alphanumeric>
   redacted = redacted.replace(/tk_[a-zA-Z0-9]{30,}/g, '[REDACTED_TOKEN]');
+  redacted = redacted.replace(/github_pat_[A-Za-z0-9_]{20,}/g, '[REDACTED_TOKEN]');
+  redacted = redacted.replace(/gh[pousr]_[A-Za-z0-9]{20,}/g, '[REDACTED_TOKEN]');
+  for (const environmentToken of [process.env.GITHUB_TOKEN, process.env.GH_TOKEN]) {
+    if (environmentToken?.trim()) {
+      redacted = redacted.split(environmentToken).join('[REDACTED_TOKEN]');
+    }
+  }
 
   // Redact Bearer tokens in headers or general text
   redacted = redacted.replace(

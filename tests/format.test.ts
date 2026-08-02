@@ -147,6 +147,27 @@ describe('Format and Markdown tests', () => {
       expect(html).not.toContain('a"onmouseover');
     });
 
+    it('preserves underscores, emphasis, and balanced parentheses inside links', () => {
+      const html = markdownToHtml(
+        '[Build *details*](https://vikunja.example.com/files/build_log_(final).txt)',
+      );
+
+      expect(html).toContain('href="https://vikunja.example.com/files/build_log_(final).txt"');
+      expect(html).toContain('<em>details</em>');
+    });
+
+    it('does not collide with literal converter placeholder text', () => {
+      const roundTrip = htmlToMarkdown(
+        '<p>Literal @@INLINECODE0@@ and __PRE_BLOCK_0__</p>' +
+          '<code>real &amp;amp; code</code><pre><code>&amp;lt;tag&amp;gt; &amp;amp;amp;</code></pre>',
+      );
+
+      expect(roundTrip).toContain('@@INLINECODE0@@');
+      expect(roundTrip).toContain('__PRE_BLOCK_0__');
+      expect(roundTrip).toContain('`real &amp; code`');
+      expect(roundTrip).toContain('&lt;tag&gt; &amp;amp;');
+    });
+
     it('decodes numeric and common named entities from Vikunja HTML', () => {
       expect(htmlToMarkdown('<p>Home&#x2F;Scan &middot; done &#47; verified</p>')).toBe(
         'Home/Scan · done / verified',

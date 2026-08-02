@@ -78,6 +78,7 @@ import {
   downloadAttachment,
   listAttachments,
   AttachFileSpec,
+  MAX_ATTACHMENTS_PER_CALL,
 } from './attachments.js';
 import {
   createTeam,
@@ -138,9 +139,14 @@ import {
   runProjectMigration,
 } from './migration.js';
 
-const PACKAGE_VERSION = String(
-  JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version,
-);
+let PACKAGE_VERSION = 'unknown';
+try {
+  PACKAGE_VERSION = String(
+    JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version,
+  );
+} catch {
+  // Keep the MCP bootable so self-check can report damaged package metadata.
+}
 const templateStore = new TemplateStore();
 
 // Construct Server
@@ -180,10 +186,29 @@ function zodTypeToJsonSchema(schema: z.ZodTypeAny): any {
   const describe = (jsonSchema: any) => (description ? { ...jsonSchema, description } : jsonSchema);
 
   if (current instanceof z.ZodString) {
-    return describe({ type: 'string' });
+    const output: Record<string, unknown> = { type: 'string' };
+    for (const check of (current as any)._def.checks ?? []) {
+      if (check.kind === 'min') output.minLength = check.value;
+      if (check.kind === 'max') output.maxLength = check.value;
+      if (check.kind === 'regex') output.pattern = check.regex.source;
+      if (['email', 'url', 'uuid', 'datetime'].includes(check.kind)) {
+        output.format = check.kind === 'datetime' ? 'date-time' : check.kind;
+      }
+    }
+    return describe(output);
   }
   if (current instanceof z.ZodNumber) {
-    return describe({ type: 'number' });
+    const output: Record<string, unknown> = { type: 'number' };
+    for (const check of (current as any)._def.checks ?? []) {
+      if (check.kind === 'int') output.type = 'integer';
+      if (check.kind === 'min') {
+        output[check.inclusive === false ? 'exclusiveMinimum' : 'minimum'] = check.value;
+      }
+      if (check.kind === 'max') {
+        output[check.inclusive === false ? 'exclusiveMaximum' : 'maximum'] = check.value;
+      }
+    }
+    return describe(output);
   }
   if (current instanceof z.ZodBoolean) {
     return describe({ type: 'boolean' });
@@ -193,7 +218,12 @@ function zodTypeToJsonSchema(schema: z.ZodTypeAny): any {
   }
   if (current instanceof z.ZodArray) {
     const inner = (current as any)._def.type;
-    return describe({ type: 'array', items: zodTypeToJsonSchema(inner) });
+    const output: Record<string, unknown> = { type: 'array', items: zodTypeToJsonSchema(inner) };
+    const minimum = (current as any)._def.minLength?.value;
+    const maximum = (current as any)._def.maxLength?.value;
+    if (minimum !== undefined) output.minItems = minimum;
+    if (maximum !== undefined) output.maxItems = maximum;
+    return describe(output);
   }
   if (current instanceof z.ZodUnion) {
     const options = (current as any)._def.options as z.ZodTypeAny[];
@@ -232,6 +262,7 @@ function zodToMcpSchema(zodSchema: z.ZodObject<any>): any {
     type: 'object',
     properties,
     required: required.length > 0 ? required : undefined,
+    additionalProperties: false,
   };
 }
 
@@ -240,6 +271,25 @@ function addActionRequirements(toolName: string, schema: any): any {
   if (!operations || !schema.properties?.action) return schema;
 
   const propertyNames = Object.keys(schema.properties);
+  const usageCount = new Map<string, number>();
+  for (const operation of operations) {
+    const documented = [...(operation.required ?? []), ...(operation.optional ?? [])].join(' ');
+    for (const name of propertyNames) {
+      if (name !== 'action' && new RegExp(`\\b${name}\\b`).test(documented)) {
+        usageCount.set(name, (usageCount.get(name) ?? 0) + 1);
+      }
+    }
+  }
+  const definitions = Object.fromEntries(
+    propertyNames
+      .filter(
+        (name) =>
+          name !== 'action' &&
+          (usageCount.get(name) ?? 0) > 1 &&
+          JSON.stringify(schema.properties[name]).length > 250,
+      )
+      .map((name) => [name, schema.properties[name]]),
+  );
   const branches = operations.map((operation) => {
     const documented = [...(operation.required ?? []), ...(operation.optional ?? [])].join(' ');
     const allowed = propertyNames.filter(
@@ -253,14 +303,22 @@ function addActionRequirements(toolName: string, schema: any): any {
       properties: Object.fromEntries(
         allowed.map((name) => [
           name,
-          name === 'action' ? { const: operation.action } : schema.properties[name],
+          name === 'action'
+            ? { const: operation.action }
+            : name in definitions
+              ? { $ref: `#/$defs/${name}` }
+              : schema.properties[name],
         ]),
       ),
       required: ['action', ...required],
       additionalProperties: false,
     };
   });
-  return { type: 'object', oneOf: branches };
+  return {
+    type: 'object',
+    oneOf: branches,
+    ...(Object.keys(definitions).length > 0 ? { $defs: definitions } : {}),
+  };
 }
 
 function toolDescription(tool: McpToolDefinition): string {
@@ -274,6 +332,12 @@ function taskLink(webUrl: string, taskId: number, portalRef: string): string {
   return `[Open ${safeSummaryText(portalRef)}](${webUrl}tasks/${taskId})`;
 }
 
+function taskLinkIfKnown(webUrl: string, taskId: unknown, portalRef: string): string {
+  return typeof taskId === 'number' && Number.isInteger(taskId) && taskId > 0
+    ? ` ${taskLink(webUrl, taskId, portalRef)}`
+    : '';
+}
+
 function summaryFor(toolName: string, args: any, result: any, webUrl: string): string {
   if (toolName === 'self_check' || (toolName === 'vikunja_auth' && args?.action === 'self-check')) {
     return result?.ok ? 'Self-check passed.' : 'Self-check reported problems.';
@@ -281,12 +345,12 @@ function summaryFor(toolName: string, args: any, result: any, webUrl: string): s
   if (result?.action && result?.target) {
     const portalRef =
       result.target.identifier || result.target.portalRef || `#${result.target.index ?? '?'}`;
-    return `${result.action}: ${safeSummaryText(portalRef)} - ${safeSummaryText(result.target.title || 'task')} in **${safeSummaryText(result.target.project?.title || 'project')}**. ${taskLink(webUrl, result.target.id, portalRef)}`;
+    return `${result.action}: ${safeSummaryText(portalRef)} - ${safeSummaryText(result.target.title || 'task')} in **${safeSummaryText(result.target.project?.title || 'project')}**.${taskLinkIfKnown(webUrl, result.target.id, portalRef)}`;
   }
   if (result?.task?.title) {
     const portalRef =
       result.task.portalRef || result.task.identifier || `#${result.task.index ?? '?'}`;
-    return `${safeSummaryText(portalRef)} - ${safeSummaryText(result.task.title)}. ${taskLink(webUrl, result.task.id, portalRef)}`;
+    return `${safeSummaryText(portalRef)} - ${safeSummaryText(result.task.title)}.${taskLinkIfKnown(webUrl, result.task.id, portalRef)}`;
   }
   if (result?.count !== undefined && result?.project) {
     return `Count ${result.count} in **${safeSummaryText(result.project.title)}**.`;
@@ -838,11 +902,13 @@ export const TOOLS: McpToolDefinition[] = [
             title: z.string().trim().min(1).optional(),
           }),
         )
+        .max(25)
         .optional(),
       allProjects: z.boolean().optional(),
       page: z.number().int().min(1).optional(),
-      perPage: z.number().int().min(1).max(1000).optional(),
+      perPage: z.number().int().min(1).max(100).optional(),
       commentLimit: z.number().int().min(0).max(100).optional(),
+      attachmentLimit: z.number().int().min(0).max(100).optional(),
       done: z.boolean().optional(),
       allStates: z.boolean().optional(),
       priority: z.number().int().min(0).max(5).optional(),
@@ -937,8 +1003,8 @@ export const TOOLS: McpToolDefinition[] = [
       filename: z.string().optional(),
       mimeType: z.string().optional(),
       base64Content: z.string().optional(),
-      filePaths: z.array(z.string()).optional(),
-      attachments: z.array(z.string()).optional(),
+      filePaths: z.array(z.string()).max(MAX_ATTACHMENTS_PER_CALL).optional(),
+      attachments: z.array(z.string()).max(MAX_ATTACHMENTS_PER_CALL).optional(),
       firstComment: z.string().trim().min(1).optional(),
       relations: z
         .array(
@@ -1155,10 +1221,17 @@ export const TOOLS: McpToolDefinition[] = [
               fields: Array.isArray(args.fields) ? args.fields : undefined,
               includeUrl: args.includeUrl,
               titleMaxChars: args.titleMaxChars,
+              attachmentLimit: args.attachmentLimit,
+              maxResponseChars: args.maxResponseChars,
             },
           );
         case 'update':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
+          if (Array.isArray(args.fields)) {
+            throw badRequest(
+              'Task update fields must be a writable field object, not a read projection.',
+            );
+          }
           if (!hasDefinedValue(args.fields)) {
             throw badRequest('At least one task field is required for update.');
           }
@@ -1567,12 +1640,12 @@ export const TOOLS: McpToolDefinition[] = [
       filename: z.string().optional(),
       mimeType: z.string().optional(),
       base64Content: z.string().optional(),
-      filePaths: z.array(z.string()).optional(),
+      filePaths: z.array(z.string()).max(MAX_ATTACHMENTS_PER_CALL).optional(),
       attachmentId: z.number().int().positive().optional(),
       destinationPath: z.string().optional(),
       overwrite: z.boolean().optional(),
       page: z.number().int().min(1).optional(),
-      perPage: z.number().int().min(1).max(1000).optional(),
+      perPage: z.number().int().min(1).max(100).optional(),
       countOnly: z.boolean().optional(),
       filenamePrefix: z.string().max(255).optional(),
       computeSha256: z.boolean().optional(),
@@ -2214,6 +2287,7 @@ export const TOOLS: McpToolDefinition[] = [
               args.config,
               args.projectSelector,
               client.getConfig().maxAttachmentBytes,
+              client.getConfig().attachmentSourceRoots,
             )
           : previewCsvImport(client, args.filePath, args.config);
       }
@@ -2252,6 +2326,9 @@ export const TOOLS: McpToolDefinition[] = [
       includeComments: z.boolean().optional(),
       includeAttachments: z.boolean().optional(),
       includeRelations: z.boolean().optional(),
+      taskLimit: z.number().int().min(1).max(1000).optional(),
+      detailLimit: z.number().int().min(1).max(100).optional(),
+      overwrite: z.boolean().optional(),
     }),
     handler: async (args, client) =>
       exportProject(
@@ -2262,6 +2339,8 @@ export const TOOLS: McpToolDefinition[] = [
         args.includeComments,
         args.includeAttachments,
         args.includeRelations,
+        { taskLimit: args.taskLimit, detailLimit: args.detailLimit },
+        args.overwrite ?? false,
       ),
   },
   {
@@ -2292,6 +2371,8 @@ export const TOOLS: McpToolDefinition[] = [
       cursor: z.number().int().min(0).optional(),
       perPage: z.number().int().min(1).max(100).optional(),
       countOnly: z.boolean().optional(),
+      taskLimit: z.number().int().min(1).max(10_000).optional(),
+      detailLimit: z.number().int().min(1).max(1_000).optional(),
     }),
     handler: async (args, client) => {
       if (args.action === 'status') {
@@ -2317,6 +2398,8 @@ export const TOOLS: McpToolDefinition[] = [
         idempotencyKey,
         archiveSource: args.archiveSource,
         publicSanitize: args.publicSanitize,
+        taskLimit: args.taskLimit,
+        detailLimit: args.detailLimit,
       };
       return args.action === 'preview'
         ? previewProjectMigration(client, options)
@@ -2336,10 +2419,16 @@ export const TOOLS: McpToolDefinition[] = [
       action: z.enum(['status', 'download']),
       password: z.string().optional(),
       destinationPath: z.string().optional(),
+      overwrite: z.boolean().optional(),
     }),
     handler: async (args, client) => {
       if (args.action === 'status') return getUserExportStatus(client);
-      return downloadUserExport(client, args.password, args.destinationPath);
+      return downloadUserExport(
+        client,
+        args.password,
+        args.destinationPath,
+        args.overwrite ?? false,
+      );
     },
   },
   {

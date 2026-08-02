@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   getProjectMigrationStatus,
+  assertMigrationSourceUnchanged,
   previewProjectMigration,
   runProjectMigration,
   sanitizePublicString,
@@ -53,6 +54,7 @@ describe('portable project migration', () => {
                 '<p>Run <code>tool --check</code> at http://10.1.2.3:3456 and use tk_private_value</p>',
               done: false,
               priority: 3,
+              updated: '2026-08-01T09:00:00Z',
               labels: [{ title: 'bug' }],
               assignees: [{ username: 'developer' }],
             },
@@ -90,6 +92,7 @@ describe('portable project migration', () => {
       }
       if (method === 'GET' && requestPath === '/tasks/7001') {
         return {
+          updated: '2026-08-01T09:00:00Z',
           related_tasks: {
             related: [{ id: 7002, index: 6, identifier: 'EX-6', title: 'Related source task' }],
           },
@@ -224,6 +227,31 @@ describe('portable project migration', () => {
     expect(manifest.tasks[0].relations[0]).toMatchObject({ identifier: 'EX-6' });
   });
 
+  it('redacts credentials embedded in otherwise public URLs', () => {
+    const safe = sanitizePublicString('See https://user:password@public.example.com/path');
+    expect(safe).not.toContain('user:password');
+    expect(safe).toContain('[credentialed-url]');
+  });
+
+  it('uses migration-specific rich export limits above the public 100-task default', async () => {
+    const client = sourceClient();
+    const original = client.request.getMockImplementation()!;
+    client.request.mockImplementation(
+      async (method: string, requestPath: string, options?: any) => {
+        const value = await original(method, requestPath, options);
+        if (method === 'GET' && requestPath.startsWith('/projects/31/tasks')) {
+          return { ...value, total: 101, total_pages: 1 };
+        }
+        return value;
+      },
+    );
+
+    await expect(previewProjectMigration(client, options('large-preview'))).resolves.toMatchObject({
+      status: 'preview',
+      taskCount: 1,
+    });
+  });
+
   it('refuses to disable public sanitization for a GitHub migration', async () => {
     await expect(
       previewProjectMigration(sourceClient(), {
@@ -231,6 +259,18 @@ describe('portable project migration', () => {
         publicSanitize: false,
       }),
     ).rejects.toMatchObject({ status: 400, code: 'PUBLIC_SANITIZATION_REQUIRED' });
+  });
+
+  it('refuses to archive a source task changed after the migration snapshot', async () => {
+    const client = sourceClient();
+    client.request.mockResolvedValueOnce({ updated: '2026-08-01T10:00:00Z' });
+
+    await expect(
+      assertMigrationSourceUnchanged(client, {
+        id: 7001,
+        updated: '2026-08-01T09:00:00Z',
+      }),
+    ).rejects.toMatchObject({ status: 409, code: 'MIGRATION_SOURCE_CHANGED' });
   });
 
   it('creates, reads back, comments, and resumes one GitHub issue without duplication', async () => {

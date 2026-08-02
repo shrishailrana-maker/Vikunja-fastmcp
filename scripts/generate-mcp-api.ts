@@ -66,7 +66,7 @@ function generateMarkdown(): string {
   let md = `# Vikunja FastMCP V2 Tool Reference\n\n`;
   md += `This reference is generated automatically from runtime schemas.\n\n`;
   md += `Tools with multiple actions publish action-specific JSON Schema branches, so clients can present only the fields valid for the selected action.\n\n`;
-  md += `All responses contain a short Markdown summary followed by exactly one fenced JSON envelope: \`{ "ok": true, "data": ... }\` or \`{ "ok": false, "error": ... }\`. HTTP error status, method, and path are preserved and secrets are redacted.\n\n`;
+  md += `Default minimal reads and receipt writes contain exactly one fenced JSON envelope: \`{ "ok": true, "data": ... }\` or \`{ "ok": false, "error": ... }\`. Explicit compact, standard, and full modes add a short Markdown summary before the same envelope. HTTP error status, method, and path are preserved and secrets are redacted.\n\n`;
   md += `## Identity And Scope\n\n`;
   md += `Task selectors are explicit objects containing exactly one of \`globalId\`, \`identifier\`, or \`projectIndex\`; bare numbers and strings are rejected. \`projectIndex\` also requires \`projectSelector\`. Task lists require exactly one explicit scope: \`projectSelector\`, \`projects\`, or \`allProjects: true\`. Writes echo the verified task and project identity.\n\n`;
   md += `Compact task lists include the creator username as \`creator\` when Vikunja supplies \`created_by\`; standard and full task records use \`creator: { id, username }\`. Project exports always include creator identity; comments are included only when \`includeComments: true\` is requested.\n\n`;

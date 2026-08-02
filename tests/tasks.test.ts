@@ -23,6 +23,9 @@ import {
 } from '../src/tasks.js';
 import { idempotency } from '../src/idempotency.js';
 import { cache } from '../src/identity.js';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 describe('Tasks List and Scoping tests', () => {
   const config = {
@@ -278,11 +281,13 @@ describe('Tasks List and Scoping tests', () => {
         perPage: 100,
         responseMode: 'standard',
       });
+      cache.clearProjects();
       const compact = await listTasks(client, {
         project: { id: 101 },
         perPage: 100,
         responseMode: 'compact',
       });
+      cache.clearProjects();
       const minimal = await listTasks(client, {
         project: { id: 101 },
         perPage: 100,
@@ -313,6 +318,7 @@ describe('Tasks List and Scoping tests', () => {
       expect(minimal.nextCursor).toEqual(expect.any(String));
       expect(JSON.stringify(minimal).length).toBeLessThanOrEqual(3800);
 
+      cache.clearProjects();
       const resumed = await listTasks(client, {
         project: { id: 101 },
         perPage: 100,
@@ -491,6 +497,50 @@ describe('Tasks List and Scoping tests', () => {
       });
     });
 
+    it('rejects explicit subsets above 25 projects before listing tasks', async () => {
+      await expect(
+        listTasks(client, {
+          projects: Array.from({ length: 26 }, (_, index) => ({ id: index + 1 })),
+        }),
+      ).rejects.toMatchObject({ status: 400, code: 'PROJECT_SCOPE_TOO_LARGE' });
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('enforces maxResponseChars for explicit full lists', async () => {
+      mockFetch
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ id: 101, title: 'Alpha' }), { status: 200 }),
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              items: [
+                {
+                  id: 1,
+                  index: 1,
+                  identifier: 'ALPHA-1',
+                  title: 'Task',
+                  description: `<p>${'x'.repeat(2000)}</p>`,
+                },
+              ],
+              page: 1,
+              per_page: 20,
+              total: 1,
+              total_pages: 1,
+            }),
+            { status: 200 },
+          ),
+        );
+
+      await expect(
+        listTasks(client, {
+          project: { id: 101 },
+          responseMode: 'full',
+          maxResponseChars: 500,
+        }),
+      ).rejects.toMatchObject({ status: 413, code: 'RESPONSE_TOO_LARGE' });
+    });
+
     it('fails clearly when one projected item cannot fit the response budget', async () => {
       mockFetch
         .mockResolvedValueOnce(
@@ -623,6 +673,7 @@ describe('Tasks List and Scoping tests', () => {
       expect(first.returnedCount).toBe(1);
       expect(first.nextCursor).toEqual(expect.any(String));
 
+      cache.clearProjects();
       await listTasks(client, {
         project: { id: 101 },
         changedSince: '2026-07-01T00:00:00Z',
@@ -665,6 +716,21 @@ describe('Tasks List and Scoping tests', () => {
 
       expect(cursor).toMatchObject({ projectId: 101, updated, id: 12 });
       expect(cursor).not.toHaveProperty('page');
+    });
+
+    it('rejects a regular cursor resumed with a different page size', async () => {
+      const cursor = Buffer.from(
+        JSON.stringify({ projectId: 101, page: 2, offset: 0, perPage: 20 }),
+        'utf8',
+      ).toString('base64url');
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: 101, title: 'Alpha' }), { status: 200 }),
+      );
+
+      await expect(
+        listTasks(client, { project: { id: 101 }, perPage: 100, cursor }),
+      ).rejects.toMatchObject({ status: 400, code: 'CURSOR_PAGE_SIZE_MISMATCH' });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
     });
 
     it('returns an empty bounded result when allProjects has no visible projects', async () => {
@@ -842,11 +908,6 @@ describe('Tasks List and Scoping tests', () => {
         .mockResolvedValueOnce({
           ok: true,
           status: 200,
-          text: async () => JSON.stringify({ id: 101, title: 'Alpha' }),
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          status: 200,
           text: async () => JSON.stringify(existing),
         } as Response)
         .mockResolvedValueOnce({
@@ -902,11 +963,6 @@ describe('Tasks List and Scoping tests', () => {
         .mockResolvedValueOnce({
           ok: true,
           status: 200,
-          text: async () => JSON.stringify({ id: 101, title: 'Alpha' }),
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          status: 200,
           text: async () => JSON.stringify(existing),
         } as Response);
 
@@ -948,11 +1004,6 @@ describe('Tasks List and Scoping tests', () => {
           ok: true,
           status: 200,
           text: async () => JSON.stringify(existing),
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          status: 200,
-          text: async () => JSON.stringify({ id: 101, title: 'Alpha' }),
         } as Response)
         .mockResolvedValueOnce({
           ok: true,
@@ -1053,8 +1104,94 @@ describe('Tasks List and Scoping tests', () => {
       });
     });
 
+    it('reuses the created task while retrying only failed attachments', async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vfm-create-attachment-'));
+      const file = path.join(root, 'evidence.txt');
+      await fs.writeFile(file, 'evidence');
+      const createdTask = {
+        id: 9005,
+        index: 305,
+        identifier: 'ALPHA-305',
+        title: 'New Bug',
+        project_id: 101,
+      };
+      try {
+        mockFetch
+          .mockResolvedValueOnce({
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify({ id: 101, title: 'Alpha' }),
+          } as Response)
+          .mockResolvedValueOnce({
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify(createdTask),
+          } as Response)
+          .mockResolvedValueOnce({
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify({ ...createdTask, project: { title: 'Alpha' } }),
+          } as Response)
+          .mockResolvedValueOnce({
+            ok: false,
+            status: 422,
+            text: async () => JSON.stringify({ detail: 'temporary upload rejection' }),
+          } as Response);
+
+        const first = await createTask(
+          client,
+          { id: 101 },
+          { title: 'New Bug' },
+          'create-with-attachment',
+          [file],
+          'Codex',
+        );
+        expect(first).toMatchObject({ action: 'created', attachmentErrors: [{ file }] });
+
+        mockFetch
+          .mockResolvedValueOnce({
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify({ ...createdTask, project: { title: 'Alpha' } }),
+          } as Response)
+          .mockResolvedValueOnce({
+            ok: true,
+            status: 200,
+            text: async () =>
+              JSON.stringify({
+                success: [
+                  { id: 3001, file: { name: 'evidence.txt', mime: 'text/plain', size: 8 } },
+                ],
+                errors: [],
+              }),
+          } as Response);
+        const second = await createTask(
+          client,
+          { id: 101 },
+          { title: 'New Bug' },
+          'create-with-attachment',
+          [file],
+          'Codex',
+        );
+
+        expect(second).toMatchObject({
+          action: 'created',
+          attachments: [{ id: 3001, fileName: 'evidence.txt' }],
+        });
+        expect(second.attachmentErrors).toBeUndefined();
+        expect(
+          mockFetch.mock.calls.filter(
+            (call: any) =>
+              call[1]?.method === 'POST' && String(call[0]).includes('/projects/101/tasks'),
+          ),
+        ).toHaveLength(1);
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it('should get consolidated details in getTask', async () => {
-      // Mock task resolution
+      // Task resolution already returns full task fields.
       mockFetch.mockResolvedValueOnce({
         ok: true,
         status: 200,
@@ -1065,24 +1202,23 @@ describe('Tasks List and Scoping tests', () => {
             title: 'Task Title',
             project_id: 101,
             project: { title: 'Alpha' },
+            description: '<p>hello</p>',
+            created_by: { id: 7, username: 'example-tester' },
           }),
       } as Response);
 
-      // Mock get task by ID with comments embedded via expand=comments.
       mockFetch.mockResolvedValueOnce({
         ok: true,
         status: 200,
         text: async () =>
           JSON.stringify({
-            id: 9005,
-            index: 305,
-            title: 'Task Title',
-            project_id: 101,
-            description: '<p>hello</p>',
-            created_by: { id: 7, username: 'example-tester' },
-            comments: [
+            items: [
               { id: 2001, comment: '<p>A comment</p>', author: { id: 1, username: 'tester' } },
             ],
+            page: 1,
+            per_page: 5,
+            total: 1,
+            total_pages: 1,
           }),
       } as Response);
 
@@ -1114,14 +1250,18 @@ describe('Tasks List and Scoping tests', () => {
       expect(details.comments[0].comment).toBe('A comment');
       expect(details.attachments.length).toBe(1);
       expect(details.attachments[0].fileName).toBe('log.txt');
-      // Comments came from the embedded expand, so no separate /comments call.
       expect(details.composedCalls).toEqual([
-        'GET /tasks/9005?expand=comments',
-        'GET /tasks/9005/attachments',
+        'GET /tasks/9005',
+        'GET /tasks/9005/comments?sort_by=created&order_by=desc&page=1&per_page=5',
+        'GET /tasks/9005/attachments?page=1&per_page=20',
       ]);
       const urls = mockFetch.mock.calls.map((c: any) => c[0]);
-      expect(urls.some((u: string) => u.includes('expand=comments'))).toBe(true);
-      expect(urls.some((u: string) => /\/comments$/.test(u))).toBe(false);
+      expect(urls.some((u: string) => u.includes('expand=comments'))).toBe(false);
+      expect(
+        urls.some((u: string) =>
+          u.includes('/comments?sort_by=created&order_by=desc&page=1&per_page=5'),
+        ),
+      ).toBe(true);
     });
 
     it('defaults to a minimal projected task without fetching comments or attachments', async () => {
@@ -1174,13 +1314,7 @@ describe('Tasks List and Scoping tests', () => {
             project: { title: 'Alpha' },
           }),
       } as Response);
-      // task GET without an embedded comments array
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        text: async () => JSON.stringify({ id: 9005, index: 305, title: 'T', project_id: 101 }),
-      } as Response);
-      // fallback comments endpoint (wrapped shape)
+      // Bounded comments endpoint (wrapped shape)
       mockFetch.mockResolvedValueOnce({
         ok: true,
         status: 200,
@@ -1197,7 +1331,107 @@ describe('Tasks List and Scoping tests', () => {
       const details = await getTask(client, 9005, undefined, 5, 'full');
       expect(details.comments.length).toBe(1);
       expect(details.comments[0].comment).toBe('hi');
-      expect(details.composedCalls).toContain('GET /tasks/9005/comments');
+      expect(details.composedCalls).toContain(
+        'GET /tasks/9005/comments?sort_by=created&order_by=desc&page=1&per_page=5',
+      );
+    });
+
+    it('bounds full task comments and attachments with truthful metadata', async () => {
+      mockFetch
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              id: 9005,
+              index: 305,
+              identifier: 'ALPHA-305',
+              title: 'Task',
+              project_id: 101,
+              project: { title: 'Alpha' },
+            }),
+            { status: 200 },
+          ),
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              items: Array.from({ length: 5 }, (_, id) => ({ id, comment: '<p>x</p>' })),
+              page: 1,
+              per_page: 5,
+              total: 1000,
+              total_pages: 200,
+            }),
+            { status: 200 },
+          ),
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              items: Array.from({ length: 3 }, (_, id) => ({
+                id,
+                file: { name: `log-${id}.txt`, size: 1 },
+              })),
+              page: 1,
+              per_page: 3,
+              total: 1000,
+              total_pages: 334,
+            }),
+            { status: 200 },
+          ),
+        );
+
+      const details = await getTask(client, 9005, undefined, 5, 'full', {
+        attachmentLimit: 3,
+      });
+
+      expect(details.comments).toHaveLength(5);
+      expect(details.attachments).toHaveLength(3);
+      expect(details.commentPagination).toEqual({
+        returnedCount: 5,
+        totalCount: 1000,
+        incomplete: true,
+        nextPage: 2,
+      });
+      expect(details.attachmentPagination).toEqual({
+        returnedCount: 3,
+        totalCount: 1000,
+        incomplete: true,
+        nextPage: 2,
+      });
+    });
+
+    it('enforces maxResponseChars on a full task get', async () => {
+      mockFetch
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              id: 9005,
+              index: 305,
+              title: 'Task with a large description',
+              description: `<p>${'x'.repeat(1000)}</p>`,
+              project_id: 101,
+              project: { title: 'Alpha' },
+            }),
+            { status: 200 },
+          ),
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({ items: [], total: 0, page: 1, per_page: 5, total_pages: 1 }),
+            {
+              status: 200,
+            },
+          ),
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({ items: [], total: 0, page: 1, per_page: 20, total_pages: 1 }),
+            { status: 200 },
+          ),
+        );
+
+      await expect(
+        getTask(client, 9005, undefined, 5, 'full', { maxResponseChars: 500 }),
+      ).rejects.toMatchObject({ status: 413, code: 'RESPONSE_TOO_LARGE' });
     });
 
     it('should perform conditional updates and PATCH changed fields only', async () => {
@@ -1424,6 +1658,33 @@ describe('Tasks List and Scoping tests', () => {
       expect(description.indexOf('New evidence')).toBeLessThan(
         description.indexOf('[vfm-key:detector:file.ts:10]'),
       );
+      expect(description).toContain('<p>Existing body</p>');
+    });
+
+    it('preserves unsupported rich HTML byte-for-byte while appending Markdown', async () => {
+      const rich =
+        '<table data-layout="wide"><tbody><tr><td><img src="https://vikunja.example.com/a.png"></td></tr></tbody></table>';
+      const existing = {
+        id: 9005,
+        index: 305,
+        identifier: 'ALPHA-305',
+        title: 'Rich task',
+        description: `${rich}<p>[vfm-key:rich:1]</p>`,
+        project_id: 101,
+        project: { title: 'Alpha' },
+      };
+      mockFetch
+        .mockResolvedValueOnce(new Response(JSON.stringify(existing)))
+        .mockResolvedValueOnce(new Response(JSON.stringify(existing)))
+        .mockResolvedValueOnce(new Response(JSON.stringify(existing)));
+
+      await updateTask(client, 9005, { appendDescription: '**New** evidence' });
+
+      const patchCall = mockFetch.mock.calls.find((call: any) => call[1]?.method === 'PATCH');
+      const description = JSON.parse(patchCall[1].body)[0].value as string;
+      expect(description.startsWith(rich)).toBe(true);
+      expect(description).toContain('<p><strong>New</strong> evidence</p>');
+      expect(description.endsWith('<p>[vfm-key:rich:1]</p>')).toBe(true);
     });
 
     it('rejects update requests that replace and append description together', async () => {
@@ -1572,12 +1833,6 @@ describe('Tasks List and Scoping tests', () => {
               project_id: 101,
               project: { title: 'Alpha' },
             }),
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          status: 200,
-          text: async () =>
-            JSON.stringify({ id: 9005, index: 305, title: 'Task', project_id: 101 }),
         } as Response)
         .mockResolvedValueOnce({
           ok: false,

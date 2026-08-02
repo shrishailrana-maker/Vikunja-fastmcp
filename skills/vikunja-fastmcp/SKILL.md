@@ -122,6 +122,9 @@ requests or legacy tracker scripts while the MCP is available.
 - If `IDEMPOTENCY_OPERATION_IN_PROGRESS` is returned, wait briefly and retry
   the identical payload with the same key. Never invent a second key for the
   same intended write.
+- If an attachment receipt reports `unknown`, do not treat it as failed or
+  upload with a new key. List the task attachments, then retry only the
+  identical payload and idempotency key when needed.
 - Use bulk `status` with the returned `operationId`, or rerun the same bulk
   payload and key, to resume failed rows without repeating recorded successes.
 - Before replacing a task title or full description, run `get` and pass its
@@ -149,6 +152,12 @@ requests or legacy tracker scripts while the MCP is available.
 
 - Upload evidence through attachment operations and download through the MCP's
   sandboxed path. Do not put bearer tokens in download URLs.
+- Keep upload and CSV-import files under a configured
+  `VIKUNJA_ATTACHMENT_SOURCE_ROOTS` directory. Source symlinks and arbitrary
+  paths outside those roots are rejected.
+- Upload no more than 20 attachments per call. For full task detail, comments
+  default to five and attachments to 20; request larger bounded limits only
+  when the current task needs them.
 - Prefer the typed `vikunja_task_attachments` tool. Bound large lists with
   `page` and `perPage`, or use `countOnly`/`filenamePrefix`.
 - Request local `computeSha256` only when a content receipt is needed. Treat
@@ -157,6 +166,8 @@ requests or legacy tracker scripts while the MCP is available.
 - Delete an attachment only with its task, explicit project scope,
   `confirm:true`, `actor`, and a stable `idempotencyKey`. The MCP verifies the
   attachment belongs to that task before deleting it.
+- Use `overwrite: true` only when deliberately replacing a sandboxed download
+  or export. Webhook targets must be credential-free public HTTPS URLs.
 - A `401` means the token or API URL is invalid or expired. A `403` means the
   authenticated identity lacks permission. Preserve the real status.
 - `VIKUNJA_SUBSCRIPTION_SCHEMA_BUG` means Vikunja returned the known invalid

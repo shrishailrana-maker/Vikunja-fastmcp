@@ -1,9 +1,14 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
-import path from 'node:path';
+import os from 'node:os';
 import { VikunjaApiClient } from './api.js';
-import { openSafeDestination, resolveSafePath } from './attachments.js';
-import { fetchAllCollectionItems, htmlToMarkdown } from './format.js';
+import {
+  openSafeDestination,
+  resolveSafePath,
+  resolveSafeSourceFile,
+  sanitizeHeaderFilename,
+} from './attachments.js';
+import { htmlToMarkdown, normalizePagination, toItemArray } from './format.js';
 import { resolveProject } from './identity.js';
 import { VikunjaError } from './errors.js';
 
@@ -28,7 +33,7 @@ function multipart(fileName: string, file: Buffer, config?: unknown) {
       ),
     );
   }
-  const safeName = path.basename(fileName).replace(/["\r\n]/g, '_');
+  const safeName = sanitizeHeaderFilename(fileName);
   parts.push(
     Buffer.from(
       `--${boundary}\r\nContent-Disposition: form-data; name="import"; filename="${safeName}"\r\nContent-Type: text/csv\r\n\r\n`,
@@ -45,15 +50,21 @@ async function csvRequest(
   config?: unknown,
 ) {
   let stat;
+  let safePath: string;
   try {
-    stat = await fs.stat(filePath);
-  } catch {
+    safePath = await resolveSafeSourceFile(
+      client.getConfig().attachmentSourceRoots ?? [process.cwd(), os.tmpdir()],
+      filePath,
+    );
+    stat = await fs.stat(safePath);
+  } catch (error) {
+    if (error instanceof VikunjaError) throw error;
     throw fileError('CSV import file does not exist or cannot be read.');
   }
   const max = client.getConfig().maxAttachmentBytes ?? 100 * 1024 * 1024;
   if (!stat.isFile() || stat.size > max)
     throw fileError('CSV import file is invalid or exceeds the configured size limit.');
-  const form = multipart(filePath, await fs.readFile(filePath), config);
+  const form = multipart(safePath, await fs.readFile(safePath), config);
   return client.request<any>('POST', `/migration/csv/${action}`, {
     body: form.body,
     headers: { 'Content-Type': form.contentType },
@@ -123,9 +134,57 @@ function normalizeDate(value: unknown): string | null {
   return String(value);
 }
 
+const DEFAULT_EXPORT_TASK_LIMIT = 1000;
+const DEFAULT_RICH_EXPORT_TASK_LIMIT = 1000;
+const DEFAULT_EXPORT_DETAIL_LIMIT = 100;
+
+async function fetchBoundedCollection<T>(
+  client: VikunjaApiClient,
+  basePath: string,
+  limit: number,
+  code: string,
+): Promise<T[]> {
+  const items: T[] = [];
+  const perPage = Math.min(100, limit);
+  for (let page = 1; ; page += 1) {
+    const separator = basePath.includes('?') ? '&' : '?';
+    const response = await client.request<any>(
+      'GET',
+      `${basePath}${separator}page=${page}&per_page=${perPage}`,
+    );
+    const pagination = normalizePagination(response);
+    if (pagination.total > limit) {
+      throw new VikunjaError({
+        status: 413,
+        code,
+        method: 'GET',
+        path: basePath,
+        message: `Export source contains ${pagination.total} items, exceeding the configured limit of ${limit}.`,
+        fieldErrors: [],
+      });
+    }
+    const pageItems = toItemArray<T>(response);
+    items.push(...pageItems);
+    if (items.length > limit) {
+      throw new VikunjaError({
+        status: 413,
+        code,
+        method: 'GET',
+        path: basePath,
+        message: `Export source exceeds the configured limit of ${limit} items.`,
+        fieldErrors: [],
+      });
+    }
+    if (pageItems.length === 0 || page >= pagination.totalPages) break;
+  }
+  return items;
+}
+
 export async function getUserExportStatus(client: VikunjaApiClient) {
   const value = await client.request<any>('GET', '/user/export');
-  if (!value) return { available: false };
+  if (!value || typeof value !== 'object' || !Number.isInteger(Number(value.id))) {
+    return { available: false };
+  }
   return {
     available: true,
     id: value.id,
@@ -167,14 +226,18 @@ async function streamResponse(
   root: string,
   destination: string,
   maxBytes: number,
+  overwrite = false,
 ): Promise<number> {
   const contentLength = response.headers.get('Content-Length');
   const advertised = contentLength === null ? undefined : Number(contentLength);
   if (advertised !== undefined && Number.isFinite(advertised) && advertised > maxBytes) {
+    if (typeof response.body?.cancel === 'function') {
+      await response.body.cancel().catch(() => {});
+    }
     throw downloadTooLarge(advertised, maxBytes);
   }
   let size = 0;
-  const { handle } = await openSafeDestination(root, destination);
+  const { handle } = await openSafeDestination(root, destination, overwrite);
   try {
     if (!response.body) throw new Error('Download response had no body.');
     for await (const chunk of response.body as any) {
@@ -199,6 +262,7 @@ export async function downloadUserExport(
   client: VikunjaApiClient,
   password = '',
   destinationPath = 'vikunja-user-export.zip',
+  overwrite = false,
 ) {
   const root = client.getConfig().attachmentDownloadRoot;
   const destination = resolveSafePath(root, destinationPath);
@@ -207,7 +271,7 @@ export async function downloadUserExport(
     isStreamResponse: true,
   });
   const maxBytes = client.getConfig().maxAttachmentBytes ?? 100 * 1024 * 1024;
-  const size = await streamResponse(response, root, destination, maxBytes);
+  const size = await streamResponse(response, root, destination, maxBytes, overwrite);
   return { path: destination, size };
 }
 
@@ -217,8 +281,13 @@ function csvCell(value: unknown) {
   return `"${text.replace(/"/g, '""')}"`;
 }
 
-async function writeExportFile(root: string, destination: string, content: string): Promise<void> {
-  const { handle } = await openSafeDestination(root, destination);
+async function writeExportFile(
+  root: string,
+  destination: string,
+  content: string,
+  overwrite = false,
+): Promise<void> {
+  const { handle } = await openSafeDestination(root, destination, overwrite);
   try {
     await handle.writeFile(content);
   } catch (error) {
@@ -237,11 +306,19 @@ export async function exportProject(
   includeComments = false,
   includeAttachments = false,
   includeRelations = false,
+  limits: { taskLimit?: number; detailLimit?: number } = {},
+  overwrite = false,
 ) {
   const project = await resolveProject(client, selector);
-  const raw = await fetchAllCollectionItems<any>(
-    (requestPath) => client.request('GET', requestPath),
+  const rich = includeComments || includeAttachments || includeRelations;
+  const taskLimit =
+    limits.taskLimit ?? (rich ? DEFAULT_RICH_EXPORT_TASK_LIMIT : DEFAULT_EXPORT_TASK_LIMIT);
+  const detailLimit = limits.detailLimit ?? DEFAULT_EXPORT_DETAIL_LIMIT;
+  const raw = await fetchBoundedCollection<any>(
+    client,
     `/projects/${project.id}/tasks`,
+    taskLimit,
+    'EXPORT_TASK_LIMIT_EXCEEDED',
   );
   const tasks: any[] = raw.map((task) => ({
     id: task.id,
@@ -252,6 +329,7 @@ export async function exportProject(
     done: !!task.done,
     priority: task.priority || 0,
     dueDate: normalizeDate(task.due_date),
+    updated: normalizeDate(task.updated),
     creator: task.created_by
       ? { id: task.created_by.id, username: task.created_by.username }
       : null,
@@ -261,61 +339,82 @@ export async function exportProject(
       : [],
   }));
 
-  if (includeComments) {
-    for (const task of tasks) {
-      const comments = await fetchAllCollectionItems<any>(
-        (requestPath) => client.request('GET', requestPath),
-        `/tasks/${task.id}/comments`,
+  if (rich) {
+    for (let offset = 0; offset < tasks.length; offset += 5) {
+      await Promise.all(
+        tasks.slice(offset, offset + 5).map(async (task) => {
+          if (includeComments) {
+            const comments = await fetchBoundedCollection<any>(
+              client,
+              `/tasks/${task.id}/comments`,
+              detailLimit,
+              'EXPORT_DETAIL_LIMIT_EXCEEDED',
+            );
+            task.comments = comments.map((comment) => ({
+              id: comment.id,
+              comment: comment.comment ? htmlToMarkdown(comment.comment) : '',
+              author: comment.author
+                ? { id: comment.author.id, username: comment.author.username }
+                : null,
+              created: normalizeDate(comment.created),
+              updated: normalizeDate(comment.updated),
+            }));
+            task.commentCount = task.comments.length;
+          }
+          if (includeAttachments) {
+            const attachments = await fetchBoundedCollection<any>(
+              client,
+              `/tasks/${task.id}/attachments`,
+              detailLimit,
+              'EXPORT_DETAIL_LIMIT_EXCEEDED',
+            );
+            task.attachments = attachments.map((attachment) => ({
+              id: attachment.id,
+              fileName: attachment.file?.name || attachment.file_name || 'unknown',
+              mime: attachment.file?.mime || attachment.mime || 'application/octet-stream',
+              fileSize: attachment.file?.size || attachment.file_size || 0,
+            }));
+            task.attachmentCount = task.attachments.length;
+          }
+          if (includeRelations) {
+            const detail = await client.request<any>('GET', `/tasks/${task.id}`);
+            const relatedTasks = detail.related_tasks ?? {};
+            task.relations = Object.entries(relatedTasks).flatMap(([kind, related]) =>
+              Array.isArray(related)
+                ? related.map((item: any) => ({
+                    kind,
+                    taskId: item.id,
+                    identifier: item.identifier || (item.index ? `#${item.index}` : null),
+                    title: item.title,
+                  }))
+                : [],
+            );
+            if (task.relations.length > detailLimit) {
+              throw new VikunjaError({
+                status: 413,
+                code: 'EXPORT_DETAIL_LIMIT_EXCEEDED',
+                method: 'GET',
+                path: `/tasks/${task.id}`,
+                message: `Task relations exceed the configured limit of ${detailLimit}.`,
+                fieldErrors: [],
+              });
+            }
+            task.relationCount = task.relations.length;
+          }
+        }),
       );
-      task.comments = comments.map((comment) => ({
-        id: comment.id,
-        comment: comment.comment ? htmlToMarkdown(comment.comment) : '',
-        author: comment.author
-          ? { id: comment.author.id, username: comment.author.username }
-          : null,
-        created: normalizeDate(comment.created),
-        updated: normalizeDate(comment.updated),
-      }));
-      task.commentCount = task.comments.length;
-    }
-  }
-  if (includeAttachments) {
-    for (const task of tasks) {
-      const attachments = await fetchAllCollectionItems<any>(
-        (requestPath) => client.request('GET', requestPath),
-        `/tasks/${task.id}/attachments`,
-      );
-      task.attachments = attachments.map((attachment) => ({
-        id: attachment.id,
-        fileName: attachment.file?.name || attachment.file_name || 'unknown',
-        mime: attachment.file?.mime || attachment.mime || 'application/octet-stream',
-        fileSize: attachment.file?.size || attachment.file_size || 0,
-      }));
-      task.attachmentCount = task.attachments.length;
-    }
-  }
-  if (includeRelations) {
-    for (const task of tasks) {
-      const detail = await client.request<any>('GET', `/tasks/${task.id}`);
-      const relatedTasks = detail.related_tasks ?? {};
-      task.relations = Object.entries(relatedTasks).flatMap(([kind, related]) =>
-        Array.isArray(related)
-          ? related.map((item: any) => ({
-              kind,
-              taskId: item.id,
-              identifier: item.identifier || (item.index ? `#${item.index}` : null),
-              title: item.title,
-            }))
-          : [],
-      );
-      task.relationCount = task.relations.length;
     }
   }
   const fileName = destinationPath || `project-${project.id}-tasks.${format}`;
   const exportRoot = client.getConfig().attachmentDownloadRoot;
   const destination = resolveSafePath(exportRoot, fileName);
   if (format === 'json') {
-    await writeExportFile(exportRoot, destination, JSON.stringify({ project, tasks }, null, 2));
+    await writeExportFile(
+      exportRoot,
+      destination,
+      JSON.stringify({ project, tasks }, null, 2),
+      overwrite,
+    );
   } else {
     const header = [
       'id',
@@ -356,7 +455,7 @@ export async function exportProject(
           .join(','),
       ),
     ];
-    await writeExportFile(exportRoot, destination, `${lines.join('\n')}\n`);
+    await writeExportFile(exportRoot, destination, `${lines.join('\n')}\n`, overwrite);
   }
   return { project, format, path: destination, taskCount: tasks.length };
 }

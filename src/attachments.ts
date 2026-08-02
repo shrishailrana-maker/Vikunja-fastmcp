@@ -19,6 +19,7 @@ import path from 'path';
 import fs from 'fs/promises';
 import crypto from 'crypto';
 import { createReadStream } from 'node:fs';
+import os from 'node:os';
 
 export interface AttachmentInfo {
   id: number;
@@ -89,7 +90,7 @@ async function fetchAllAttachments(
   const raw = await fetchAllCollectionItems<any>(
     (requestPath) => client.request<any>('GET', requestPath),
     `/tasks/${taskId}/attachments${query}`,
-    1000,
+    100,
   );
   const normalized = raw.map((attachment) =>
     withKnownAttachmentHash(taskId, normalizeAttachment(attachment)),
@@ -144,7 +145,7 @@ function stripControlChars(s: string): string {
 // A raw filename can carry CR/LF (to inject extra headers or smuggle another
 // part) or a double-quote (to break out of filename="..."). Strip path
 // components and control chars, then escape backslash and quote per RFC 7578.
-function sanitizeHeaderFilename(name: string): string {
+export function sanitizeHeaderFilename(name: string): string {
   const base = stripControlChars(name.split(/[\\/]/).pop() ?? 'file');
   const escaped = base.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   return escaped.trim() === '' ? 'file' : escaped;
@@ -208,8 +209,8 @@ export function resolveSafePath(root: string, target: string): string {
   // Containment must be tested on a path-separator boundary. A plain
   // startsWith lets a sibling directory whose name merely begins with the
   // root (e.g. "<root>-evil") slip through as if it were inside the root.
-  const rootWithSep = absoluteRoot.endsWith(path.sep) ? absoluteRoot : absoluteRoot + path.sep;
-  if (absoluteTarget !== absoluteRoot && !absoluteTarget.startsWith(rootWithSep)) {
+  const relative = path.relative(absoluteRoot, absoluteTarget);
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
     throw new VikunjaError({
       status: 403,
       code: 'FORBIDDEN',
@@ -221,6 +222,63 @@ export function resolveSafePath(root: string, target: string): string {
   }
 
   return absoluteTarget;
+}
+
+function sourceRootsFor(client: VikunjaApiClient): string[] {
+  return client.getConfig().attachmentSourceRoots?.length
+    ? client.getConfig().attachmentSourceRoots!
+    : [path.resolve(process.cwd()), path.resolve(os.tmpdir())];
+}
+
+export async function resolveSafeSourceFile(roots: string[], target: string): Promise<string> {
+  const absolute = path.resolve(target);
+  let sourceInfo;
+  try {
+    sourceInfo = await fs.lstat(absolute);
+  } catch {
+    throw new VikunjaError({
+      status: 400,
+      code: 'INVALID_CONTENT',
+      method: 'READ',
+      path: 'filePath',
+      message: 'Local source file does not exist or cannot be read.',
+      fieldErrors: [],
+    });
+  }
+  if (sourceInfo.isSymbolicLink() || !sourceInfo.isFile()) {
+    throw new VikunjaError({
+      status: 403,
+      code: 'FORBIDDEN_SOURCE_PATH',
+      method: 'READ',
+      path: 'filePath',
+      message: 'Local source must be a regular file and may not be a symbolic link.',
+      fieldErrors: [],
+    });
+  }
+
+  const realTarget = await fs.realpath(absolute);
+  for (const root of roots) {
+    try {
+      const realRoot = await fs.realpath(path.resolve(root));
+      const relative = path.relative(realRoot, realTarget);
+      if (
+        relative === '' ||
+        (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))
+      ) {
+        return realTarget;
+      }
+    } catch {
+      // A missing configured source root cannot authorize a read.
+    }
+  }
+  throw new VikunjaError({
+    status: 403,
+    code: 'FORBIDDEN_SOURCE_PATH',
+    method: 'READ',
+    path: 'filePath',
+    message: 'Local source file is outside VIKUNJA_ATTACHMENT_SOURCE_ROOTS.',
+    fieldErrors: [],
+  });
 }
 
 function forbiddenDestination(message: string): VikunjaError {
@@ -252,8 +310,12 @@ export async function validateSafeDestination(
 ): Promise<string> {
   const destination = resolveSafePath(root, target);
   const parent = path.dirname(destination);
-  await fs.mkdir(root, { recursive: true });
-  await fs.mkdir(parent, { recursive: true });
+  await fs.mkdir(root, { recursive: true, mode: 0o700 });
+  await fs.mkdir(parent, { recursive: true, mode: 0o700 });
+  await Promise.all([
+    fs.chmod(root, 0o700).catch(() => {}),
+    fs.chmod(parent, 0o700).catch(() => {}),
+  ]);
 
   const [realRoot, realParent] = await Promise.all([fs.realpath(root), fs.realpath(parent)]);
   const relativeParent = path.relative(realRoot, realParent);
@@ -287,7 +349,7 @@ export async function validateSafeDestination(
 export async function openSafeDestination(root: string, target: string, overwrite = false) {
   const destination = await validateSafeDestination(root, target, overwrite);
   try {
-    return { destination, handle: await fs.open(destination, overwrite ? 'w' : 'wx') };
+    return { destination, handle: await fs.open(destination, overwrite ? 'w' : 'wx', 0o600) };
   } catch (error: any) {
     if (error?.code === 'EEXIST') throw fileExistsError(destination);
     throw error;
@@ -444,6 +506,7 @@ export interface AttachResult {
   task: { id: number; portalRef: string; title: string };
   uploaded: AttachmentInfo[];
   failed: { file: string; error: string }[];
+  unknown: { file: string; error: string; code: string }[];
   warnings: { file: string; message: string; matchingAttachmentIds: number[] }[];
   actor?: string;
 }
@@ -452,6 +515,68 @@ export interface AttachOptions {
   computeSha256?: boolean;
   warnOnDuplicate?: boolean;
   actor?: string;
+}
+
+export const MAX_ATTACHMENTS_PER_CALL = 20;
+
+async function validateAttachmentBatch(
+  client: VikunjaApiClient,
+  files: AttachFileSpec[],
+): Promise<{
+  files: { spec: AttachFileSpec; fileIndex: number }[];
+  failed: { file: string; error: string }[];
+}> {
+  if (files.length > MAX_ATTACHMENTS_PER_CALL) {
+    throw new VikunjaError({
+      status: 400,
+      code: 'ATTACHMENT_BATCH_TOO_LARGE',
+      method: 'POST',
+      path: '/attachments',
+      message: `At most ${MAX_ATTACHMENTS_PER_CALL} attachments may be uploaded in one call.`,
+      fieldErrors: [],
+    });
+  }
+  const maxBytes = client.getConfig().maxAttachmentBytes ?? 100 * 1024 * 1024;
+  let totalBytes = 0;
+  const safeFiles: { spec: AttachFileSpec; fileIndex: number }[] = [];
+  const failed: { file: string; error: string }[] = [];
+  for (const [fileIndex, file] of files.entries()) {
+    const label = file.filePath || file.filename || 'unnamed';
+    try {
+      const safeFile = file.filePath
+        ? {
+            ...file,
+            filePath: await resolveSafeSourceFile(sourceRootsFor(client), file.filePath),
+          }
+        : file;
+      const bytes = safeFile.filePath
+        ? (await fs.stat(safeFile.filePath)).size
+        : safeFile.base64Content !== undefined
+          ? estimatedBase64Bytes(safeFile.base64Content)
+          : 0;
+      if (totalBytes + bytes > maxBytes) {
+        throw new VikunjaError({
+          status: 413,
+          code: 'ATTACHMENT_BATCH_TOO_LARGE',
+          method: 'POST',
+          path: '/attachments',
+          message: `Combined attachment content exceeds the configured ${maxBytes}-byte limit.`,
+          fieldErrors: [],
+        });
+      }
+      totalBytes += bytes;
+      safeFiles.push({ spec: safeFile, fileIndex });
+    } catch (error: any) {
+      if (error?.code === 'ATTACHMENT_BATCH_TOO_LARGE' || error?.code === 'FORBIDDEN_SOURCE_PATH') {
+        throw error;
+      }
+      failed.push({
+        file: label,
+        error: redactSecrets(error?.message || 'Attachment validation failed'),
+      });
+    }
+  }
+  return { files: safeFiles, failed };
 }
 
 function attachmentHashKey(taskId: number, attachmentId: number): string {
@@ -507,7 +632,8 @@ async function materializeFile(
   pathUrl: string,
 ): Promise<{ filename: string; mimeType: string; buffer: Buffer }> {
   if (spec.filePath) {
-    const fileInfo = await fs.stat(spec.filePath);
+    const safePath = await resolveSafeSourceFile(sourceRootsFor(client), spec.filePath);
+    const fileInfo = await fs.stat(safePath);
     if (!fileInfo.isFile()) {
       throw new VikunjaError({
         status: 400,
@@ -518,9 +644,9 @@ async function materializeFile(
         fieldErrors: [],
       });
     }
-    assertWithinSizeLimit(client, spec.filePath, fileInfo.size, pathUrl);
-    const buffer = await fs.readFile(spec.filePath);
-    const filename = spec.filename || path.basename(spec.filePath);
+    assertWithinSizeLimit(client, safePath, fileInfo.size, pathUrl);
+    const buffer = await fs.readFile(safePath);
+    const filename = spec.filename || path.basename(safePath);
     const mimeType = spec.mimeType || inferMimeType(filename);
     return { filename, mimeType, buffer };
   }
@@ -570,23 +696,22 @@ export async function attachFiles(
       fieldErrors: [],
     });
   }
+  const validated = await validateAttachmentBatch(client, files);
+  const safeFiles = validated.files;
 
   const task = await resolveTask(client, taskSelector, projectSelector);
-  const payload = {
-    taskId: task.id,
-    files: idempotencyKey ? await attachmentPayload(files) : [],
-    actor: options.actor,
-    computeSha256: options.computeSha256 === true,
-    warnOnDuplicate: options.warnOnDuplicate === true,
-  };
+  const filePayloads = idempotencyKey
+    ? await attachmentPayload(safeFiles.map(({ spec }) => spec))
+    : [];
   const execute = async (): Promise<AttachResult> => {
     const pathUrl = `/tasks/${task.id}/attachments`;
     const uploaded: AttachmentInfo[] = [];
-    const failed: { file: string; error: string }[] = [];
+    const failed: { file: string; error: string }[] = [...validated.failed];
+    const unknown: AttachResult['unknown'] = [];
     const warnings: AttachResult['warnings'] = [];
     const existing = options.warnOnDuplicate ? await fetchAllAttachments(client, task.id) : [];
 
-    for (const spec of files) {
+    for (const [payloadIndex, { spec, fileIndex }] of safeFiles.entries()) {
       const label = spec.filePath || spec.filename || 'unnamed';
       try {
         if (spec.base64Content !== undefined) {
@@ -632,23 +757,44 @@ export async function attachFiles(
             });
           }
         }
-        const uploadedAttachment = await uploadBufferToTask(
-          client,
-          task.id,
-          filename,
-          mimeType,
-          buffer,
-        );
+        const upload = () => uploadBufferToTask(client, task.id, filename, mimeType, buffer);
+        const uploadedAttachment = idempotencyKey
+          ? await runDurableOperation(
+              'attach-file',
+              `${idempotencyKey}:${fileIndex + 1}`,
+              {
+                taskId: task.id,
+                file: filePayloads[payloadIndex],
+                actor: options.actor,
+                computeSha256: options.computeSha256 === true,
+              },
+              upload,
+            )
+          : await upload();
         if (sha256) {
           uploadedAttachment.sha256 = sha256;
           rememberAttachmentHash(task.id, uploadedAttachment.id, sha256);
         }
         uploaded.push(uploadedAttachment);
       } catch (err: any) {
-        failed.push({
-          file: label,
-          error: redactSecrets(err.message || 'Upload failed', client.getConfig().vikunjaToken),
-        });
+        const code = String(err?.code ?? 'UPLOAD_FAILED');
+        const error = redactSecrets(
+          err?.message || 'Upload failed',
+          client.getConfig().vikunjaToken,
+        );
+        if (
+          [
+            'IDEMPOTENCY_OUTCOME_UNKNOWN',
+            'IDEMPOTENCY_OPERATION_IN_PROGRESS',
+            'IDEMPOTENCY_LEASE_LOST',
+            'NETWORK_ERROR',
+            'REQUEST_TIMEOUT',
+          ].includes(code)
+        ) {
+          unknown.push({ file: label, error, code });
+        } else {
+          failed.push({ file: label, error });
+        }
       }
     }
 
@@ -660,14 +806,13 @@ export async function attachFiles(
       },
       uploaded,
       failed,
+      unknown,
       warnings,
       actor: options.actor,
     };
   };
 
-  return idempotencyKey
-    ? runDurableOperation('attach', idempotencyKey, payload, execute)
-    : execute();
+  return execute();
 }
 
 export interface DownloadResult {
@@ -733,6 +878,9 @@ export async function downloadAttachment(
   if (expectedSizeHeader) {
     const advertised = parseInt(expectedSizeHeader, 10);
     if (Number.isFinite(advertised) && advertised > maxBytes) {
+      if (typeof response.body?.cancel === 'function') {
+        await response.body.cancel().catch(() => {});
+      }
       throw new VikunjaError({
         status: 413,
         code: 'ATTACHMENT_TOO_LARGE',

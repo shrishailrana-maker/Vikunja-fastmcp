@@ -110,6 +110,10 @@ Optional:
 - `VIKUNJA_WEB_URL`: browser base for task and project links.
 - `VIKUNJA_ATTACHMENT_DOWNLOAD_ROOT`: sandboxed download root. Defaults under
   the operating-system temp directory.
+- `VIKUNJA_ATTACHMENT_SOURCE_ROOTS`: operating-system path-delimited roots from
+  which attachments and CSV imports may be read. Defaults to the MCP working
+  directory and the operating-system temp directory. Source symlinks are
+  rejected.
 - `VIKUNJA_MAX_ATTACHMENT_BYTES`: upload and download size ceiling. Defaults
   to 100 MiB.
 - `VIKUNJA_TEMPLATE_FILE`: machine-local template JSON path. Defaults under
@@ -177,10 +181,10 @@ environment variables above. Public installations use `vikunja-mcp`.
 ## Emergency Python Fallback
 
 The supported path is the npm-installed MCP. For a one-time emergency where
-the MCP cannot start, [`fallback/vikunja-cli.py`](fallback/vikunja-cli.py) provides a
-standalone `/api/v2` CLI with explicit setup, safety limits, and offline unit
-tests documented in [`fallback/README.md`](fallback/README.md). Do not run both
-as independent tracker writers.
+the MCP cannot start, [`fallback/vikunja-cli.py`](fallback/vikunja-cli.py)
+provides a standalone `/api/v2` CLI with explicit setup, safety limits, and
+offline unit tests documented in [`fallback/README.md`](fallback/README.md).
+Do not run both as independent tracker writers.
 
 ## Tools
 
@@ -257,7 +261,10 @@ description. It is mutually exclusive with `description` and preserves a
 stable-key marker as the final line. Replacing a task title or full description
 requires the `updated` value from a fresh `get` as `expectedUpdatedAt`.
 Project exports fetch comments, attachments, or relations only when the
-matching include flag is enabled.
+matching include flag is enabled. Basic and rich exports default to at most
+1,000 tasks, with 100 comments, attachments, or relations per task. Use
+`taskLimit` and `detailLimit` to choose smaller bounds. Existing files are never
+replaced unless `overwrite: true` is explicit.
 
 Create, comment-create/update/delete, close, evidence-close, import, and
 mutating bulk operations require `actor` attribution. `summary` returns project
@@ -270,6 +277,14 @@ belongs to it, and returns the deleted metadata plus the remaining count. Use
 `page`, `perPage`, `countOnly`, and `filenamePrefix` for bounded attachment
 lists; an old `vikunja_tasks list-attachments` call without these options keeps
 its original simple array response.
+
+Attachment receipts distinguish `failed` from `unknown`. An unknown outcome
+means the upload may have reached Vikunja; inspect attachments or retry the
+identical idempotency key instead of uploading under a new key.
+
+Webhook creation accepts only credential-free HTTPS destinations on public
+hosts. Cleartext, loopback, link-local, private-network, and URL-credential
+targets are rejected before the Vikunja request.
 
 `set_status` replaces every task label matching `VIKUNJA_STATUS_LABEL_PREFIX`
 with the requested existing visible label in one bulk-label request. It repairs
@@ -333,6 +348,13 @@ is read only from the process environment and is sent only to an approved host.
   `confirm: true`.
 - CSV import and file transfer: 100 MiB by default through
   `VIKUNJA_MAX_ATTACHMENT_BYTES`. Vikunja controls CSV row limits.
+- Attachment upload: at most 20 files per call, with both per-file and aggregate
+  byte limits. Read paths must stay under `VIKUNJA_ATTACHMENT_SOURCE_ROOTS`.
+- Full task get: five comments and 20 attachments by default, each configurable
+  up to 100. Every response mode obeys `maxResponseChars`.
+- Project export: 1,000 tasks by default with or without rich data. Per-task
+  rich collections default to 100 items and fail explicitly rather than
+  silently truncating.
 - Idempotent CSV import: 1,000 rows per call. Same-key reruns skip rows recorded
   in the durable local ledger. Native migration remains faster.
 - Multi-project lists page each project independently. Prefer `countOnly`

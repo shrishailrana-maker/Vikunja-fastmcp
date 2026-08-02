@@ -21,6 +21,8 @@ export interface Config {
   vikunjaToken: string;
   vikunjaWebUrl: string; // e.g. "https://vikunja.example.com/"
   attachmentDownloadRoot: string;
+  // Local roots from which attachment and CSV-import source files may be read.
+  attachmentSourceRoots?: string[];
   // Upper bound (bytes) for a single attachment upload or download. Optional so
   // existing Config literals keep compiling; consumers fall back to a default.
   maxAttachmentBytes?: number;
@@ -91,10 +93,11 @@ export function normalizeUrl(urlStr: string): { apiUrl: string; webUrl: string }
   let apiUrl: string;
   let webUrl: string;
 
-  if (pathname.endsWith('/api/v2')) {
+  const lowerPathname = pathname.toLowerCase();
+  if (lowerPathname.endsWith('/api/v2')) {
     apiUrl = origin + pathname;
     webUrl = origin + '/';
-  } else if (pathname.includes('/api/v2')) {
+  } else if (lowerPathname.includes('/api/v2')) {
     // A path that embeds /api/v2 mid-way (e.g. "/api/v2/foo") is malformed;
     // appending another /api/v2 would produce a nonsense URL.
     throw new Error(
@@ -144,6 +147,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const attachmentDownloadRoot = env.VIKUNJA_ATTACHMENT_DOWNLOAD_ROOT?.trim()
     ? path.resolve(env.VIKUNJA_ATTACHMENT_DOWNLOAD_ROOT)
     : path.join(os.tmpdir(), 'vikunja-fastmcp', 'attachments');
+  const attachmentSourceRoots = env.VIKUNJA_ATTACHMENT_SOURCE_ROOTS?.trim()
+    ? env.VIKUNJA_ATTACHMENT_SOURCE_ROOTS.split(path.delimiter)
+        .map((root) => root.trim())
+        .filter(Boolean)
+        .map((root) => path.resolve(root))
+    : [path.resolve(process.cwd()), path.resolve(os.tmpdir())];
 
   // Allow operators to raise/lower the attachment size ceiling; ignore
   // non-positive or non-numeric values and fall back to the default.
@@ -188,6 +197,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     vikunjaToken: token,
     vikunjaWebUrl: normalizedWebUrl,
     attachmentDownloadRoot,
+    attachmentSourceRoots,
     maxAttachmentBytes,
     responseMode,
     toolProfile: loadToolProfile(env),

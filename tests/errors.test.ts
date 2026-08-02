@@ -10,11 +10,35 @@
  */
 
 import { VikunjaError, redactSecrets, mapStatusToCode, toErrorEnvelope } from '../src/errors.js';
+import { GitHubIssueDestination } from '../src/github-destination.js';
 
 const TEST_TOKEN = `tk_${'a'.repeat(40)}`;
 
 describe('Errors and Redaction tests', () => {
+  it('maps a malformed GitHub API URL to the typed safety error', () => {
+    const previous = process.env.GITHUB_TOKEN;
+    process.env.GITHUB_TOKEN = 'neutral-test-token';
+    try {
+      expect(
+        () => new GitHubIssueDestination({ owner: 'example', repo: 'tracker', apiUrl: '::bad' }),
+      ).toThrow(expect.objectContaining({ code: 'UNSAFE_GITHUB_API_URL' }));
+    } finally {
+      if (previous === undefined) delete process.env.GITHUB_TOKEN;
+      else process.env.GITHUB_TOKEN = previous;
+    }
+  });
   describe('redactSecrets', () => {
+    it('redacts GitHub token formats and configured GitHub environment tokens', () => {
+      const previous = process.env.GITHUB_TOKEN;
+      process.env.GITHUB_TOKEN = `github_pat_${'x'.repeat(30)}`;
+      try {
+        const input = `github_pat_${'a'.repeat(30)} ghp_${'b'.repeat(30)} ${process.env.GITHUB_TOKEN}`;
+        expect(redactSecrets(input)).not.toMatch(/github_pat_|ghp_/);
+      } finally {
+        if (previous === undefined) delete process.env.GITHUB_TOKEN;
+        else process.env.GITHUB_TOKEN = previous;
+      }
+    });
     it('should redact token-like string from text', () => {
       const input = `Received error for token ${TEST_TOKEN} and token tk_abc123`;
       const output = redactSecrets(input);

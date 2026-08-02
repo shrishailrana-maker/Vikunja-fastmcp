@@ -31,6 +31,25 @@ export interface TeamMember {
   membershipId?: number;
 }
 
+const adminMutationQueues = new Map<string, Promise<void>>();
+
+async function serializeAdminMutation<T>(key: string, operation: () => Promise<T>): Promise<T> {
+  const previous = adminMutationQueues.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const queued = previous.then(() => current);
+  adminMutationQueues.set(key, queued);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (adminMutationQueues.get(key) === queued) adminMutationQueues.delete(key);
+  }
+}
+
 export async function createTeam(client: VikunjaApiClient, name: string): Promise<Team> {
   return client.request<Team>('POST', '/teams', {
     body: { name },
@@ -195,33 +214,45 @@ export async function setTeamMemberAdmin(
   usernameOrId: string | number,
   admin: boolean,
 ): Promise<TeamMember> {
-  const members = await fetchTeamMembers(client, teamId);
-  const member = findTeamMember(members, usernameOrId);
-  if (!member) {
-    throw new VikunjaError({
-      status: 404,
-      code: 'MEMBER_NOT_FOUND',
-      method: 'POST',
-      path: `/teams/${teamId}/members/${String(usernameOrId).trim()}/admin`,
-      message: `Member "${usernameOrId}" is not in team ${teamId}.`,
-      fieldErrors: [],
-    });
-  }
+  return serializeAdminMutation(
+    `${teamId}:${String(usernameOrId).trim().toLowerCase()}`,
+    async () => {
+      const members = await fetchTeamMembers(client, teamId);
+      const member = findTeamMember(members, usernameOrId);
+      if (!member) {
+        throw new VikunjaError({
+          status: 404,
+          code: 'MEMBER_NOT_FOUND',
+          method: 'POST',
+          path: `/teams/${teamId}/members/${String(usernameOrId).trim()}/admin`,
+          message: `Member "${usernameOrId}" is not in team ${teamId}.`,
+          fieldErrors: [],
+        });
+      }
 
-  if (member.admin === admin) {
-    return member;
-  }
+      if (member.admin === admin) {
+        return member;
+      }
 
-  // POST admin is a toggle on this API — only call when state must change.
-  await client.request<any>(
-    'POST',
-    `/teams/${teamId}/members/${encodeURIComponent(member.username)}/admin`,
+      // POST admin is a toggle on this API — only call when state must change.
+      await client.request<any>(
+        'POST',
+        `/teams/${teamId}/members/${encodeURIComponent(member.username)}/admin`,
+      );
+
+      // Re-fetch to return authoritative state after the toggle.
+      const refreshed = findTeamMember(await fetchTeamMembers(client, teamId), member.username);
+      if (refreshed && refreshed.admin === admin) {
+        return refreshed;
+      }
+      throw new VikunjaError({
+        status: 502,
+        code: 'MEMBER_ADMIN_UPDATE_UNVERIFIED',
+        method: 'POST',
+        path: `/teams/${teamId}/members/${encodeURIComponent(member.username)}/admin`,
+        message: `Vikunja accepted the admin toggle for "${member.username}" but the requested state could not be verified. Re-read the team before retrying.`,
+        fieldErrors: [],
+      });
+    },
   );
-
-  // Re-fetch to return authoritative state after the toggle.
-  const refreshed = findTeamMember(await fetchTeamMembers(client, teamId), member.username);
-  if (refreshed) {
-    return refreshed;
-  }
-  return { ...member, admin };
 }

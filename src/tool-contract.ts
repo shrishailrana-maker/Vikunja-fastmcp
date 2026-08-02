@@ -65,9 +65,11 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
       optional: [
         ...taskSelector,
         'commentLimit (full mode only; default 5, max 100)',
+        'attachmentLimit (full mode only; default 20, max 100)',
         'fields (projected task fields in minimal mode)',
         'includeUrl (default false)',
         'titleMaxChars',
+        'maxResponseChars',
         'responseMode (minimal default; receipt/compact/standard/full explicit)',
       ],
       execution: 'Direct compact/standard GET; full mode composes comments and attachments',
@@ -281,7 +283,7 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
       ],
       optional: ['mimeType', 'computeSha256', 'warnOnDuplicate', 'responseMode'],
       execution: 'Multipart POST per file after identity resolution',
-      note: 'Local hashes and duplicate warnings are opt-in; the server does not expose hashes.',
+      note: 'Local hashes and duplicate warnings are opt-in. Results separate uploaded, failed, and outcome-unknown files.',
     },
     {
       action: 'list-attachments',
@@ -572,23 +574,26 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
         'includeComments',
         'includeAttachments',
         'includeRelations',
+        'taskLimit (default 1000)',
+        'detailLimit (default 100 per task)',
+        'overwrite (default false)',
       ],
       execution: 'MCP-composed paginated export to sandboxed JSON or CSV',
-      note: 'Creator is always included; comments, attachments, and relations are fetched only when their include flags are true.',
+      note: 'Creator is always included; comments, attachments, and relations are fetched only when their include flags are true. Rich exports fail clearly when configured task or per-task detail limits are exceeded.',
     },
   ],
   vikunja_project_migration: [
     {
       action: 'preview',
       required: ['projectSelector', 'destination', 'actor', 'idempotencyKey'],
-      optional: ['publicSanitize (default true)'],
+      optional: ['publicSanitize (default true)', 'taskLimit', 'detailLimit'],
       execution: 'Versioned sanitized manifest written under the configured local sandbox',
       note: 'No GitHub write occurs; binary attachment transfer is reported unsupported.',
     },
     {
       action: 'run',
       required: ['projectSelector', 'destination', 'actor', 'idempotencyKey'],
-      optional: ['archiveSource', 'publicSanitize (default true)'],
+      optional: ['archiveSource', 'publicSanitize (default true)', 'taskLimit', 'detailLimit'],
       execution:
         'Durable per-task GitHub create/reuse, comment copy, read-back, optional source close',
       note: 'GITHUB_TOKEN or GH_TOKEN is read from the process environment and never accepted as a tool argument.',
@@ -612,7 +617,7 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     { action: 'status', execution: 'Direct GET /user/export' },
     {
       action: 'download',
-      optional: ['password', 'destinationPath'],
+      optional: ['password', 'destinationPath', 'overwrite (default false)'],
       execution: 'Authenticated streaming POST to sandboxed local disk',
       note: 'Some Vikunja servers require JWT/local-password authentication for user exports.',
     },
@@ -649,6 +654,7 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
       required: ['targetUrl', 'events'],
       optional: ['scope', 'projectSelector', 'secret', 'basicAuthUser', 'basicAuthPassword'],
       execution: 'Direct project or user webhook create; credentials are write-only',
+      note: 'Targets must be credential-free HTTPS URLs on public hosts.',
     },
     {
       action: 'update',

@@ -64,6 +64,13 @@ describe('Identity and Resolution Cache tests', () => {
   });
 
   describe('resolveProject', () => {
+    it('rejects a project response that omits its title', async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ id: 101 }));
+      await expect(resolveProject(client, { id: 101 })).rejects.toMatchObject({
+        status: 502,
+        code: 'INVALID_API_RESPONSE',
+      });
+    });
     it('should resolve project by ID successfully', async () => {
       mockFetch.mockResolvedValue({
         ok: true,
@@ -77,6 +84,13 @@ describe('Identity and Resolution Cache tests', () => {
         'https://vikunja.example.com/api/v2/projects/101',
         expect.anything(),
       );
+
+      mockFetch.mockClear();
+      await expect(resolveProject(client, { id: 101 })).resolves.toEqual({
+        id: 101,
+        title: 'Alpha',
+      });
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it('rejects contradictory project id and title selectors', async () => {
@@ -538,11 +552,6 @@ describe('Identity and Resolution Cache tests', () => {
         .mockResolvedValueOnce({
           ok: true,
           status: 200,
-          text: async () => JSON.stringify({ id: 102, title: 'Beta', identifier: 'BETA' }),
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
-          status: 200,
           text: async () =>
             JSON.stringify({
               items: [
@@ -567,9 +576,52 @@ describe('Identity and Resolution Cache tests', () => {
         id: 9005,
       });
     });
+
+    it('refreshes a cached project catalog once for a newly assigned identifier', async () => {
+      cache.setProjectIdentifiers([{ id: 101, title: 'Alpha', identifier: 'OLD' }]);
+      mockFetch
+        .mockResolvedValueOnce(
+          jsonResponse(projectPage([{ id: 101, title: 'Alpha', identifier: 'ALPHA' }])),
+        )
+        .mockResolvedValueOnce(
+          jsonResponse({
+            items: [
+              {
+                id: 9005,
+                index: 5,
+                identifier: 'ALPHA-5',
+                title: 'Task',
+                project_id: 101,
+              },
+            ],
+            page: 1,
+            per_page: 2,
+            total: 1,
+            total_pages: 1,
+          }),
+        );
+
+      await expect(resolveTask(client, { identifier: 'ALPHA-5' })).resolves.toMatchObject({
+        id: 9005,
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
   });
 
   describe('Cache TTL and Invalidation', () => {
+    it('preserves duplicate project-title ambiguity after cache population', async () => {
+      cache.setProjectIdentifiers([
+        { id: 101, title: 'Alpha', identifier: 'A1' },
+        { id: 102, title: 'alpha', identifier: 'A2' },
+      ]);
+
+      await expect(resolveProject(client, { title: 'ALPHA' })).rejects.toMatchObject({
+        status: 409,
+        code: 'PROJECT_TITLE_AMBIGUOUS',
+      });
+      expect(global.fetch).not.toHaveBeenCalled();
+    });
+
     it('should expire entries after 45s', () => {
       const now = Date.now();
       jest.useFakeTimers();

@@ -32,6 +32,7 @@ describe('Attachment Upload, Verification and Download tests', () => {
     vikunjaToken: 'tk_token',
     vikunjaWebUrl: 'https://vikunja.example.com/',
     attachmentDownloadRoot: path.join(os.tmpdir(), 'vikunja-fastmcp-test', 'attachments'),
+    attachmentSourceRoots: [os.tmpdir()],
   };
 
   let client: VikunjaApiClient;
@@ -640,6 +641,69 @@ describe('Attachment Upload, Verification and Download tests', () => {
       expect(mockFetch).toHaveBeenCalledTimes(calls + 1);
     });
 
+    it('resumes a partial attachment batch without re-uploading completed files', async () => {
+      mockFetch.mockResolvedValueOnce(okTask);
+      mockFetch.mockResolvedValueOnce(uploadOk(3001, 'a.txt'));
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 422,
+        text: async () => JSON.stringify({ detail: 'Rejected test file' }),
+      } as Response);
+
+      const files = [
+        { filename: 'a.txt', base64Content: Buffer.from('a').toString('base64') },
+        { filename: 'b.txt', base64Content: Buffer.from('b').toString('base64') },
+      ];
+      const first = await attachFiles(client, 9005, files, undefined, 'attach-partial');
+      expect(first).toMatchObject({ uploaded: [{ id: 3001 }], failed: [{ file: 'b.txt' }] });
+
+      mockFetch.mockResolvedValueOnce(okTask);
+      mockFetch.mockResolvedValueOnce(uploadOk(3002, 'b.txt'));
+      const second = await attachFiles(client, 9005, files, undefined, 'attach-partial');
+
+      expect(second.uploaded.map((attachment) => attachment.id)).toEqual([3001, 3002]);
+      expect(second.failed).toEqual([]);
+      expect(mockFetch.mock.calls.filter((call: any) => call[1]?.method === 'POST')).toHaveLength(
+        3,
+      );
+    });
+
+    it('reports a missing local file as a per-file validation failure', async () => {
+      mockFetch.mockResolvedValueOnce(okTask);
+      const result = await attachFiles(client, 9005, [
+        { filePath: path.join(os.tmpdir(), 'does-not-exist-vfm.log') },
+      ]);
+      expect(result.uploaded).toEqual([]);
+      expect(result.failed).toEqual([
+        expect.objectContaining({ error: expect.stringContaining('does not exist') }),
+      ]);
+      expect(result.unknown).toEqual([]);
+    });
+
+    it('reports an ambiguous upload as outcome unknown instead of definitely failed', async () => {
+      mockFetch.mockResolvedValueOnce(okTask);
+      mockFetch.mockRejectedValueOnce(new Error('connection reset after upload'));
+      const files = [
+        { filename: 'evidence.txt', base64Content: Buffer.from('evidence').toString('base64') },
+      ];
+
+      const first = await attachFiles(client, 9005, files, undefined, 'ambiguous-upload');
+      expect(first.failed).toEqual([]);
+      expect(first.unknown).toEqual([
+        expect.objectContaining({ file: 'evidence.txt', code: 'NETWORK_ERROR' }),
+      ]);
+
+      mockFetch.mockResolvedValueOnce(okTask);
+      const second = await attachFiles(client, 9005, files, undefined, 'ambiguous-upload');
+      expect(second.failed).toEqual([]);
+      expect(second.unknown).toEqual([
+        expect.objectContaining({ code: 'IDEMPOTENCY_OUTCOME_UNKNOWN' }),
+      ]);
+      expect(mockFetch.mock.calls.filter((call: any) => call[1]?.method === 'POST')).toHaveLength(
+        1,
+      );
+    });
+
     it('sanitizes filename and mimeType to prevent multipart header injection', async () => {
       mockFetch.mockResolvedValueOnce(okTask);
       mockFetch.mockResolvedValueOnce(uploadOk(3009, 'evil.txt'));
@@ -668,16 +732,13 @@ describe('Attachment Upload, Verification and Download tests', () => {
 
     it('rejects an oversized base64 payload before decoding it', async () => {
       const smallClient = new VikunjaApiClient({ ...config, maxAttachmentBytes: 3 });
-      mockFetch.mockResolvedValueOnce(okTask);
 
-      const res = await attachFiles(smallClient, 9005, [
-        { filename: 'big.bin', base64Content: Buffer.from('abcdef').toString('base64') },
-      ]);
-
-      expect(res.uploaded.length).toBe(0);
-      expect(res.failed[0].error).toMatch(/exceeding the 3-byte limit/);
-      // No upload request was attempted (only the task-resolve fetch ran).
-      expect(mockFetch.mock.calls.filter((c: any) => c[1]?.method === 'POST').length).toBe(0);
+      await expect(
+        attachFiles(smallClient, 9005, [
+          { filename: 'big.bin', base64Content: Buffer.from('abcdef').toString('base64') },
+        ]),
+      ).rejects.toMatchObject({ status: 413, code: 'ATTACHMENT_BATCH_TOO_LARGE' });
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it('rejects malformed base64 instead of silently decoding partial bytes', async () => {
@@ -694,27 +755,86 @@ describe('Attachment Upload, Verification and Download tests', () => {
 
     it('checks a local file size before reading it into memory', async () => {
       const smallClient = new VikunjaApiClient({ ...config, maxAttachmentBytes: 3 });
-      mockFetch.mockResolvedValueOnce(okTask);
-      jest.spyOn(fs, 'stat').mockResolvedValue({ size: 10, isFile: () => true } as any);
-      const readSpy = jest.spyOn(fs, 'readFile').mockResolvedValue(Buffer.alloc(10) as any);
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vikunja-source-limit-'));
+      const file = path.join(root, 'large.log');
+      await fs.writeFile(file, Buffer.alloc(10));
+      const readSpy = jest.spyOn(fs, 'readFile');
+      try {
+        await expect(attachFiles(smallClient, 9005, [{ filePath: file }])).rejects.toMatchObject({
+          status: 413,
+          code: 'ATTACHMENT_BATCH_TOO_LARGE',
+        });
+        expect(readSpy).not.toHaveBeenCalled();
+        expect(mockFetch).not.toHaveBeenCalled();
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
 
-      const res = await attachFiles(smallClient, 9005, [{ filePath: '/tmp/large.log' }]);
+    it('rejects more than 20 attachments before resolving the task', async () => {
+      await expect(
+        attachFiles(
+          client,
+          9005,
+          Array.from({ length: 21 }, (_, index) => ({
+            filename: `file-${index}.txt`,
+            base64Content: Buffer.from('x').toString('base64'),
+          })),
+        ),
+      ).rejects.toMatchObject({ status: 400, code: 'ATTACHMENT_BATCH_TOO_LARGE' });
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
 
-      expect(res.uploaded).toHaveLength(0);
-      expect(res.failed[0].error).toMatch(/exceeding the 3-byte limit/);
-      expect(readSpy).not.toHaveBeenCalled();
+    it('rejects aggregate attachment bytes before resolving the task', async () => {
+      const smallClient = new VikunjaApiClient({ ...config, maxAttachmentBytes: 5 });
+      await expect(
+        attachFiles(smallClient, 9005, [
+          { filename: 'a.txt', base64Content: Buffer.from('abc').toString('base64') },
+          { filename: 'b.txt', base64Content: Buffer.from('def').toString('base64') },
+        ]),
+      ).rejects.toMatchObject({ status: 413, code: 'ATTACHMENT_BATCH_TOO_LARGE' });
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it('reads a local filePath, infers metadata, and uploads it', async () => {
-      jest.spyOn(fs, 'stat').mockResolvedValue({ size: 5, isFile: () => true } as any);
-      const readSpy = jest.spyOn(fs, 'readFile').mockResolvedValue(Buffer.from('hello') as any);
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vikunja-source-read-'));
+      const file = path.join(root, 'notes.txt');
+      await fs.writeFile(file, 'hello');
+      const readSpy = jest.spyOn(fs, 'readFile');
       mockFetch.mockResolvedValueOnce(okTask);
       mockFetch.mockResolvedValueOnce(uploadOk(3003, 'notes.txt'));
+      try {
+        const res = await attachFiles(client, 9005, [{ filePath: file }]);
+        expect(readSpy).toHaveBeenCalledWith(await fs.realpath(file));
+        expect(res.uploaded[0].id).toBe(3003);
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
 
-      const res = await attachFiles(client, 9005, [{ filePath: '/tmp/notes.txt' }]);
-
-      expect(readSpy).toHaveBeenCalledWith('/tmp/notes.txt');
-      expect(res.uploaded[0].id).toBe(3003);
+    it('rejects local upload paths outside the configured source roots', async () => {
+      const allowed = await fs.mkdtemp(path.join(os.tmpdir(), 'vikunja-source-allowed-'));
+      const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'vikunja-source-outside-'));
+      const file = path.join(outside, 'secret.txt');
+      await fs.writeFile(file, 'secret');
+      const restrictedClient = new VikunjaApiClient({
+        ...config,
+        attachmentSourceRoots: [allowed],
+      });
+      try {
+        await expect(
+          attachFiles(restrictedClient, 9005, [{ filePath: file }]),
+        ).rejects.toMatchObject({
+          status: 403,
+          code: 'FORBIDDEN_SOURCE_PATH',
+        });
+        expect(mockFetch).not.toHaveBeenCalled();
+      } finally {
+        await Promise.all([
+          fs.rm(allowed, { recursive: true, force: true }),
+          fs.rm(outside, { recursive: true, force: true }),
+        ]);
+      }
     });
 
     it('reports a per-file failure without aborting the batch', async () => {

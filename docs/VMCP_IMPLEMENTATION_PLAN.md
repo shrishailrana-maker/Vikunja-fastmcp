@@ -6,7 +6,10 @@ This plan covers every VMCP backlog item migrated on 2026-08-02. GitHub issues
 `#1` through `#45` in `shrishailrana-maker/Vikunja-fastmcp` are now the source
 of truth; the previous Vikunja tasks are a closed archive with migration links.
 Migration findings and follow-up work are tracked in GitHub issues `#46`
-through `#48`.
+through `#48`. The first independent post-implementation audit is tracked in
+issues `#49` through `#57`. The deduplicated Grok/Kimi/Fable source audit is
+tracked in issues `#58` through `#67`, with shared findings also added to the
+existing issues they refine.
 The primary product goal is to reduce agent context usage without weakening
 project scope, task identity, attribution, idempotency, evidence-before-close,
 or truthful error reporting.
@@ -35,7 +38,7 @@ characters, estimated tokens, API-call count, and wall time.
 ## Implementation Status
 
 As of 2026-08-02, Phases 0 through 7 are implemented and fully verified in the
-local branch. The automated gate passes 370 tests across 23 suites, the atomic
+local branch. The automated gate passes 427 tests across 23 suites, the atomic
 build and generated API check pass, and the response and tool-schema budgets
 are green. Package inspection and the production dependency audit are clean.
 The live three-role matrix remains a release acceptance step because temporary
@@ -51,10 +54,22 @@ The fixed neutral response benchmark now reports:
 - comment-and-close receipt: 373 characters, down 84.4 percent;
 - compact identity/401/403 errors: 157 through 198 characters.
 
-The tool-schema gate reports 24,880 characters for `core`, 47,674 for `qa`,
-51,375 for `developer`, 55,505 for `full`, and 88,725 for `compatibility`.
+The tool-schema gate reports 25,075 characters for `core`, 46,339 for `qa`,
+50,636 for `developer`, 55,896 for `full`, and 82,044 for `compatibility`.
 The default profile is therefore 72 percent smaller than the explicit
 compatibility surface.
+
+The 2026-08-02 independent audits added hardening rounds for continuation
+cursor integrity, bounded rich responses and exports, attachment source and
+destination containment, ambiguous durable-write outcomes, stale migration
+sources, identity-cache ambiguity, runtime JSON-schema limits, private local
+artifacts, token redaction, direct bulk limits, task verification scope,
+ordered comments, CSV parsing, Markdown round trips, public sanitization,
+export overwrite semantics, credential-scoped idempotency, attachment retry
+truthfulness, webhook safety, template locking, API boundary validation, and
+compact receipt honesty. The full local gate passes. Two independent verifier
+runs timed out without a verdict, so no independent approval is claimed. These
+fixes remain local and do not authorize a push or publication.
 
 ## Migration Learnings
 

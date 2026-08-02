@@ -12,6 +12,8 @@ import {
   exportProject,
 } from '../src/data.js';
 import { TemplateStore } from '../src/templates.js';
+import { cache } from '../src/identity.js';
+import { setTeamMemberAdmin } from '../src/teams.js';
 
 const config = {
   vikunjaUrl: 'https://vikunja.example.com/api/v2',
@@ -26,6 +28,7 @@ describe('restored compatibility capabilities', () => {
 
   beforeEach(() => {
     mockFetch = jest.spyOn(global, 'fetch');
+    cache.clearProjects();
   });
 
   afterEach(() => mockFetch.mockRestore());
@@ -186,6 +189,19 @@ describe('restored compatibility capabilities', () => {
     expect(created).not.toHaveProperty('secret');
   });
 
+  it.each([
+    'http://hooks.example.com/a',
+    'https://127.0.0.1/a',
+    'https://10.0.0.5/a',
+    'https://user:password@hooks.example.com/a',
+    'not a url',
+  ])('rejects unsafe webhook target %s before any request', async (targetUrl) => {
+    await expect(
+      createWebhook(client, { id: 2 }, targetUrl, ['task.created']),
+    ).rejects.toMatchObject({ code: 'UNSAFE_WEBHOOK_URL' });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
   it('uses the user event catalog and updates only mutable webhook events', async () => {
     mockFetch
       .mockResolvedValueOnce({
@@ -250,6 +266,13 @@ describe('restored compatibility capabilities', () => {
         ok: true,
         status: 200,
         text: async () => 'null',
+      } as Response);
+      expect(await getUserExportStatus(client)).toEqual({ available: false });
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => '{}',
       } as Response);
       expect(await getUserExportStatus(client)).toEqual({ available: false });
     } finally {
@@ -349,6 +372,29 @@ describe('restored compatibility capabilities', () => {
     }
   });
 
+  it('overwrites a user export only when overwrite is explicitly true', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vikunja-user-export-'));
+    const exportClient = new VikunjaApiClient({ ...config, attachmentDownloadRoot: root });
+    const destination = path.join(root, 'export.zip');
+    await fs.writeFile(destination, 'old');
+    try {
+      mockFetch.mockResolvedValueOnce(new Response('new', { status: 200 }));
+      await expect(downloadUserExport(exportClient, '', 'export.zip')).rejects.toMatchObject({
+        code: 'FILE_EXISTS',
+      });
+
+      mockFetch.mockResolvedValueOnce(new Response('new', { status: 200 }));
+      await expect(downloadUserExport(exportClient, '', 'export.zip', true)).resolves.toMatchObject(
+        {
+          size: 3,
+        },
+      );
+      expect(await fs.readFile(destination, 'utf8')).toBe('new');
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('exports task creators and optionally includes normalized comments', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vikunja-project-export-'));
     const exportClient = new VikunjaApiClient({ ...config, attachmentDownloadRoot: root });
@@ -417,6 +463,7 @@ describe('restored compatibility capabilities', () => {
       expect(exported.tasks[0].commentCount).toBe(1);
 
       mockFetch.mockClear();
+      cache.clearProjects();
       mockFetch
         .mockResolvedValueOnce({
           ok: true,
@@ -493,6 +540,10 @@ describe('restored compatibility capabilities', () => {
                   file: { name: 'run.log', mime: 'text/plain', size: 321 },
                 },
               ],
+              page: 1,
+              per_page: 100,
+              total: 1,
+              total_pages: 1,
             }),
         } as Response)
         .mockResolvedValueOnce({
@@ -525,6 +576,7 @@ describe('restored compatibility capabilities', () => {
       });
 
       mockFetch.mockClear();
+      cache.clearProjects();
       mockFetch
         .mockResolvedValueOnce({
           ok: true,
@@ -540,7 +592,8 @@ describe('restored compatibility capabilities', () => {
         .mockResolvedValueOnce({
           ok: true,
           status: 200,
-          text: async () => JSON.stringify({ items: [] }),
+          text: async () =>
+            JSON.stringify({ items: [], page: 1, per_page: 100, total: 0, total_pages: 0 }),
         } as Response)
         .mockResolvedValueOnce({
           ok: true,
@@ -567,6 +620,26 @@ describe('restored compatibility capabilities', () => {
     }
   });
 
+  it('rejects rich exports above the bounded 1000-task default before detail fan-out', async () => {
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ id: 2, title: 'Alpha' }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({ items: [], page: 1, per_page: 100, total: 1001, total_pages: 11 }),
+      } as Response);
+
+    await expect(
+      exportProject(client, { id: 2 }, 'json', 'bounded.json', true),
+    ).rejects.toMatchObject({ status: 413, code: 'EXPORT_TASK_LIMIT_EXCEEDED' });
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
   it('stores templates atomically in one explicit local file', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vikunja-template-'));
     const file = path.join(root, 'templates.json');
@@ -580,5 +653,46 @@ describe('restored compatibility capabilities', () => {
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
+  });
+
+  it('serializes concurrent template mutations across store instances', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vikunja-template-lock-'));
+    const file = path.join(root, 'templates.json');
+    try {
+      await Promise.all([
+        new TemplateStore(file).create('Bug', { title: 'Bug' }),
+        new TemplateStore(file).create('Feature', { title: 'Feature' }),
+      ]);
+      expect((await new TemplateStore(file).list()).map((item) => item.name).sort()).toEqual([
+        'Bug',
+        'Feature',
+      ]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when a team-admin toggle cannot be verified by read-back', async () => {
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            id: 8,
+            name: 'Alpha',
+            members: [{ id: 7, username: 'dev', admin: false }],
+          }),
+      } as Response)
+      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => '{}' } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ id: 8, name: 'Alpha', members: [] }),
+      } as Response);
+
+    await expect(setTeamMemberAdmin(client, 8, 'dev', true)).rejects.toMatchObject({
+      code: 'MEMBER_ADMIN_UPDATE_UNVERIFIED',
+    });
   });
 });

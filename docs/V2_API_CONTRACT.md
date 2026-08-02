@@ -308,7 +308,9 @@ default and survive MCP restarts and concurrent processes on the same machine.
 Reusing one caller key with a different payload fails with
 `IDEMPOTENCY_KEY_REUSED`. An atomic local execution lease prevents concurrent
 same-key writes on one machine; this is not a distributed lock across
-machines. The default database filename is scoped to `VIKUNJA_URL`.
+machines. The default database filename and durable operation keys are scoped
+to both `VIKUNJA_URL` and a one-way hash of the configured API credential, so
+receipts are not reused across identities on a shared server.
 Task creation, every comment mutation, closing, import, and mutating bulk
 operations require `actor`; stored descriptions/comments receive `(by Actor)`
 once and compact receipts do not echo submitted evidence. `update` requires
@@ -548,7 +550,9 @@ updating a bug:
   values, or from base64 plus explicit filenames, and returns attachment
   metadata. Optional `computeSha256` records a local upload hash;
   `warnOnDuplicate` compares available name/size/hash metadata without claiming
-  server-enforced deduplication.
+  server-enforced deduplication. Receipts separate `uploaded`, definite
+  `failed`, and `unknown` remote outcomes. An unknown upload is inspected or
+  retried with the identical idempotency key; it is never silently replayed.
 - `list-attachments` returns attachment IDs, names, sizes, and URLs without
   file bytes. `page`, `perPage`, `countOnly`, and `filenamePrefix` provide a
   bounded response. Existing calls without those options retain the simple
@@ -592,7 +596,8 @@ signed-in human can open the attachment in Vikunja.
 
 Binary data and base64 are never placed in the MCP response. Downloads are
 streamed to disk, bounded by a configured size limit, use a safe basename, and
-refuse to overwrite an existing file unless explicitly allowed. Upload is
+refuse to overwrite an existing file unless explicitly allowed. User and
+project exports expose the same explicit `overwrite` control. Upload is
 followed by metadata readback so the tester and developer can verify the file
 belongs to the intended task.
 
@@ -600,6 +605,18 @@ Download and export destinations are checked after resolving parent-directory
 links, so a symlink or Windows junction inside the sandbox cannot redirect a
 write outside it. CSV exports prefix spreadsheet formula-leading cells with an
 apostrophe before CSV quoting.
+
+Upload and CSV-import source files must be regular, non-symlink files under a
+configured `VIKUNJA_ATTACHMENT_SOURCE_ROOTS` directory. The default roots are
+the MCP working directory and the operating-system temp directory. Attachment
+uploads are limited to 20 files per call and enforce both per-file and aggregate
+byte limits.
+
+Project export is bounded before rich per-task fan-out. Basic exports default
+to 1,000 tasks. Exports that include comments, attachments, or relations also
+default to 1,000 tasks and 100 items per requested collection per task. A caller
+may choose lower `taskLimit` and `detailLimit` values; exceeding either limit
+fails explicitly rather than silently truncating an audit artifact.
 
 ### Tester-To-Developer Log Workflow
 
@@ -694,11 +711,16 @@ CSV import, templates, and bulk task work stay thin: direct v2 routes where
 available and explicitly documented MCP composition otherwise.
 
 Machine-local templates live at `~/.vikunja-fastmcp/templates.json` by default
-or at `VIKUNJA_TEMPLATE_FILE`. Atomic file replacement prevents partial writes,
-but the store is not a distributed lock across processes. Project and user
+or at `VIKUNJA_TEMPLATE_FILE`. Atomic file replacement and an ownership-checked
+cross-process mutation lock prevent concurrent local creates and deletes from
+overwriting each other. Project and user
 exports download under the same sandbox used by attachments. Passwords,
 webhook secrets, and basic-auth credentials are write-only inputs and never
 appear in responses.
+
+Webhook create accepts only credential-free HTTPS destinations on public
+hosts. Cleartext and literal loopback, link-local, or private-network targets
+fail before Vikunja receives the configuration.
 
 User-data export authentication is server-specific. A configured Vikunja
 server may accept API tokens as advertised by OpenAPI or may require a JWT and

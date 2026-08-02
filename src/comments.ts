@@ -115,7 +115,7 @@ export async function listComments(
     for (; scanPage <= maxScanPages; scanPage += 1) {
       const rawPage = await client.request<any>(
         'GET',
-        `/tasks/${task.id}/comments?order_by=desc&page=${scanPage}&per_page=100`,
+        `/tasks/${task.id}/comments?sort_by=created&order_by=desc&page=${scanPage}&per_page=100`,
       );
       const items = toItemArray(rawPage).map(normalizeComment);
       if (scanPage === 1) latestCommentAt = items[0]?.created ?? null;
@@ -171,7 +171,7 @@ export async function listComments(
   if (options.includeLatest) {
     const latest = await client.request<any>(
       'GET',
-      `/tasks/${task.id}/comments?order_by=desc&page=1&per_page=1`,
+      `/tasks/${task.id}/comments?sort_by=created&order_by=desc&page=1&per_page=1`,
     );
     latestCommentAt = toItemArray(latest)[0]?.created ?? null;
   }

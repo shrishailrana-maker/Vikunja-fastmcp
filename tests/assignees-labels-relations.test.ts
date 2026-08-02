@@ -22,6 +22,7 @@ import {
   unrelateTask,
   listRelations,
   resolveLabel,
+  resolveUser,
 } from '../src/tasks.js';
 import { cache } from '../src/identity.js';
 
@@ -40,10 +41,21 @@ describe('Assignees, Labels and Relations tests', () => {
     client = new VikunjaApiClient(config);
     mockFetch = jest.spyOn(global, 'fetch');
     cache.clearLabels();
+    cache.clearProjects();
   });
 
   afterEach(() => {
     mockFetch.mockRestore();
+  });
+
+  it('ignores malformed user rows while resolving an exact username', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({ items: [{ id: 1 }, { id: 7, username: 'developer' }], total_pages: 1 }),
+    } as Response);
+    await expect(resolveUser(client, 'developer')).resolves.toBe(7);
   });
 
   describe('Assignees', () => {

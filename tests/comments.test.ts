@@ -20,6 +20,7 @@ import {
 } from '../src/comments.js';
 import { createIfAbsent, closeWithEvidence } from '../src/tasks.js';
 import { idempotency } from '../src/idempotency.js';
+import { cache } from '../src/identity.js';
 
 describe('Comments and Compound Operations tests', () => {
   const config = {
@@ -36,6 +37,7 @@ describe('Comments and Compound Operations tests', () => {
     client = new VikunjaApiClient(config);
     mockFetch = jest.spyOn(global, 'fetch');
     idempotency.clear();
+    cache.clearProjects();
   });
 
   afterEach(() => {
@@ -248,6 +250,7 @@ describe('Comments and Compound Operations tests', () => {
         since: '2026-07-11T00:00:00Z',
       });
       expect(mockFetch.mock.calls[1][0]).toContain('order_by=desc&page=1&per_page=100');
+      expect(mockFetch.mock.calls[1][0]).toContain('sort_by=created');
     });
 
     it('should get comment details', async () => {
@@ -404,14 +407,7 @@ describe('Comments and Compound Operations tests', () => {
         text: async () => JSON.stringify({ items: [] }),
       } as Response);
 
-      // 3. Mock second project resolution inside createTask
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        text: async () => JSON.stringify({ id: 101, title: 'Alpha' }),
-      } as Response);
-
-      // 4. Mock task create POST
+      // 3. Mock task create POST; createTask reuses the resolved project cache.
       mockFetch.mockResolvedValueOnce({
         ok: true,
         status: 200,

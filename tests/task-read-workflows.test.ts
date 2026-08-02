@@ -82,6 +82,25 @@ describe('bounded task read workflows', () => {
     expect(mockFetch).toHaveBeenCalledTimes(3);
   });
 
+  it('keeps project context when verifying a project-index selector', async () => {
+    mockFetch
+      .mockResolvedValueOnce(response({ id: 101, title: 'Alpha' }))
+      .mockResolvedValueOnce(
+        response({
+          items: [{ id: 9005, index: 5, identifier: 'ALPHA-5', project_id: 101, title: 'Scoped' }],
+          total: 1,
+          page: 1,
+          total_pages: 1,
+        }),
+      )
+      .mockResolvedValueOnce(response({ items: [], total: 0, page: 1, total_pages: 0 }))
+      .mockResolvedValueOnce(response({ items: [], total: 0, page: 1, total_pages: 0 }));
+
+    await verifyTaskState(client, { projectIndex: 5 }, { id: 101 });
+
+    expect(mockFetch.mock.calls[1][0]).toContain('/projects/101/tasks?filter=');
+  });
+
   it('returns QA state, latest evidence, attachments, and relations in three API calls', async () => {
     const task = {
       id: 9005,
@@ -141,6 +160,7 @@ describe('bounded task read workflows', () => {
       latestVerification: { id: 44, verdict: 'PASS', actor: 'tester' },
     });
     expect(mockFetch).toHaveBeenCalledTimes(3);
+    expect(mockFetch.mock.calls[1][0]).toContain('sort_by=created');
   });
 
   it('builds one programme snapshot with assignee, blocked, stale, and changed counts', async () => {
@@ -204,6 +224,36 @@ describe('bounded task read workflows', () => {
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
+  it('compares changedSince values as instants rather than lexicographic strings', async () => {
+    mockFetch.mockResolvedValueOnce(response({ id: 101, title: 'Alpha' })).mockResolvedValueOnce(
+      response({
+        items: [
+          {
+            id: 1,
+            identifier: 'ALPHA-1',
+            title: 'Same instant before boundary',
+            done: false,
+            updated: '2026-07-01T01:00:00+02:00',
+          },
+        ],
+        page: 1,
+        per_page: 100,
+        total: 1,
+        total_pages: 1,
+      }),
+    );
+
+    const result = await programmeSnapshot(
+      client,
+      { id: 101 },
+      {
+        changedSince: '2026-07-01T00:00:00Z',
+      },
+    );
+
+    expect(result.changedCount).toBe(0);
+  });
+
   it('offers an MPF reconciliation preset without a second aggregation pass', async () => {
     mockFetch.mockResolvedValueOnce(response({ id: 101, title: 'Alpha' })).mockResolvedValueOnce(
       response({
@@ -263,6 +313,7 @@ describe('bounded task read workflows', () => {
         changedLimit: 1,
       },
     );
+    cache.clearProjects();
     const second = await programmeSnapshot(
       client,
       { id: 101 },

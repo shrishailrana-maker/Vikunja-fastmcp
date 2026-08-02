@@ -10,6 +10,7 @@
  */
 
 import { normalizeUrl, loadConfig } from '../src/config.js';
+import path from 'node:path';
 
 const TEST_TOKEN = `tk_${'a'.repeat(40)}`;
 
@@ -36,6 +37,12 @@ describe('Config tests', () => {
     it('should normalize server root url with api/v2/', () => {
       const { apiUrl, webUrl } = normalizeUrl('https://vikunja.example.com/api/v2/');
       expect(apiUrl).toBe('https://vikunja.example.com/api/v2');
+      expect(webUrl).toBe('https://vikunja.example.com/');
+    });
+
+    it('normalizes the v2 suffix case-insensitively without appending it twice', () => {
+      const { apiUrl, webUrl } = normalizeUrl('https://vikunja.example.com/API/V2');
+      expect(apiUrl).toBe('https://vikunja.example.com/API/V2');
       expect(webUrl).toBe('https://vikunja.example.com/');
     });
 
@@ -72,6 +79,9 @@ describe('Config tests', () => {
       expect(config.toolProfile).toBe('core');
       expect(config.requestTimeoutMs).toBe(30_000);
       expect(config.transferTimeoutMs).toBe(60_000);
+      expect(config.attachmentSourceRoots).toEqual(
+        expect.arrayContaining([expect.stringMatching(/vikunja-fastmcp|MCP|Temp/i)]),
+      );
     });
 
     it('accepts an operator-selected MCP response mode', () => {
@@ -176,6 +186,17 @@ describe('Config tests', () => {
         VIKUNJA_ATTACHMENT_DOWNLOAD_ROOT: './durable-attachments',
       });
       expect(config.attachmentDownloadRoot).toMatch(/durable-attachments$/);
+    });
+
+    it('accepts multiple local attachment source roots', () => {
+      const config = loadConfig({
+        VIKUNJA_URL: 'https://vikunja.example.com/api/v2',
+        VIKUNJA_API_TOKEN: 'test-token',
+        VIKUNJA_ATTACHMENT_SOURCE_ROOTS: ['one', 'two'].join(path.delimiter),
+      });
+      expect(config.attachmentSourceRoots).toHaveLength(2);
+      expect(config.attachmentSourceRoots?.[0]).toMatch(/one$/);
+      expect(config.attachmentSourceRoots?.[1]).toMatch(/two$/);
     });
 
     it('should throw if URL is missing', () => {

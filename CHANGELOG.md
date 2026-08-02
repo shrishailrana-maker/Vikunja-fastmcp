@@ -41,6 +41,45 @@
   migration manifests, including whitespace-normalized credentials, in
   addition to Vikunja credentials and private URLs.
 - Synchronize generated API defaults with the runtime's minimal response mode.
+- Treat expired or lease-lost durable writes as outcome-unknown so retries
+  cannot replay a mutation whose remote result is ambiguous.
+- Recheck migration source timestamps immediately before archival and pass the
+  same optimistic-concurrency value into the close operation.
+- Bound full task detail, rich project exports, attachment batches, aggregate
+  attachment bytes, project subsets, and direct bulk updates.
+- Preserve task-list page size inside continuation cursors and reject resumes
+  that change it.
+- Cache numeric project resolution, preserve duplicate-title ambiguity, and
+  share concurrent project-catalog requests.
+- Enforce local attachment/CSV source roots, reject source symlinks, create
+  private temp artifacts, and expand GitHub-token redaction.
+- Harden the emergency Python fallback against multipart-header injection,
+  spreadsheet formulas, symlink escapes, arbitrary source reads, and permissive
+  output files.
+- Emit Zod string, numeric, array, and object constraints in runtime MCP JSON
+  schemas instead of losing limits during conversion.
+- Deduplicate repeated complex JSON schemas through local definitions, keeping
+  every profile below its token budget while retaining action-specific fields.
+- Bound durable bulk status cursors and reject direct bulk updates above 100
+  tasks.
+- Preserve project scope in verification reads, sort latest-comment queries
+  explicitly, and compare delta timestamps by instant rather than by text.
+- Correct CSV date layouts, headerless row numbering, and row hashes so all
+  imported task fields participate in retry deduplication.
+- Preserve rich stored HTML during description append and harden Markdown link,
+  code, entity, and placeholder handling.
+- Redact credentialed public URLs, isolate durable receipts by API credential,
+  and reject unsafe cleartext, credentialed, or private webhook targets.
+- Add explicit overwrite controls and truthful user-export availability; raise
+  the bounded rich project-export default to 1,000 tasks.
+- Separate definite attachment failures from unknown remote outcomes, retry
+  failed create attachments without recreating the task, and report missing
+  local files per item.
+- Serialize template writes and team-admin toggles, validate malformed project
+  and user API rows, refresh stale project-identifier catalogs once, and avoid
+  fabricated write receipts or dry-run task links.
+- Make package metadata failures non-fatal, classify request timeouts as
+  offline diagnostics, and map malformed GitHub destinations to typed errors.
 
 ## 2.4.103 - 2026-07-31
 

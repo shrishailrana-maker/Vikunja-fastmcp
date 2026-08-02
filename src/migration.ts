@@ -16,6 +16,8 @@ export interface ProjectMigrationOptions {
   idempotencyKey: string;
   archiveSource?: boolean;
   publicSanitize?: boolean;
+  taskLimit?: number;
+  detailLimit?: number;
 }
 
 interface MigrationManifest {
@@ -60,7 +62,8 @@ function privateNetworkHostname(value: string): boolean {
       hostname.startsWith('fe8') ||
       hostname.startsWith('fe9') ||
       hostname.startsWith('fea') ||
-      hostname.startsWith('feb')
+      hostname.startsWith('feb') ||
+      /^fe[c-f]/.test(hostname)
     );
   }
   return (
@@ -84,7 +87,9 @@ export function sanitizePublicString(value: string, configuredToken?: string): s
   safe = safe.replace(/file:\/\/(?:\/|\\)?[^\s"'<>)]*/gi, '[private-path]');
   safe = safe.replace(/https?:\/\/(?:\[[^\]]+\]|[^\s/:?#)]+)(?::\d+)?[^\s)]*/gi, (url) => {
     try {
-      return privateNetworkHostname(new URL(url).hostname) ? '[private-url]' : url;
+      const parsed = new URL(url);
+      if (parsed.username || parsed.password) return '[credentialed-url]';
+      return privateNetworkHostname(parsed.hostname) ? '[private-url]' : url;
     } catch {
       return '[private-url]';
     }
@@ -299,6 +304,10 @@ async function buildManifest(
       true,
       true,
       true,
+      {
+        taskLimit: options.taskLimit ?? 5000,
+        detailLimit: options.detailLimit ?? 500,
+      },
     );
     exportedPath = exported.path;
     source = JSON.parse(await fs.readFile(exported.path, 'utf8'));
@@ -350,6 +359,46 @@ function migrationLeaseLost(): VikunjaError {
     message: 'Migration lease ownership was lost. No further source or destination writes ran.',
     fieldErrors: [],
   });
+}
+
+function migrationInProgress(operationId: string): VikunjaError {
+  return new VikunjaError({
+    status: 409,
+    code: 'MIGRATION_OPERATION_IN_PROGRESS',
+    method: 'TOOLS_CALL',
+    path: 'vikunja_project_migration.run',
+    message: `Migration operation "${operationId}" is already running. Inspect its status before retrying.`,
+    fieldErrors: [],
+    operationId,
+  });
+}
+
+export async function assertMigrationSourceUnchanged(
+  client: VikunjaApiClient,
+  task: { id: number; updated?: string | null },
+): Promise<string> {
+  if (!task.updated) {
+    throw new VikunjaError({
+      status: 409,
+      code: 'MIGRATION_SOURCE_VERSION_MISSING',
+      method: 'GET',
+      path: `/tasks/${task.id}`,
+      message: 'The migration snapshot has no source updated timestamp; rebuild the manifest.',
+      fieldErrors: [],
+    });
+  }
+  const current = await client.request<any>('GET', `/tasks/${task.id}`);
+  if (String(current.updated ?? '') !== task.updated) {
+    throw new VikunjaError({
+      status: 409,
+      code: 'MIGRATION_SOURCE_CHANGED',
+      method: 'GET',
+      path: `/tasks/${task.id}`,
+      message: 'The source task changed after the migration snapshot and was not archived.',
+      fieldErrors: [],
+    });
+  }
+  return task.updated;
 }
 
 function migratedComments(projectId: number, sourceReference: string, comments: any[]) {
@@ -428,7 +477,10 @@ export async function runProjectMigration(
     },
     MIGRATION_LEASE_MS,
   );
-  if (!leased.acquired) return migrationSummary(leased.value);
+  if (!leased.acquired) {
+    if (leased.value?.status === 'running') throw migrationInProgress(operationId);
+    return migrationSummary(leased.value);
+  }
   const state = leased.value;
   if (!leased.leaseToken) throw migrationLeaseLost();
   let leaseLost = false;
@@ -511,6 +563,8 @@ export async function runProjectMigration(
         renewLease();
         let sourceArchived = false;
         if (options.archiveSource) {
+          const expectedUpdatedAt = await assertMigrationSourceUnchanged(client, task);
+          renewLease();
           const close = await closeWithEvidence(
             client,
             { globalId: task.id },
@@ -518,6 +572,8 @@ export async function runProjectMigration(
             { id: manifest.source.project.id },
             `migration:${operationId}:source:${task.id}`,
             options.actor,
+            false,
+            expectedUpdatedAt,
           );
           renewLease();
           if (close.outcome === 'partial') {

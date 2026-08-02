@@ -1,5 +1,7 @@
 import json
 import importlib.util
+import os
+import stat
 import tempfile
 import unittest
 from pathlib import Path
@@ -21,6 +23,8 @@ class FakeClient:
         self.config = SimpleNamespace(
             vikunja_web_url="https://vikunja.example.com/",
             attachment_download_root=download_root or tempfile.gettempdir(),
+            attachment_source_roots=[download_root or tempfile.gettempdir()],
+            max_attachment_bytes=100 * 1024 * 1024,
         )
 
     def request(self, method, path, **kwargs):
@@ -34,6 +38,41 @@ class FakeClient:
 
 
 class TrackerFallbackTests(unittest.TestCase):
+    def test_multipart_filename_cannot_inject_headers(self):
+        value = vikunja_cli.sanitize_multipart_filename(
+            '..\\evidence"\r\nX-Injected: yes.csv'
+        )
+        self.assertNotIn("\r", value)
+        self.assertNotIn("\n", value)
+        self.assertNotIn('"', value)
+        self.assertNotIn("\\", value)
+
+    def test_source_file_must_be_inside_an_allowed_root(self):
+        with tempfile.TemporaryDirectory() as allowed, tempfile.TemporaryDirectory() as outside:
+            allowed_file = Path(allowed, "run.log")
+            outside_file = Path(outside, "secret.log")
+            allowed_file.write_text("ok", encoding="utf-8")
+            outside_file.write_text("no", encoding="utf-8")
+            self.assertEqual(
+                vikunja_cli.resolve_safe_source_path([allowed], str(allowed_file)),
+                os.path.realpath(allowed_file),
+            )
+            with self.assertRaises(vikunja_cli.VikunjaError) as raised:
+                vikunja_cli.resolve_safe_source_path([allowed], str(outside_file))
+            self.assertEqual(raised.exception.code, "SOURCE_PATH_FORBIDDEN")
+
+    def test_download_path_rejects_existing_symlink(self):
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as outside:
+            target = Path(outside, "outside.bin")
+            target.write_bytes(b"secret")
+            link = Path(root, "link.bin")
+            try:
+                link.symlink_to(target)
+            except OSError as error:
+                self.skipTest(f"symlinks unavailable: {error}")
+            with self.assertRaises(vikunja_cli.VikunjaError):
+                vikunja_cli.resolve_safe_path(root, str(link))
+
     def test_envelope_escapes_fences_without_changing_parsed_data(self):
         rendered = vikunja_cli.render_envelope(
             "Task details.", {"ok": True, "data": {"description": "```json\n{}\n```"}}, None
@@ -159,6 +198,31 @@ class TrackerFallbackTests(unittest.TestCase):
                 exported["tasks"][0]["creator"], {"id": 7, "username": "example-tester"}
             )
             self.assertEqual(exported["tasks"][0]["comments"][0]["comment"], "**Verified**")
+
+    def test_csv_export_neutralizes_spreadsheet_formulas_and_uses_private_file(self):
+        with tempfile.TemporaryDirectory() as root:
+            client = FakeClient(
+                {
+                    ("GET", "/projects/2"): {"id": 2, "title": "Alpha"},
+                    ("GET", "/projects/2/tasks?page=1&per_page=100"): {
+                        "items": [{"id": 10, "index": 4, "title": "=cmd|' /C calc'!A0"}],
+                        "page": 1,
+                        "per_page": 100,
+                        "total": 1,
+                        "total_pages": 1,
+                    },
+                },
+                root,
+            )
+            _, result = vikunja_cli.cmd_export_project(
+                client,
+                {"project_id": 2, "format": "csv", "destination_path": "alpha.csv"},
+            )
+            with open(result["path"], newline="", encoding="utf-8") as exported_file:
+                rows = list(__import__("csv").reader(exported_file))
+            self.assertTrue(rows[1][3].startswith("'="))
+            if os.name != "nt":
+                self.assertEqual(stat.S_IMODE(os.stat(result["path"]).st_mode), 0o600)
 
 
 if __name__ == "__main__":

@@ -449,6 +449,23 @@ describe('bulk task composition', () => {
       nextCursor: null,
       incomplete: false,
     });
+    expect(() => getBulkOperationStatus(result.operationId, '4', 2)).toThrow(
+      expect.objectContaining({ status: 400, code: 'VALIDATION_ERROR' }),
+    );
+  });
+
+  it('rejects direct bulk updates above the 100-task safety limit', async () => {
+    const request = jest.fn();
+    const client = { request, getConfig: () => ({ vikunjaToken: 'test-token' }) } as any;
+    await expect(
+      bulkUpdateTasks(
+        client,
+        Array.from({ length: 101 }, (_, index) => ({ globalId: index + 1 })),
+        { done: true },
+        { id: 101 },
+      ),
+    ).rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+    expect(request).not.toHaveBeenCalled();
   });
 
   it('bulk assigns a mixed batch and isolates a wrong-project task', async () => {

@@ -2,8 +2,10 @@
 
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import { VikunjaApiClient } from './api.js';
 import { DEFAULT_MAX_ATTACHMENT_BYTES } from './config.js';
+import { resolveSafeSourceFile } from './attachments.js';
 import { VikunjaError } from './errors.js';
 import { idempotency } from './idempotency.js';
 import { applyLabel, createTask } from './tasks.js';
@@ -31,6 +33,7 @@ export interface CsvImportConfig {
   quote_char?: string;
   date_format?: string;
   skip_rows?: number;
+  has_header?: boolean;
   mapping: ColumnMapping[];
 }
 
@@ -105,15 +108,27 @@ function validateConfig(config: unknown): CsvImportConfig {
     quote_char: quoteChar,
     date_format: candidate.date_format || '2006-01-02',
     skip_rows: skipRows,
+    has_header: candidate.has_header !== false,
     mapping,
   };
 }
 
-function parseCsv(text: string, delimiter: string, quoteChar: string, maxRows: number): string[][] {
-  const rows: string[][] = [];
+interface CsvRecord {
+  cells: string[];
+  rowNumber: number;
+}
+
+function parseCsv(
+  text: string,
+  delimiter: string,
+  quoteChar: string,
+  maxRows: number,
+): CsvRecord[] {
+  const rows: CsvRecord[] = [];
   let row: string[] = [];
   let field = '';
   let quoted = false;
+  let rowNumber = 1;
 
   const pushField = () => {
     row.push(field);
@@ -121,7 +136,7 @@ function parseCsv(text: string, delimiter: string, quoteChar: string, maxRows: n
   };
   const pushRow = () => {
     pushField();
-    if (row.some((cell) => cell.length > 0)) rows.push(row);
+    if (row.some((cell) => cell.length > 0)) rows.push({ cells: row, rowNumber });
     row = [];
     if (rows.length > maxRows) {
       throw importError(
@@ -146,6 +161,7 @@ function parseCsv(text: string, delimiter: string, quoteChar: string, maxRows: n
     } else if (!quoted && (character === '\n' || character === '\r')) {
       if (character === '\r' && text[index + 1] === '\n') index += 1;
       pushRow();
+      rowNumber += 1;
     } else {
       field += character;
     }
@@ -200,15 +216,27 @@ function parseDate(value: string, layout: string): string {
     throw importError('INVALID_CSV_DATE', `Could not parse CSV date "${input}".`);
   }
 
-  let year: string;
-  let month: string;
-  let day: string;
-  if (layout.startsWith('2006')) {
-    [, year, month, day] = numbers;
-  } else if (layout.startsWith('02')) {
-    [, day, month, year] = numbers;
-  } else {
-    [, month, day, year] = numbers;
+  const valueParts = numbers.slice(1);
+  const layoutDate = layout.trim().split(/[ T]/, 1)[0];
+  const layoutParts = layoutDate.split(/[\/.\-]/);
+  const yearIndex = layoutParts.findIndex((part) => part === '2006' || part === '06');
+  const monthIndex = layoutParts.findIndex((part) => part === '01' || part === '1');
+  const dayIndex = layoutParts.findIndex((part) => part === '02' || part === '2');
+  if ([yearIndex, monthIndex, dayIndex].some((index) => index < 0)) {
+    throw importError('INVALID_CSV_DATE', `Unsupported CSV date layout "${layout}".`);
+  }
+  let year = valueParts[yearIndex];
+  const month = valueParts[monthIndex];
+  const day = valueParts[dayIndex];
+  const yearToken = layoutParts[yearIndex];
+  if (yearToken === '2006' && year.length !== 4) {
+    throw importError('INVALID_CSV_DATE', 'CSV date year must contain four digits.');
+  }
+  if (yearToken === '06') {
+    if (year.length !== 2) {
+      throw importError('INVALID_CSV_DATE', 'CSV date year must contain two digits.');
+    }
+    year = `20${year}`;
   }
   return utcDate(year.padStart(4, '0'), month.padStart(2, '0'), day.padStart(2, '0'), time);
 }
@@ -232,11 +260,13 @@ async function readRows(
   filePath: string,
   config: unknown,
   maxBytes = DEFAULT_MAX_ATTACHMENT_BYTES,
+  sourceRoots: string[] = [process.cwd(), os.tmpdir()],
 ): Promise<ParsedImportTask[]> {
   const parsedConfig = validateConfig(config);
+  const safePath = await resolveSafeSourceFile(sourceRoots, filePath);
   let stat;
   try {
-    stat = await fs.stat(filePath);
+    stat = await fs.stat(safePath);
   } catch {
     throw importError(
       'INVALID_CSV',
@@ -251,18 +281,20 @@ async function readRows(
       'filePath',
     );
   }
-  const text = (await fs.readFile(filePath, 'utf8')).replace(/^\uFEFF/, '');
+  const text = (await fs.readFile(safePath, 'utf8')).replace(/^\uFEFF/, '');
+  const headerRows = parsedConfig.has_header ? 1 : 0;
   const records = parseCsv(
     text,
     parsedConfig.delimiter!,
     parsedConfig.quote_char!,
-    1 + parsedConfig.skip_rows! + MAX_IDEMPOTENT_ROWS,
+    headerRows + parsedConfig.skip_rows! + MAX_IDEMPOTENT_ROWS,
   );
   if (records.length === 0) throw importError('INVALID_CSV', 'CSV file is empty.', 'filePath');
-  const rows = records.slice(1 + parsedConfig.skip_rows!);
+  const rows = records.slice(headerRows + parsedConfig.skip_rows!);
 
-  return rows.map((row, index) => {
-    const rowNumber = index + 2 + parsedConfig.skip_rows!;
+  return rows.map((record) => {
+    const row = record.cells;
+    const rowNumber = record.rowNumber;
     const title = mappedValue(row, parsedConfig.mapping, 'title');
     if (!title) {
       throw importError('INVALID_CSV_TITLE', `CSV row ${rowNumber} has no task title.`);
@@ -301,6 +333,10 @@ function rowHash(project: { id?: number; title?: string }, row: ParsedImportTask
         projectKey,
         normalizedHashText(row.title).toLowerCase(),
         normalizedHashText(row.description),
+        row.done ?? null,
+        row.priority ?? null,
+        row.dueDate ?? null,
+        [...row.labels].sort((left, right) => left.localeCompare(right)),
       ]),
     )
     .digest('hex');
@@ -337,8 +373,9 @@ export async function previewIdempotentCsvImport(
   config: unknown,
   projectSelector?: { id?: number; title?: string },
   maxBytes = DEFAULT_MAX_ATTACHMENT_BYTES,
+  sourceRoots?: string[],
 ) {
-  const rows = await readRows(filePath, config, maxBytes);
+  const rows = await readRows(filePath, config, maxBytes, sourceRoots);
   for (const row of rows) rowProject(row, projectSelector);
   return {
     mode: 'idempotent' as const,
@@ -364,6 +401,7 @@ export async function importCsvIdempotently(
     filePath,
     config,
     client.getConfig().maxAttachmentBytes ?? DEFAULT_MAX_ATTACHMENT_BYTES,
+    client.getConfig().attachmentSourceRoots,
   );
   if (rows.length > MAX_IDEMPOTENT_ROWS) {
     throw importError(

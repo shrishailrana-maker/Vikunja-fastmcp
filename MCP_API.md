@@ -4,7 +4,7 @@ This reference is generated automatically from runtime schemas.
 
 Tools with multiple actions publish action-specific JSON Schema branches, so clients can present only the fields valid for the selected action.
 
-All responses contain a short Markdown summary followed by exactly one fenced JSON envelope: `{ "ok": true, "data": ... }` or `{ "ok": false, "error": ... }`. HTTP error status, method, and path are preserved and secrets are redacted.
+Default minimal reads and receipt writes contain exactly one fenced JSON envelope: `{ "ok": true, "data": ... }` or `{ "ok": false, "error": ... }`. Explicit compact, standard, and full modes add a short Markdown summary before the same envelope. HTTP error status, method, and path are preserved and secrets are redacted.
 
 ## Identity And Scope
 
@@ -54,8 +54,9 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
   * `projects`: array (optional)
   * `allProjects`: boolean (optional)
   * `page`: number (optional); integer, min 1
-  * `perPage`: number (optional); integer, min 1, max 1000
+  * `perPage`: number (optional); integer, min 1, max 100
   * `commentLimit`: number (optional); integer, min 0, max 100
+  * `attachmentLimit`: number (optional); integer, min 0, max 100
   * `done`: boolean (optional)
   * `allStates`: boolean (optional)
   * `priority`: number (optional); integer, min 0, max 5
@@ -116,7 +117,7 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 | `create` | projectSelector, actor, idempotencyKey, fields.title | fields, attachments, firstComment, relations, dryRun, responseMode | Direct POST; MCP-composed when attachments are supplied. For 3 or more tasks use vikunja_task_bulk create instead of repeated create calls. |
 | `create_if_absent` | projectSelector, actor, idempotencyKey, fields.title | fields, attachments, dryRun, responseMode | MCP-composed exact-title search then optional create/attach. Best-effort duplicate prevention, not a distributed lock. |
 | `upsert` | projectSelector, actor, idempotencyKey, fields.title, externalKey | fields, expectedUpdatedAt, dryRun, responseMode | MCP-composed description-key lookup followed by create or conditional update. Requires server-side description filtering. Updating a matched title/description also requires expectedUpdatedAt. |
-| `get` | taskSelector | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), commentLimit (full mode only; default 5, max 100), fields (projected task fields in minimal mode), includeUrl (default false), titleMaxChars, responseMode (minimal default; receipt/compact/standard/full explicit) | Direct compact/standard GET; full mode composes comments and attachments. taskSelector is exactly one of {globalId}, {identifier}, or {projectIndex}; bare numbers and strings are rejected. |
+| `get` | taskSelector | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), commentLimit (full mode only; default 5, max 100), attachmentLimit (full mode only; default 20, max 100), fields (projected task fields in minimal mode), includeUrl (default false), titleMaxChars, maxResponseChars, responseMode (minimal default; receipt/compact/standard/full explicit) | Direct compact/standard GET; full mode composes comments and attachments. taskSelector is exactly one of {globalId}, {identifier}, or {projectIndex}; bare numbers and strings are rejected. |
 | `list` | none | exactly one of projectSelector, projects, allProjects, page (default 1), perPage (default 20; requests above 100 are safely capped to 100), done, allStates, priority (0-5), label, assignee (exact username; numeric user IDs are not valid Vikunja list filters), titleContains (server-side title-only match), descriptionContains (requires server-side description filtering), changedSince (ISO timestamp), actor (matches stored "(by actor)" attribution; requires server-side description filtering), q, search (free-text alias for q), searchIn (all default, title, or description), filter, countOnly, fields (projected task fields), includeUrl (default false), titleMaxChars, maxResponseChars (default 4000 in minimal mode), cursor, responseMode (minimal default; receipt/compact/standard/full explicit) | Direct per project; grouped subsets/allProjects are MCP-composed. Defaults to done=false unless done or allStates is supplied. |
 | `summary` | projectSelector | none | MCP-composed paginated counts by state, priority, and label |
 | `batch_get` | identifiers | fields, includeUrl, titleMaxChars, responseMode | MCP-composed bounded identity resolution and projected task reads |
@@ -143,7 +144,7 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 | `relate` | taskSelector, otherTaskSelector, relationKind, projectSelector, actor, idempotencyKey | dryRun, responseMode | Resolve both tasks then POST relation |
 | `unrelate` | taskSelector, otherTaskSelector, relationKind, projectSelector, actor, idempotencyKey | dryRun, responseMode | Resolve both tasks then DELETE relation |
 | `list-relations` | taskSelector | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), responseMode (compact default; standard/full explicit) | MCP-composed from task related_tasks data |
-| `attach` | taskSelector, projectSelector, filePaths or base64Content+filename, actor, idempotencyKey | mimeType, computeSha256, warnOnDuplicate, responseMode | Multipart POST per file after identity resolution. Local hashes and duplicate warnings are opt-in; the server does not expose hashes. |
+| `attach` | taskSelector, projectSelector, filePaths or base64Content+filename, actor, idempotencyKey | mimeType, computeSha256, warnOnDuplicate, responseMode | Multipart POST per file after identity resolution. Local hashes and duplicate warnings are opt-in. Results separate uploaded, failed, and outcome-unknown files. |
 | `list-attachments` | taskSelector | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), page, perPage, countOnly, filenamePrefix | Direct paginated GET or bounded MCP-side prefix page after identity resolution. Calls without paging/filter arguments retain the legacy attachment-array response. |
 | `download-attachment` | taskSelector, attachmentId | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), destinationPath, overwrite | Authenticated streaming GET to sandboxed local disk |
 | `delete-attachment` | taskSelector, projectSelector, attachmentId, confirm, actor, idempotencyKey | none | Resolve task, verify attachment ownership, then direct DELETE. confirm must be true; durable retries return the original deletion receipt. |
@@ -162,7 +163,7 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
   * `destinationPath`: string (optional)
   * `overwrite`: boolean (optional)
   * `page`: number (optional); integer, min 1
-  * `perPage`: number (optional); integer, min 1, max 1000
+  * `perPage`: number (optional); integer, min 1, max 100
   * `countOnly`: boolean (optional)
   * `filenamePrefix`: string (optional); max 255
   * `computeSha256`: boolean (optional)
@@ -365,12 +366,15 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
   * `includeComments`: boolean (optional)
   * `includeAttachments`: boolean (optional)
   * `includeRelations`: boolean (optional)
+  * `taskLimit`: number (optional); integer, min 1, max 1000
+  * `detailLimit`: number (optional); integer, min 1, max 100
+  * `overwrite`: boolean (optional)
 
 #### Operations
 
 | Action | Required | Optional | Execution |
 | --- | --- | --- | --- |
-| `export` | projectSelector | format, destinationPath, includeComments, includeAttachments, includeRelations | MCP-composed paginated export to sandboxed JSON or CSV. Creator is always included; comments, attachments, and relations are fetched only when their include flags are true. |
+| `export` | projectSelector | format, destinationPath, includeComments, includeAttachments, includeRelations, taskLimit (default 1000), detailLimit (default 100 per task), overwrite (default false) | MCP-composed paginated export to sandboxed JSON or CSV. Creator is always included; comments, attachments, and relations are fetched only when their include flags are true. Rich exports fail clearly when configured task or per-task detail limits are exceeded. |
 
 ### `vikunja_project_migration`
 * **Description**: Preview, run, resume, or inspect a durable Vikunja-to-GitHub project migration. Available only in the full tool profile.
@@ -386,13 +390,15 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
   * `cursor`: number (optional); integer, min 0
   * `perPage`: number (optional); integer, min 1, max 100
   * `countOnly`: boolean (optional)
+  * `taskLimit`: number (optional); integer, min 1, max 10000
+  * `detailLimit`: number (optional); integer, min 1, max 1000
 
 #### Operations
 
 | Action | Required | Optional | Execution |
 | --- | --- | --- | --- |
-| `preview` | projectSelector, destination, actor, idempotencyKey | publicSanitize (default true) | Versioned sanitized manifest written under the configured local sandbox. No GitHub write occurs; binary attachment transfer is reported unsupported. |
-| `run` | projectSelector, destination, actor, idempotencyKey | archiveSource, publicSanitize (default true) | Durable per-task GitHub create/reuse, comment copy, read-back, optional source close. GITHUB_TOKEN or GH_TOKEN is read from the process environment and never accepted as a tool argument. |
+| `preview` | projectSelector, destination, actor, idempotencyKey | publicSanitize (default true), taskLimit, detailLimit | Versioned sanitized manifest written under the configured local sandbox. No GitHub write occurs; binary attachment transfer is reported unsupported. |
+| `run` | projectSelector, destination, actor, idempotencyKey | archiveSource, publicSanitize (default true), taskLimit, detailLimit | Durable per-task GitHub create/reuse, comment copy, read-back, optional source close. GITHUB_TOKEN or GH_TOKEN is read from the process environment and never accepted as a tool argument. |
 | `status` | operationId | cursor, perPage, countOnly | Paginated durable local migration receipts |
 
 ### `vikunja_request_user_export`
@@ -412,13 +418,14 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
   * `action`: enum ["status", "download"] (required)
   * `password`: string (optional)
   * `destinationPath`: string (optional)
+  * `overwrite`: boolean (optional)
 
 #### Operations
 
 | Action | Required | Optional | Execution |
 | --- | --- | --- | --- |
 | `status` | none | none | Direct GET /user/export |
-| `download` | none | password, destinationPath | Authenticated streaming POST to sandboxed local disk. Some Vikunja servers require JWT/local-password authentication for user exports. |
+| `download` | none | password, destinationPath, overwrite (default false) | Authenticated streaming POST to sandboxed local disk. Some Vikunja servers require JWT/local-password authentication for user exports. |
 
 ### `vikunja_templates`
 * **Description**: Manage machine-local task templates or instantiate one in an explicit project.
@@ -459,7 +466,7 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 | --- | --- | --- | --- |
 | `events` | none | scope | Direct project or user event catalog |
 | `list` | none | scope, projectSelector | Direct project or user webhook list |
-| `create` | targetUrl, events | scope, projectSelector, secret, basicAuthUser, basicAuthPassword | Direct project or user webhook create; credentials are write-only |
+| `create` | targetUrl, events | scope, projectSelector, secret, basicAuthUser, basicAuthPassword | Direct project or user webhook create; credentials are write-only. Targets must be credential-free HTTPS URLs on public hosts. |
 | `update` | webhookId, events | scope, projectSelector | Direct project or user webhook event update. Vikunja treats target URL and credentials as immutable after creation. |
 | `delete` | webhookId | scope, projectSelector | Direct project or user webhook delete |
 
@@ -472,8 +479,9 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
   * `projects`: array (optional)
   * `allProjects`: boolean (optional)
   * `page`: number (optional); integer, min 1
-  * `perPage`: number (optional); integer, min 1, max 1000
+  * `perPage`: number (optional); integer, min 1, max 100
   * `commentLimit`: number (optional); integer, min 0, max 100
+  * `attachmentLimit`: number (optional); integer, min 0, max 100
   * `done`: boolean (optional)
   * `allStates`: boolean (optional)
   * `priority`: number (optional); integer, min 0, max 5
@@ -507,7 +515,7 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 
 | Action | Required | Optional | Execution |
 | --- | --- | --- | --- |
-| `get` | taskSelector | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), commentLimit (full mode only; default 5, max 100), fields (projected task fields in minimal mode), includeUrl (default false), titleMaxChars, responseMode (minimal default; receipt/compact/standard/full explicit) | Direct compact/standard GET; full mode composes comments and attachments. taskSelector is exactly one of {globalId}, {identifier}, or {projectIndex}; bare numbers and strings are rejected. |
+| `get` | taskSelector | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), commentLimit (full mode only; default 5, max 100), attachmentLimit (full mode only; default 20, max 100), fields (projected task fields in minimal mode), includeUrl (default false), titleMaxChars, maxResponseChars, responseMode (minimal default; receipt/compact/standard/full explicit) | Direct compact/standard GET; full mode composes comments and attachments. taskSelector is exactly one of {globalId}, {identifier}, or {projectIndex}; bare numbers and strings are rejected. |
 | `list` | none | exactly one of projectSelector, projects, allProjects, page (default 1), perPage (default 20; requests above 100 are safely capped to 100), done, allStates, priority (0-5), label, assignee (exact username; numeric user IDs are not valid Vikunja list filters), titleContains (server-side title-only match), descriptionContains (requires server-side description filtering), changedSince (ISO timestamp), actor (matches stored "(by actor)" attribution; requires server-side description filtering), q, search (free-text alias for q), searchIn (all default, title, or description), filter, countOnly, fields (projected task fields), includeUrl (default false), titleMaxChars, maxResponseChars (default 4000 in minimal mode), cursor, responseMode (minimal default; receipt/compact/standard/full explicit) | Direct per project; grouped subsets/allProjects are MCP-composed. Defaults to done=false unless done or allStates is supplied. |
 | `summary` | projectSelector | none | MCP-composed paginated counts by state, priority, and label |
 | `batch_get` | identifiers | fields, includeUrl, titleMaxChars, responseMode | MCP-composed bounded identity resolution and projected task reads |

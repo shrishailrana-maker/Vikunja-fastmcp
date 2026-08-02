@@ -3,7 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { jest } from '@jest/globals';
 import {
+  configureIdempotencyScope,
   claimDurableOperation,
+  durableOperationKey,
   idempotency,
   IdempotencyCache,
   lookupDurableOperationReceipt,
@@ -11,6 +13,14 @@ import {
 } from '../src/idempotency.js';
 
 describe('durable idempotency ledger', () => {
+  it('isolates durable operation keys by configured credential', () => {
+    configureIdempotencyScope('neutral-token-a');
+    const first = durableOperationKey('task-update', 'same-key', { taskId: 1 });
+    configureIdempotencyScope('neutral-token-b');
+    const second = durableOperationKey('task-update', 'same-key', { taskId: 1 });
+    expect(second).not.toBe(first);
+    configureIdempotencyScope('test-token');
+  });
   it('retains a receipt after the cache is closed and reopened', () => {
     const directory = mkdtempSync(join(tmpdir(), 'vikunja-fastmcp-ledger-'));
     const databasePath = join(directory, 'idempotency.sqlite');
@@ -49,7 +59,7 @@ describe('durable idempotency ledger', () => {
     }
   });
 
-  it('renews an active lease without allowing a second local process to take it', () => {
+  it('renews an active lease and marks an expired running write outcome unknown', () => {
     const directory = mkdtempSync(join(tmpdir(), 'vikunja-fastmcp-lease-'));
     const databasePath = join(directory, 'idempotency.sqlite');
     const now = jest.spyOn(Date, 'now').mockReturnValue(1_000);
@@ -74,7 +84,7 @@ describe('durable idempotency ledger', () => {
 
       now.mockReturnValue(1_181);
       const takeover = second.acquireLease('task-create:lease', { status: 'running' }, 100);
-      expect(takeover.acquired).toBe(true);
+      expect(takeover).toMatchObject({ acquired: false, value: { status: 'outcome_unknown' } });
       expect(first.renewLease('task-create:lease', acquired.leaseToken!, 100)).toBe(false);
     } finally {
       first?.close();
@@ -108,6 +118,20 @@ describe('durable idempotency ledger', () => {
       });
     } finally {
       now.mockRestore();
+      cache.close();
+    }
+  });
+
+  it('does not let a stale worker mark or release another owner lease', () => {
+    const cache = new IdempotencyCache({ databasePath: ':memory:' });
+    try {
+      const acquired = cache.acquireLease('task-create:owned', { status: 'running' }, 10_000);
+      expect(cache.markOutcomeUnknown('task-create:owned', 'stale-token')).toBe(false);
+      expect(cache.renewLease('task-create:owned', acquired.leaseToken!, 10_000)).toBe(true);
+      expect(cache.markOutcomeUnknown('task-create:owned', acquired.leaseToken!)).toBe(true);
+      expect(cache.get('task-create:owned')).toMatchObject({ status: 'outcome_unknown' });
+      expect(cache.renewLease('task-create:owned', acquired.leaseToken!, 10_000)).toBe(false);
+    } finally {
       cache.close();
     }
   });
@@ -178,6 +202,9 @@ describe('durable idempotency ledger', () => {
     ).rejects.toMatchObject({ status: 409, code: 'IDEMPOTENCY_LEASE_LOST' });
 
     expect(write).not.toHaveBeenCalled();
+    expect(
+      idempotency.get(durableOperationKey('task-create', 'lost-lease', { title: 'A' }))?.status,
+    ).not.toBe('failed');
     expect(persist).not.toHaveBeenCalledWith(
       expect.any(String),
       expect.any(String),
@@ -214,5 +241,39 @@ describe('durable idempotency ledger', () => {
     expect(first).toMatchObject({ outcome: 'partial' });
     expect(second).toMatchObject({ outcome: 'completed' });
     expect(write).toHaveBeenCalledTimes(2);
+  });
+
+  it('blocks replay when a remote write result is ambiguous', async () => {
+    idempotency.clear();
+    const write = jest.fn(async () => {
+      throw new Error('socket closed after dispatch');
+    });
+
+    await expect(
+      runDurableOperation('task-create', 'ambiguous-write', { title: 'A' }, write),
+    ).rejects.toThrow('socket closed after dispatch');
+    await expect(
+      runDurableOperation('task-create', 'ambiguous-write', { title: 'A' }, write),
+    ).rejects.toMatchObject({ status: 409, code: 'IDEMPOTENCY_OUTCOME_UNKNOWN' });
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it('blocks replay when lease ownership is lost after the remote write returns', async () => {
+    idempotency.clear();
+    const renew = jest
+      .spyOn(idempotency, 'renewLease')
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(false);
+    const write = jest.fn(async () => ({ id: 7001, action: 'created' }));
+
+    await expect(
+      runDurableOperation('task-create', 'post-write-lease-loss', { title: 'A' }, write),
+    ).rejects.toMatchObject({ status: 409, code: 'IDEMPOTENCY_LEASE_LOST' });
+    await expect(
+      runDurableOperation('task-create', 'post-write-lease-loss', { title: 'A' }, write),
+    ).rejects.toMatchObject({ status: 409, code: 'IDEMPOTENCY_OUTCOME_UNKNOWN' });
+
+    expect(write).toHaveBeenCalledTimes(1);
+    renew.mockRestore();
   });
 });

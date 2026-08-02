@@ -128,6 +128,73 @@ describe('idempotent CSV import', () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
+  it('rejects a short year when the configured layout requires four digits', async () => {
+    await fs.writeFile(csvPath, 'title,due\nShort year,01/02/26\n');
+    const dateConfig = {
+      ...importConfig,
+      mapping: [
+        { column_index: 0, column_name: 'title', attribute: 'title' },
+        { column_index: 1, column_name: 'due', attribute: 'due_date' },
+      ],
+    };
+
+    await expect(previewIdempotentCsvImport(csvPath, dateConfig, { id: 7 })).rejects.toMatchObject({
+      code: 'INVALID_CSV_DATE',
+    });
+  });
+
+  it('supports headerless CSV and preserves physical row numbers around blank lines', async () => {
+    await fs.writeFile(csvPath, 'First task,5\n\nSecond task,2\n');
+    const headerless = {
+      ...importConfig,
+      has_header: false,
+      mapping: [
+        { column_index: 0, attribute: 'title' },
+        { column_index: 1, attribute: 'priority' },
+      ],
+    };
+
+    const preview = await previewIdempotentCsvImport(csvPath, headerless, { id: 7 });
+    expect(preview.tasks).toEqual([
+      expect.objectContaining({ title: 'First task', rowNumber: 1 }),
+      expect.objectContaining({ title: 'Second task', rowNumber: 3 }),
+    ]);
+  });
+
+  it('does not reuse a row receipt when mutable imported fields change', async () => {
+    const fullConfig = {
+      ...importConfig,
+      mapping: [
+        { column_index: 0, attribute: 'title' },
+        { column_index: 1, attribute: 'description' },
+        { column_index: 2, attribute: 'priority' },
+      ],
+    };
+    await fs.writeFile(csvPath, 'title,description,priority\nExample,Body,2\n');
+    mockFetch
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 7, title: 'Alpha' })))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: 101, index: 1, title: 'Example', project_id: 7 }), {
+          status: 201,
+        }),
+      );
+    await importCsvIdempotently(client, csvPath, fullConfig, 'changed-row', { id: 7 });
+
+    await fs.writeFile(csvPath, 'title,description,priority\nExample,Body,5\n');
+    mockFetch
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 7, title: 'Alpha' })))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: 102, index: 2, title: 'Example', project_id: 7 }), {
+          status: 201,
+        }),
+      );
+    const rerun = await importCsvIdempotently(client, csvPath, fullConfig, 'changed-row', {
+      id: 7,
+    });
+
+    expect(rerun).toMatchObject({ created: 1, skipped: 0 });
+  });
+
   it.each([
     ['blank titles', 'title,done\n,yes\n', 'INVALID_CSV_TITLE'],
     ['unknown booleans', 'title,done\nExample,perhaps\n', 'INVALID_CSV_BOOLEAN'],
