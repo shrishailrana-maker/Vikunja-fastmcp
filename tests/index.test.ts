@@ -14,12 +14,16 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathsReferToSameFile, server, TOOLS } from '../src/index.js';
+import { idempotency } from '../src/idempotency.js';
+import { cache } from '../src/identity.js';
 
 describe('MCP Server Registration and Dispatching tests', () => {
   let mockFetch: any;
 
   beforeEach(() => {
     mockFetch = jest.spyOn(global, 'fetch');
+    idempotency.clear();
+    cache.clearProjects();
     process.env.VIKUNJA_URL = 'https://vikunja.example.com/api/v2';
     process.env.VIKUNJA_API_TOKEN = 'tk_token';
     process.env.VIKUNJA_MCP_TOOL_PROFILE = 'compatibility';
@@ -115,7 +119,16 @@ describe('MCP Server Registration and Dispatching tests', () => {
     );
     expect(applyLabelBranch.additionalProperties).toBe(false);
     expect(Object.keys(applyLabelBranch.properties).sort()).toEqual(
-      ['action', 'labelTitle', 'projectSelector', 'responseMode', 'taskSelector'].sort(),
+      [
+        'action',
+        'actor',
+        'dryRun',
+        'idempotencyKey',
+        'labelTitle',
+        'projectSelector',
+        'responseMode',
+        'taskSelector',
+      ].sort(),
     );
     const listBranch = taskTool.inputSchema.oneOf.find(
       (branch: any) => branch.properties.action.const === 'list',
@@ -169,6 +182,31 @@ describe('MCP Server Registration and Dispatching tests', () => {
     expect(createBranch.required).toContain('actor');
     expect(createBranch.required).toContain('idempotencyKey');
     expect(closeBranch.required).toContain('actor');
+    for (const action of [
+      'create',
+      'create_if_absent',
+      'upsert',
+      'update',
+      'delete',
+      'close',
+      'reopen',
+      'close_with_evidence',
+      'assign',
+      'unassign',
+      'apply-label',
+      'remove-label',
+      'set_status',
+      'relate',
+      'unrelate',
+    ]) {
+      const branch = taskTool.inputSchema.oneOf.find(
+        (candidate: any) => candidate.properties.action.const === action,
+      );
+      expect(branch.required).toEqual(
+        expect.arrayContaining(['projectSelector', 'actor', 'idempotencyKey']),
+      );
+      expect(branch.properties.dryRun).toEqual({ type: 'boolean' });
+    }
 
     const attachmentTool = response.tools.find(
       (tool: any) => tool.name === 'vikunja_task_attachments',
@@ -349,6 +387,239 @@ describe('MCP Server Registration and Dispatching tests', () => {
     ).rejects.toMatchObject({ code: 'EXPECTED_UPDATED_AT_REQUIRED' });
 
     expect(client.request).not.toHaveBeenCalled();
+  });
+
+  it('adds durable operation and safe identity context to mutation errors', async () => {
+    const taskTool = TOOLS.find((tool) => tool.name === 'vikunja_tasks')!;
+    const request = jest.fn(async (method: string, apiPath: string) => {
+      if (method === 'GET' && apiPath === '/tasks/9005') {
+        return {
+          id: 9005,
+          index: 5,
+          identifier: 'ALPHA-5',
+          title: 'Target',
+          project_id: 101,
+          project: { title: 'Alpha' },
+          priority: 1,
+          done: false,
+          labels: [],
+          assignees: [],
+        };
+      }
+      if (method === 'GET' && apiPath === '/projects/101') return { id: 101, title: 'Alpha' };
+      if (method === 'PATCH' && apiPath === '/tasks/9005') {
+        throw Object.assign(new Error('temporary update failure'), {
+          status: 503,
+          code: 'UPSTREAM_UNAVAILABLE',
+          method,
+          path: apiPath,
+        });
+      }
+      throw new Error(`Unexpected request: ${method} ${apiPath}`);
+    });
+    const client = {
+      request,
+      getConfig: () => ({ vikunjaWebUrl: 'https://vikunja.example.com/' }),
+    } as any;
+
+    await expect(
+      taskTool.handler(
+        {
+          action: 'update',
+          taskSelector: { globalId: 9005 },
+          projectSelector: { id: 101 },
+          fields: { priority: 2 },
+          actor: 'Codex',
+          idempotencyKey: 'update-error-context',
+        },
+        client,
+      ),
+    ).rejects.toMatchObject({
+      operationId: expect.stringMatching(/^task-update:/),
+      identity: {
+        project: { id: 101, title: 'Alpha' },
+        task: { id: 9005, identifier: 'ALPHA-5', title: 'Target' },
+      },
+    });
+  });
+
+  it('composes task creation with one durable comment and bounded relation receipts', async () => {
+    const taskTool = TOOLS.find((tool) => tool.name === 'vikunja_tasks')!;
+    const request = jest.fn(async (method: string, apiPath: string) => {
+      if (method === 'GET' && apiPath === '/projects/101') {
+        return { id: 101, title: 'Alpha' };
+      }
+      if (method === 'POST' && apiPath === '/projects/101/tasks') {
+        return {
+          id: 9005,
+          index: 305,
+          identifier: 'ALPHA-305',
+          title: 'Composed task',
+          project_id: 101,
+        };
+      }
+      if (method === 'GET' && apiPath === '/tasks/9005') {
+        return {
+          id: 9005,
+          index: 305,
+          identifier: 'ALPHA-305',
+          title: 'Composed task',
+          project_id: 101,
+        };
+      }
+      if (method === 'GET' && apiPath === '/tasks/9006') {
+        return {
+          id: 9006,
+          index: 306,
+          identifier: 'ALPHA-306',
+          title: 'Related task',
+          project_id: 101,
+        };
+      }
+      if (method === 'POST' && apiPath === '/tasks/9005/comments') {
+        return {
+          id: 7001,
+          comment: '<p>Initial evidence</p>',
+          author: { id: 1, username: 'codex' },
+          created: '2026-08-02T10:00:00Z',
+        };
+      }
+      if (method === 'POST' && apiPath === '/tasks/9005/relations') return {};
+      throw new Error(`Unexpected request: ${method} ${apiPath}`);
+    });
+    const client = {
+      request,
+      getConfig: () => ({ vikunjaWebUrl: 'https://vikunja.example.com/' }),
+    } as any;
+    const args = {
+      action: 'create',
+      projectSelector: { id: 101 },
+      fields: { title: 'Composed task' },
+      firstComment: 'Initial evidence',
+      relations: [{ otherTaskSelector: { globalId: 9006 }, relationKind: 'related' }],
+      actor: 'Codex',
+      idempotencyKey: 'composed-create-test',
+    };
+
+    const first = await taskTool.handler(args, client);
+    const writesAfterFirst = request.mock.calls.filter(([method]) => method === 'POST').length;
+    const second = await taskTool.handler(args, client);
+
+    expect(first).toEqual(
+      expect.objectContaining({
+        action: 'created',
+        operation: 'create',
+        actor: 'Codex',
+        operationId: expect.stringMatching(/^task-create:/),
+        idempotency: { state: 'recorded' },
+        before: { exists: false },
+        after: expect.objectContaining({ exists: true, title: 'Composed task' }),
+        updatedAt: expect.any(String),
+        verification: { verdict: 'NOT_REQUESTED' },
+        firstComment: { status: 'created', id: 7001, created: '2026-08-02T10:00:00Z' },
+        relations: [
+          expect.objectContaining({
+            relationKind: 'related',
+            otherTask: expect.objectContaining({ id: 9006, identifier: 'ALPHA-306' }),
+          }),
+        ],
+        composedCalls: [
+          'POST /tasks/9005/comments',
+          'POST /tasks/9005/relations',
+        ],
+      }),
+    );
+    expect(second).toEqual(first);
+    expect(writesAfterFirst).toBe(3);
+    expect(request.mock.calls.filter(([method]) => method === 'POST')).toHaveLength(3);
+  });
+
+  it('returns composed-create partial receipts and retries only the failed relation', async () => {
+    const taskTool = TOOLS.find((tool) => tool.name === 'vikunja_tasks')!;
+    let relationAttempts = 0;
+    const request = jest.fn(async (method: string, apiPath: string) => {
+      if (method === 'GET' && apiPath === '/projects/101') return { id: 101, title: 'Alpha' };
+      if (method === 'POST' && apiPath === '/projects/101/tasks') {
+        return {
+          id: 9010,
+          index: 310,
+          identifier: 'ALPHA-310',
+          title: 'Partial composed task',
+          project_id: 101,
+        };
+      }
+      if (method === 'GET' && apiPath === '/tasks/9010') {
+        return {
+          id: 9010,
+          index: 310,
+          identifier: 'ALPHA-310',
+          title: 'Partial composed task',
+          project_id: 101,
+        };
+      }
+      if (method === 'GET' && apiPath === '/tasks/9011') {
+        return {
+          id: 9011,
+          index: 311,
+          identifier: 'ALPHA-311',
+          title: 'Relation target',
+          project_id: 101,
+        };
+      }
+      if (method === 'POST' && apiPath === '/tasks/9010/relations') {
+        relationAttempts += 1;
+        if (relationAttempts === 1) throw new Error('temporary relation failure');
+        return {};
+      }
+      throw new Error(`Unexpected request: ${method} ${apiPath}`);
+    });
+    const client = {
+      request,
+      getConfig: () => ({
+        vikunjaWebUrl: 'https://vikunja.example.com/',
+        vikunjaToken: 'tk_test',
+      }),
+    } as any;
+    const args = {
+      action: 'create',
+      projectSelector: { id: 101 },
+      fields: { title: 'Partial composed task' },
+      relations: [{ otherTaskSelector: { globalId: 9011 }, relationKind: 'related' }],
+      actor: 'Codex',
+      idempotencyKey: 'partial-composed-create',
+    };
+
+    const first = await taskTool.handler(args, client);
+    const second = await taskTool.handler(args, client);
+
+    expect(first).toMatchObject({
+      outcome: 'partial',
+      idempotency: { state: 'retryable-partial' },
+      relations: [
+        {
+          status: 'failed',
+          relationKind: 'related',
+          error: {
+            retryable: true,
+            operationId: expect.stringMatching(/^task-create-relation:/),
+            identity: {
+              project: { id: 101, title: 'Alpha' },
+              task: { identifier: 'ALPHA-310' },
+            },
+          },
+        },
+      ],
+    });
+    expect(second).toMatchObject({
+      outcome: 'completed',
+      idempotency: { state: 'recorded' },
+      relations: [
+        { status: 'created', relationKind: 'related', otherTask: { identifier: 'ALPHA-311' } },
+      ],
+    });
+    expect(relationAttempts).toBe(2);
+    expect(request.mock.calls.filter(([method, apiPath]) =>
+      method === 'POST' && apiPath === '/projects/101/tasks')).toHaveLength(1);
   });
 
   it('puts the next-page instruction before a large task-list envelope', async () => {
@@ -637,6 +908,7 @@ describe('MCP Server Registration and Dispatching tests', () => {
       },
     });
 
+    expect(response.content[0].text).toContain('"ok":true');
     expect(response.isError).not.toBe(true);
     expect(response.content[0].text).toContain('ALPHA-5 - Compact task');
     expect(response.content[0].text).toContain(
@@ -815,7 +1087,9 @@ describe('MCP Server Registration and Dispatching tests', () => {
         arguments: {
           action: 'delete',
           taskSelector: { globalId: 99 },
+          projectSelector: { id: 101 },
           actor: 'Codex',
+          idempotencyKey: 'delete-401-test',
         },
       },
     });
@@ -846,6 +1120,11 @@ describe('MCP Server Registration and Dispatching tests', () => {
       .mockResolvedValueOnce({
         ok: true,
         status: 200,
+        text: async () => JSON.stringify({ id: 101, title: 'Alpha' }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
         text: async () =>
           JSON.stringify({
             id: 99,
@@ -862,17 +1141,22 @@ describe('MCP Server Registration and Dispatching tests', () => {
           JSON.stringify({ id: 99, index: 5, title: 'Example task', project_id: 101 }),
       } as Response);
 
-    await handler({
+    const response = await handler({
       method: 'tools/call',
       params: {
         name: 'vikunja_tasks',
         arguments: {
           action: 'update',
           taskSelector: { globalId: 99 },
+          projectSelector: { id: 101 },
           fields: { dueDate: null },
+          actor: 'Codex',
+          idempotencyKey: 'due-date-null-test',
         },
       },
     });
+    expect(response.content[0].text).toContain('"ok":true');
+    expect(response.isError).not.toBe(true);
 
     const patchCall = mockFetch.mock.calls.find((call: any) => call[1]?.method === 'PATCH');
     expect(JSON.parse(patchCall[1].body)).toEqual([

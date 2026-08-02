@@ -25,7 +25,7 @@ import {
 } from './format.js';
 import { toErrorEnvelope, VikunjaError, redactSecrets } from './errors.js';
 import { resolveLabel } from './tasks.js';
-import { cache, resolveProject } from './identity.js';
+import { cache, resolveProject, resolveTaskInput as resolveTask } from './identity.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -60,6 +60,10 @@ import {
   taskDedupe,
   lookupTaskByExternalKey,
   lookupTaskReceipt,
+  appendEvidenceIfChanged,
+  closeIfVerified,
+  closeWithStructuredEvidence,
+  transitionWithEvidence,
 } from './tasks.js';
 import {
   createComment,
@@ -118,6 +122,7 @@ import {
   previewIdempotentCsvImport,
 } from './csv-import.js';
 import { enforceMutationProjectScope } from './mutation-policy.js';
+import { durableOperationKey, runDurableOperation } from './idempotency.js';
 import {
   createWebhook,
   deleteWebhook,
@@ -355,6 +360,295 @@ function requireIdempotencyKey(key: string | undefined, action: string): string 
   return key;
 }
 
+function requireTaskMutationEnvelope(args: Record<string, any>, action: string) {
+  if (!args.projectSelector) {
+    throw policyError('PROJECT_SCOPE_REQUIRED', `projectSelector is required for ${action}.`);
+  }
+  return {
+    projectSelector: args.projectSelector as { id?: number; title?: string },
+    actor: requireActor(args.actor, action),
+    idempotencyKey: requireIdempotencyKey(args.idempotencyKey, action),
+  };
+}
+
+function mutationIdentity(args: Record<string, any>, payload: any) {
+  return {
+    project: args.projectSelector,
+    ...(payload?.taskSelector ? { task: payload.taskSelector } : {}),
+    ...(payload?.otherTaskSelector ? { otherTask: payload.otherTaskSelector } : {}),
+  };
+}
+
+async function resolvedMutationIdentity(
+  client: VikunjaApiClient,
+  args: Record<string, any>,
+  payload: any,
+) {
+  if (payload?.taskSelector) {
+    try {
+      const task = await resolveTask(client, payload.taskSelector, args.projectSelector);
+      return {
+        project: task.project,
+        task: {
+          id: task.id,
+          identifier: task.identifier || `#${task.index}`,
+          title: task.title,
+        },
+      };
+    } catch {
+      // Preserve the original mutation error; caller selectors remain useful fallback context.
+    }
+  }
+  if (args.projectSelector) {
+    try {
+      const project = await resolveProject(client, args.projectSelector);
+      return { ...mutationIdentity(args, payload), project };
+    } catch {
+      // The original error remains authoritative when identity read-back also fails.
+    }
+  }
+  return mutationIdentity(args, payload);
+}
+
+function finalizeTaskMutationReceipt(
+  namespace: string,
+  args: Record<string, any>,
+  result: any,
+  operationId?: string,
+) {
+  const target = result?.target ?? result?.task?.target ?? null;
+  const dryRun = args.dryRun === true;
+  const partial = result?.outcome === 'partial' || result?.action === 'partial';
+  const identity = target
+    ? {
+        project: target.project,
+        task: {
+          id: target.id,
+          identifier: target.identifier ?? target.portalRef,
+          title: target.title,
+        },
+      }
+    : mutationIdentity(args, {});
+  const contextualize = (error: any) =>
+    error
+      ? {
+          ...error,
+          ...(operationId && !error.operationId ? { operationId } : {}),
+          ...(!error.identity ? { identity } : {}),
+        }
+      : error;
+  const contextualResult = {
+    ...result,
+    ...(result?.error ? { error: contextualize(result.error) } : {}),
+    ...(result?.firstComment?.error
+      ? { firstComment: { ...result.firstComment, error: contextualize(result.firstComment.error) } }
+      : {}),
+    ...(Array.isArray(result?.relations)
+      ? {
+          relations: result.relations.map((relation: any) =>
+            relation?.error ? { ...relation, error: contextualize(relation.error) } : relation,
+          ),
+        }
+      : {}),
+  };
+  return {
+    ...contextualResult,
+    operation: contextualResult?.operation ?? namespace.replace(/^task-/, ''),
+    actor: args.actor,
+    idempotency: {
+      state: dryRun ? 'not-recorded' : partial ? 'retryable-partial' : 'recorded',
+    },
+    ...(operationId ? { operationId } : {}),
+    before: contextualResult?.before ?? null,
+    after:
+      contextualResult?.after ??
+      (target
+        ? {
+            action: contextualResult?.action ?? contextualResult?.task?.action ?? 'completed',
+            target,
+          }
+        : null),
+    updatedAt: contextualResult?.updatedAt ?? new Date().toISOString(),
+    verification:
+      contextualResult?.verification ??
+      ({ verdict: dryRun ? 'PREVIEW' : partial ? 'PARTIAL' : 'NOT_REQUESTED' } as const),
+  };
+}
+
+async function runDirectTaskMutation(
+  client: VikunjaApiClient,
+  namespace: string,
+  args: Record<string, any>,
+  payload: unknown,
+  operation: () => Promise<any>,
+) {
+  const operationId =
+    args.dryRun === true
+      ? undefined
+      : durableOperationKey(namespace, args.idempotencyKey, payload);
+  try {
+    return finalizeTaskMutationReceipt(namespace, args, await operation(), operationId);
+  } catch (error) {
+    const contextual = error as any;
+    contextual.operationId ??= operationId;
+    contextual.identity ??=
+      contextual.status === 401 || contextual.status === 403
+        ? mutationIdentity(args, payload)
+        : await resolvedMutationIdentity(client, args, payload);
+    throw contextual;
+  }
+}
+
+async function runTaskMutation(
+  client: VikunjaApiClient,
+  namespace: string,
+  args: Record<string, any>,
+  payload: unknown,
+  operation: (dryRun: boolean) => Promise<any>,
+) {
+  const envelope = requireTaskMutationEnvelope(args, namespace);
+  if (args.dryRun === true) {
+    return finalizeTaskMutationReceipt(namespace, args, await operation(true));
+  }
+  const durablePayload = {
+    projectSelector: envelope.projectSelector,
+    actor: envelope.actor,
+    payload,
+  };
+  const operationId = durableOperationKey(namespace, envelope.idempotencyKey, durablePayload);
+  try {
+    const result = await runDurableOperation(namespace, envelope.idempotencyKey, durablePayload, () =>
+      operation(false).then((receipt) =>
+        finalizeTaskMutationReceipt(namespace, args, receipt, operationId),
+      ),
+    );
+    return result;
+  } catch (error) {
+    const contextual = error as any;
+    contextual.operationId ??= operationId;
+    contextual.identity ??=
+      contextual.status === 401 || contextual.status === 403
+        ? mutationIdentity(args, payload)
+        : await resolvedMutationIdentity(client, args, payload);
+    throw contextual;
+  }
+}
+
+async function composeCreatedTask(
+  client: VikunjaApiClient,
+  args: Record<string, any>,
+  created: any,
+) {
+  if (!args.firstComment && !args.relations?.length) return created;
+  if (args.dryRun === true) {
+    return {
+      ...created,
+      planned: {
+        firstComment: Boolean(args.firstComment),
+        relations: args.relations?.length ?? 0,
+      },
+      composedCalls: [],
+    };
+  }
+  const composedCalls: string[] = [];
+  let partial = false;
+  let firstComment: any;
+  if (args.firstComment) {
+    composedCalls.push(`POST /tasks/${created.target.id}/comments`);
+    try {
+      const comment = await createComment(
+        client,
+        { globalId: created.target.id },
+        args.firstComment,
+        undefined,
+        `${args.idempotencyKey}:first-comment`,
+        args.actor,
+      );
+      firstComment = { status: 'created', id: comment.id, created: comment.created };
+    } catch (error) {
+      partial = true;
+      const contextual = error as any;
+      contextual.operationId ??= durableOperationKey(
+        'comment-create',
+        `${args.idempotencyKey}:first-comment`,
+        {
+          taskSelector: { globalId: created.target.id },
+          projectSelector: undefined,
+          comment: args.firstComment,
+          actor: args.actor,
+        },
+      );
+      contextual.identity ??= {
+        project: created.target.project,
+        task: created.target,
+      };
+      firstComment = {
+        status: 'failed',
+        error: toErrorEnvelope(contextual, client.getConfig().vikunjaToken).error,
+      };
+    }
+  }
+  const relations = [];
+  for (const [index, relation] of (args.relations ?? []).entries()) {
+    composedCalls.push(`POST /tasks/${created.target.id}/relations`);
+    try {
+      const receipt = await runDurableOperation(
+        'task-create-relation',
+        `${args.idempotencyKey}:${index}`,
+        {
+          taskId: created.target.id,
+          otherTaskSelector: relation.otherTaskSelector,
+          relationKind: relation.relationKind,
+        },
+        () =>
+          relateTask(
+            client,
+            { globalId: created.target.id },
+            relation.otherTaskSelector,
+            relation.relationKind,
+            args.projectSelector,
+          ),
+      );
+      relations.push({
+        status: 'created',
+        relationKind: relation.relationKind,
+        otherTask: receipt.otherTask,
+        action: receipt.action,
+      });
+    } catch (error) {
+      partial = true;
+      const contextual = error as any;
+      contextual.operationId ??= durableOperationKey(
+        'task-create-relation',
+        `${args.idempotencyKey}:${index}`,
+        {
+          taskId: created.target.id,
+          otherTaskSelector: relation.otherTaskSelector,
+          relationKind: relation.relationKind,
+        },
+      );
+      contextual.identity ??= {
+        project: created.target.project,
+        task: created.target,
+        otherTask: relation.otherTaskSelector,
+      };
+      relations.push({
+        status: 'failed',
+        relationKind: relation.relationKind,
+        otherTaskSelector: relation.otherTaskSelector,
+        error: toErrorEnvelope(contextual, client.getConfig().vikunjaToken).error,
+      });
+    }
+  }
+  return {
+    ...created,
+    firstComment,
+    relations,
+    composedCalls,
+    outcome: partial ? 'partial' : 'completed',
+  };
+}
+
 function hasDefinedValue(value: Record<string, unknown> | undefined): boolean {
   return !!value && Object.values(value).some((field) => field !== undefined);
 }
@@ -509,6 +803,9 @@ export const TOOLS: McpToolDefinition[] = [
         'close',
         'reopen',
         'close_with_evidence',
+        'append_evidence_if_changed',
+        'close_if_verified',
+        'transition_with_evidence',
         'assign',
         'unassign',
         'list-assignees',
@@ -604,6 +901,17 @@ export const TOOLS: McpToolDefinition[] = [
         .optional(),
       expectedUpdatedAt: z.string().optional(),
       evidenceComment: z.string().trim().min(1).optional(),
+      evidence: z
+        .object({
+          command: z.string().trim().min(1),
+          result: z.string().trim().min(1),
+          timestamp: z.string().datetime(),
+          evidenceKey: z.string().regex(EXTERNAL_KEY_PATTERN),
+          revision: z.string().trim().min(1).optional(),
+          taskState: z.string().trim().min(1).optional(),
+        })
+        .strict()
+        .optional(),
       actor: actorSchema,
       userSelector: z.union([z.string().trim().min(1), z.number().int().positive()]).optional(),
       labelTitle: z.union([z.string().trim().min(1), z.number().int().positive()]).optional(),
@@ -619,12 +927,25 @@ export const TOOLS: McpToolDefinition[] = [
       base64Content: z.string().optional(),
       filePaths: z.array(z.string()).optional(),
       attachments: z.array(z.string()).optional(),
+      firstComment: z.string().trim().min(1).optional(),
+      relations: z
+        .array(
+          z
+            .object({
+              otherTaskSelector: taskSelectorSchema,
+              relationKind: z.string().trim().min(1),
+            })
+            .strict(),
+        )
+        .max(20)
+        .optional(),
       // download-attachment inputs.
       attachmentId: z.number().int().positive().optional(),
       destinationPath: z.string().optional(),
       overwrite: z.boolean().optional(),
       filenamePrefix: z.string().max(255).optional(),
       confirm: z.boolean().optional(),
+      dryRun: z.boolean().optional(),
       idempotencyKey: z.string().trim().min(1).max(200).optional(),
       externalKey: z.string().regex(EXTERNAL_KEY_PATTERN).optional(),
     }),
@@ -702,62 +1023,101 @@ export const TOOLS: McpToolDefinition[] = [
           if (!args.operation) throw badRequest('operation is required for receipt_lookup.');
           if (!args.idempotencyKey) throw badRequest('idempotencyKey is required.');
           return lookupTaskReceipt(args.operation, args.idempotencyKey);
-        case 'create':
-          requireActor(args.actor, 'task creation');
-          requireIdempotencyKey(args.idempotencyKey, 'task creation');
-          if (!args.projectSelector) throw badRequest('projectSelector is required for create.');
+        case 'create': {
+          requireTaskMutationEnvelope(args, 'task creation');
           if (!args.fields?.title) throw badRequest('fields.title is required for create.');
-          return createTask(
+          const fields = {
+            title: args.fields.title,
+            description: args.fields.description,
+            done: args.fields.done,
+            priority: args.fields.priority,
+            dueDate: args.fields.dueDate,
+          };
+          return runDirectTaskMutation(
             client,
-            args.projectSelector,
+            'task-create',
+            args,
             {
-              title: args.fields.title,
-              description: args.fields.description,
-              done: args.fields.done,
-              priority: args.fields.priority,
-              dueDate: args.fields.dueDate,
+              projectSelector: args.projectSelector,
+              fields,
+              attachments: args.attachments,
+              actor: args.actor,
             },
-            args.idempotencyKey,
-            args.attachments,
-            args.actor,
+            async () => {
+              const created = {
+                ...(await createTask(
+                  client,
+                  args.projectSelector,
+                  fields,
+                  args.idempotencyKey,
+                  args.attachments,
+                  args.actor,
+                  args.dryRun ?? false,
+                )),
+                actor: args.actor,
+              };
+              return composeCreatedTask(client, args, created);
+            },
           );
-        case 'create_if_absent':
-          requireActor(args.actor, 'task creation');
-          requireIdempotencyKey(args.idempotencyKey, 'task creation');
-          if (!args.projectSelector) throw badRequest('projectSelector is required.');
+        }
+        case 'create_if_absent': {
+          requireTaskMutationEnvelope(args, 'task creation');
           if (!args.fields?.title) throw badRequest('fields.title is required.');
-          return createIfAbsent(
+          const fields = {
+            title: args.fields.title,
+            description: args.fields.description,
+            done: args.fields.done,
+            priority: args.fields.priority,
+            dueDate: args.fields.dueDate,
+          };
+          return runDirectTaskMutation(
             client,
-            args.projectSelector,
+            'task-create-absent',
+            args,
             {
-              title: args.fields.title,
-              description: args.fields.description,
-              done: args.fields.done,
-              priority: args.fields.priority,
-              dueDate: args.fields.dueDate,
+              projectSelector: args.projectSelector,
+              fields,
+              attachments: args.attachments,
+              actor: args.actor,
             },
-            args.idempotencyKey,
-            args.attachments,
-            args.actor,
+            async () => ({
+              ...(await createIfAbsent(
+                client,
+                args.projectSelector,
+                fields,
+                args.idempotencyKey,
+                args.attachments,
+                args.actor,
+                args.dryRun ?? false,
+              )),
+              actor: args.actor,
+            }),
           );
+        }
         case 'upsert':
-          requireActor(args.actor, 'task upsert');
-          if (!args.projectSelector) throw badRequest('projectSelector is required for upsert.');
           if (!args.fields?.title) throw badRequest('fields.title is required for upsert.');
           if (!args.externalKey) throw badRequest('externalKey is required for upsert.');
-          return upsertTask(
+          return runTaskMutation(
             client,
-            args.projectSelector,
-            {
-              title: args.fields.title,
-              description: args.fields.description,
-              done: args.fields.done,
-              priority: args.fields.priority,
-              dueDate: args.fields.dueDate,
-            },
-            args.externalKey,
-            args.expectedUpdatedAt,
-            args.actor,
+            'task-upsert',
+            args,
+            { fields: args.fields, externalKey: args.externalKey, expectedUpdatedAt: args.expectedUpdatedAt },
+            (dryRun) =>
+              upsertTask(
+                client,
+                args.projectSelector,
+                {
+                  title: args.fields.title,
+                  description: args.fields.description,
+                  done: args.fields.done,
+                  priority: args.fields.priority,
+                  dueDate: args.fields.dueDate,
+                },
+                args.externalKey,
+                args.expectedUpdatedAt,
+                args.actor,
+                dryRun,
+              ),
           );
         case 'get':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
@@ -787,99 +1147,274 @@ export const TOOLS: McpToolDefinition[] = [
               'expectedUpdatedAt is required when replacing a task title or description.',
             );
           }
-          return updateTask(
+          return runTaskMutation(
             client,
-            args.taskSelector,
-            {
-              title: args.fields.title,
-              description: args.fields.description,
-              appendDescription: args.fields.appendDescription,
-              done: args.fields.done,
-              priority: args.fields.priority,
-              dueDate: args.fields.dueDate,
-            },
-            args.projectSelector,
-            args.expectedUpdatedAt,
+            'task-update',
+            args,
+            { taskSelector: args.taskSelector, fields: args.fields, expectedUpdatedAt: args.expectedUpdatedAt },
+            (dryRun) =>
+              updateTask(
+                client,
+                args.taskSelector,
+                {
+                  title: args.fields.title,
+                  description: args.fields.description,
+                  appendDescription: args.fields.appendDescription,
+                  done: args.fields.done,
+                  priority: args.fields.priority,
+                  dueDate: args.fields.dueDate,
+                },
+                args.projectSelector,
+                args.expectedUpdatedAt,
+                dryRun,
+              ),
           );
         case 'delete':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
-          return deleteTask(client, args.taskSelector, args.projectSelector);
+          return runTaskMutation(
+            client,
+            'task-delete',
+            args,
+            { taskSelector: args.taskSelector },
+            (dryRun) => deleteTask(client, args.taskSelector, args.projectSelector, dryRun),
+          );
         case 'close':
-          requireActor(args.actor, 'task close');
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
-          return {
-            ...(await updateTask(client, args.taskSelector, { done: true }, args.projectSelector)),
-            actor: args.actor,
-          };
+          return runTaskMutation(
+            client,
+            'task-close',
+            args,
+            { taskSelector: args.taskSelector },
+            (dryRun) =>
+              updateTask(client, args.taskSelector, { done: true }, args.projectSelector, undefined, dryRun),
+          );
         case 'reopen':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
-          return updateTask(client, args.taskSelector, { done: false }, args.projectSelector);
-        case 'close_with_evidence':
-          requireActor(args.actor, 'task close');
-          requireIdempotencyKey(args.idempotencyKey, 'close_with_evidence');
-          if (!args.taskSelector) throw badRequest('taskSelector is required.');
-          if (!args.evidenceComment) throw badRequest('evidenceComment is required.');
-          return closeWithEvidence(
+          return runTaskMutation(
             client,
-            args.taskSelector,
-            args.evidenceComment,
-            args.projectSelector,
-            args.idempotencyKey,
-            args.actor,
+            'task-reopen',
+            args,
+            { taskSelector: args.taskSelector },
+            (dryRun) =>
+              updateTask(client, args.taskSelector, { done: false }, args.projectSelector, undefined, dryRun),
+          );
+        case 'close_with_evidence':
+          requireTaskMutationEnvelope(args, 'close_with_evidence');
+          if (!args.taskSelector) throw badRequest('taskSelector is required.');
+          if (!args.evidenceComment && !args.evidence) {
+            throw badRequest('evidence or evidenceComment is required.');
+          }
+          if (args.evidence) {
+            return runTaskMutation(
+              client,
+              'close-with-structured-evidence',
+              args,
+              { taskSelector: args.taskSelector, evidence: args.evidence },
+              (dryRun) =>
+                closeWithStructuredEvidence(
+                  client,
+                  args.taskSelector,
+                  args.evidence,
+                  args.projectSelector,
+                  args.idempotencyKey,
+                  args.actor,
+                  dryRun,
+                ),
+            );
+          }
+          return runDirectTaskMutation(
+            client,
+            'close-with-evidence',
+            args,
+            {
+              taskSelector: args.taskSelector,
+              projectSelector: args.projectSelector,
+              evidenceComment: args.evidenceComment,
+              actor: args.actor,
+            },
+            () =>
+              closeWithEvidence(
+                client,
+                args.taskSelector,
+                args.evidenceComment,
+                args.projectSelector,
+                args.idempotencyKey,
+                args.actor,
+                args.dryRun ?? false,
+              ),
+          );
+        case 'append_evidence_if_changed':
+          if (!args.taskSelector) throw badRequest('taskSelector is required.');
+          if (!args.evidence) throw badRequest('evidence is required.');
+          return runTaskMutation(
+            client,
+            'append-evidence-if-changed',
+            args,
+            { taskSelector: args.taskSelector, evidence: args.evidence },
+            (dryRun) =>
+              appendEvidenceIfChanged(
+                client,
+                args.taskSelector,
+                args.evidence,
+                args.projectSelector,
+                undefined,
+                args.actor,
+                dryRun,
+              ),
+          );
+        case 'close_if_verified':
+          if (!args.taskSelector) throw badRequest('taskSelector is required.');
+          return runTaskMutation(
+            client,
+            'close-if-verified',
+            args,
+            { taskSelector: args.taskSelector },
+            (dryRun) => closeIfVerified(client, args.taskSelector, args.projectSelector, dryRun),
+          );
+        case 'transition_with_evidence':
+          if (!args.taskSelector) throw badRequest('taskSelector is required.');
+          if (!args.statusLabel) throw badRequest('statusLabel is required.');
+          if (!args.evidence) throw badRequest('evidence is required.');
+          return runTaskMutation(
+            client,
+            'transition-with-evidence',
+            args,
+            {
+              taskSelector: args.taskSelector,
+              statusLabel: args.statusLabel,
+              evidence: args.evidence,
+              createIfMissing: args.createIfMissing,
+            },
+            (dryRun) =>
+              transitionWithEvidence(
+                client,
+                args.taskSelector,
+                args.statusLabel,
+                args.evidence,
+                args.projectSelector,
+                args.idempotencyKey,
+                args.actor,
+                args.createIfMissing,
+                dryRun,
+              ),
           );
         case 'assign':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
           if (!args.userSelector) throw badRequest('userSelector is required.');
-          return assignTask(client, args.taskSelector, args.userSelector, args.projectSelector);
+          return runTaskMutation(
+            client,
+            'task-assign',
+            args,
+            { taskSelector: args.taskSelector, userSelector: args.userSelector },
+            (dryRun) =>
+              assignTask(client, args.taskSelector, args.userSelector, args.projectSelector, dryRun),
+          );
         case 'unassign':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
           if (!args.userSelector) throw badRequest('userSelector is required.');
-          return unassignTask(client, args.taskSelector, args.userSelector, args.projectSelector);
+          return runTaskMutation(
+            client,
+            'task-unassign',
+            args,
+            { taskSelector: args.taskSelector, userSelector: args.userSelector },
+            (dryRun) =>
+              unassignTask(client, args.taskSelector, args.userSelector, args.projectSelector, dryRun),
+          );
         case 'list-assignees':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
           return listAssignees(client, args.taskSelector, args.projectSelector);
         case 'apply-label':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
           if (!args.labelTitle) throw badRequest('labelTitle is required.');
-          return applyLabel(client, args.taskSelector, args.labelTitle, args.projectSelector);
+          return runTaskMutation(
+            client,
+            'task-apply-label',
+            args,
+            { taskSelector: args.taskSelector, labelTitle: args.labelTitle },
+            (dryRun) =>
+              applyLabel(client, args.taskSelector, args.labelTitle, args.projectSelector, dryRun),
+          );
         case 'remove-label':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
           if (!args.labelTitle) throw badRequest('labelTitle is required.');
-          return removeLabel(client, args.taskSelector, args.labelTitle, args.projectSelector);
+          return runTaskMutation(
+            client,
+            'task-remove-label',
+            args,
+            { taskSelector: args.taskSelector, labelTitle: args.labelTitle },
+            (dryRun) =>
+              removeLabel(client, args.taskSelector, args.labelTitle, args.projectSelector, dryRun),
+          );
         case 'list-labels':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
           return listLabels(client, args.taskSelector, args.projectSelector);
         case 'set_status':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
           if (!args.statusLabel) throw badRequest('statusLabel is required.');
-          return setTaskStatus(
+          return runTaskMutation(
             client,
-            args.taskSelector,
-            args.statusLabel,
-            args.projectSelector,
-            args.createIfMissing,
+            'task-set-status',
+            args,
+            {
+              taskSelector: args.taskSelector,
+              statusLabel: args.statusLabel,
+              createIfMissing: args.createIfMissing,
+            },
+            (dryRun) =>
+              setTaskStatus(
+                client,
+                args.taskSelector,
+                args.statusLabel,
+                args.projectSelector,
+                args.createIfMissing,
+                dryRun,
+              ),
           );
         case 'relate':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
           if (!args.otherTaskSelector) throw badRequest('otherTaskSelector is required.');
           if (!args.relationKind) throw badRequest('relationKind is required.');
-          return relateTask(
+          return runTaskMutation(
             client,
-            args.taskSelector,
-            args.otherTaskSelector,
-            args.relationKind,
-            args.projectSelector,
+            'task-relate',
+            args,
+            {
+              taskSelector: args.taskSelector,
+              otherTaskSelector: args.otherTaskSelector,
+              relationKind: args.relationKind,
+            },
+            (dryRun) =>
+              relateTask(
+                client,
+                args.taskSelector,
+                args.otherTaskSelector,
+                args.relationKind,
+                args.projectSelector,
+                dryRun,
+              ),
           );
         case 'unrelate':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
           if (!args.otherTaskSelector) throw badRequest('otherTaskSelector is required.');
           if (!args.relationKind) throw badRequest('relationKind is required.');
-          return unrelateTask(
+          return runTaskMutation(
             client,
-            args.taskSelector,
-            args.otherTaskSelector,
-            args.relationKind,
-            args.projectSelector,
+            'task-unrelate',
+            args,
+            {
+              taskSelector: args.taskSelector,
+              otherTaskSelector: args.otherTaskSelector,
+              relationKind: args.relationKind,
+            },
+            (dryRun) =>
+              unrelateTask(
+                client,
+                args.taskSelector,
+                args.otherTaskSelector,
+                args.relationKind,
+                args.projectSelector,
+                dryRun,
+              ),
           );
         case 'list-relations':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
@@ -1758,6 +2293,9 @@ const TASK_MUTATIONS = new Set([
   'close',
   'reopen',
   'close_with_evidence',
+  'append_evidence_if_changed',
+  'close_if_verified',
+  'transition_with_evidence',
   'assign',
   'unassign',
   'apply-label',

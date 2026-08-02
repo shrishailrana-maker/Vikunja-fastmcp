@@ -132,7 +132,20 @@ export async function runDurableOperation<T>(
 
   try {
     const result = await operation();
-    idempotency.set(operationKey, { status: 'completed', result });
+    const partial =
+      result !== null &&
+      typeof result === 'object' &&
+      ((result as any).outcome === 'partial' ||
+        (result as any).action === 'partial' ||
+        (result as any).status === 'partial');
+    if (partial) {
+      // Preserve the partial receipt for the caller, but release the durable
+      // claim so the same key can retry the unfinished step. Nested evidence
+      // and relation writes have their own durable keys or content markers.
+      idempotency.delete(operationKey);
+    } else {
+      idempotency.set(operationKey, { status: 'completed', result });
+    }
     return result;
   } catch (error) {
     idempotency.delete(operationKey);

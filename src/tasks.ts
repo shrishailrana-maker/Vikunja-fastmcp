@@ -19,7 +19,7 @@ import {
   listAllLabels,
   type TaskSelectorInput,
 } from './identity.js';
-import { VikunjaError } from './errors.js';
+import { toErrorEnvelope, VikunjaError } from './errors.js';
 import {
   normalizePagination,
   normalizeDatesAndNulls,
@@ -969,8 +969,9 @@ export async function createTask(
   idempotencyKey?: string,
   attachments?: string[],
   actor?: string,
-): Promise<WriteEcho> {
-  if (idempotencyKey) {
+  dryRun = false,
+): Promise<any> {
+  if (idempotencyKey && !dryRun) {
     return runDurableOperation(
       'task-create',
       idempotencyKey,
@@ -980,12 +981,23 @@ export async function createTask(
         attachments,
         actor,
       },
-      () => createTask(client, projectSelector, fields, undefined, attachments, actor),
+      () => createTask(client, projectSelector, fields, undefined, attachments, actor, false),
     );
   }
 
   const project = await resolveProject(client, projectSelector);
   const webUrl = client.getConfig().vikunjaWebUrl;
+  if (dryRun) {
+    return {
+      action: 'would_create',
+      operation: 'create',
+      target: { project: { id: project.id, title: project.title }, title: fields.title },
+      changed: ['task'],
+      before: { exists: false },
+      after: { exists: true, title: fields.title },
+      dryRun: true,
+    };
+  }
 
   const body: Record<string, any> = {
     title: fields.title,
@@ -1018,6 +1030,15 @@ export async function createTask(
       title: task.title,
     },
   };
+  (echo as any).updatedAt = task.updated || new Date().toISOString();
+  (echo as any).before = { exists: false };
+  (echo as any).after = {
+    exists: true,
+    title: task.title,
+    done: task.done,
+    priority: task.priority,
+    dueDate: task.dueDate,
+  };
 
   // Upload any attachments to the new task, then cache the full echo so a
   // retry with the same idempotencyKey never creates a second task.
@@ -1039,8 +1060,9 @@ export async function createIfAbsent(
   idempotencyKey?: string,
   attachments?: string[],
   actor?: string,
-): Promise<WriteEcho> {
-  if (idempotencyKey) {
+  dryRun = false,
+): Promise<any> {
+  if (idempotencyKey && !dryRun) {
     return runDurableOperation(
       'task-create-absent',
       idempotencyKey,
@@ -1050,7 +1072,7 @@ export async function createIfAbsent(
         attachments,
         actor,
       },
-      () => createIfAbsent(client, projectSelector, fields, undefined, attachments, actor),
+      () => createIfAbsent(client, projectSelector, fields, undefined, attachments, actor, false),
     );
   }
 
@@ -1116,7 +1138,15 @@ export async function createIfAbsent(
     // Do not re-upload attachments when the task already exists.
   } else {
     // Create with attachments only on the create path (not on exists).
-    echo = await createTask(client, { id: project.id }, fields, undefined, attachments, actor);
+    echo = await createTask(
+      client,
+      { id: project.id },
+      fields,
+      undefined,
+      attachments,
+      actor,
+      dryRun,
+    );
   }
 
   return echo;
@@ -1240,7 +1270,8 @@ export async function upsertTask(
   externalKey: string,
   expectedUpdatedAt?: string,
   actor?: string,
-): Promise<UpsertEcho> {
+  dryRun = false,
+): Promise<any> {
   const marker = stableKeyMarker(externalKey);
   const project = await resolveProject(client, projectSelector);
   const filter = `description like ${escapeFilterString(`%${marker}%`)}`;
@@ -1288,6 +1319,10 @@ export async function upsertTask(
         ...fields,
         description: descriptionWithStableKey(fields.description, externalKey, actor),
       },
+      undefined,
+      undefined,
+      actor,
+      dryRun,
     );
     return { ...echo, externalKey, actor };
   }
@@ -1327,6 +1362,7 @@ export async function upsertTask(
     updateFields,
     { id: project.id },
     expectedUpdatedAt,
+    dryRun,
   );
   return { ...echo, externalKey, actor };
 }
@@ -1481,7 +1517,8 @@ export async function updateTask(
   },
   projectSelector?: { id?: number; title?: string },
   expectedUpdatedAt?: string,
-): Promise<WriteEcho> {
+  dryRun = false,
+): Promise<any> {
   if (fields.description !== undefined && fields.appendDescription !== undefined) {
     throw new VikunjaError({
       status: 400,
@@ -1497,6 +1534,13 @@ export async function updateTask(
 
   const currentRaw = await client.request<any>('GET', `/tasks/${taskRef.id}`);
   const currentTask = normalizeTask(currentRaw, taskRef.project, webUrl);
+  const beforeState = {
+    title: currentTask.title,
+    done: currentTask.done,
+    priority: currentTask.priority,
+    dueDate: currentTask.dueDate,
+    updatedAt: currentTask.updated || null,
+  };
 
   if (expectedUpdatedAt) {
     const currentUpdated = currentTask.updated || '';
@@ -1558,6 +1602,29 @@ export async function updateTask(
   }
 
   if (Object.keys(body).length > 0) {
+    if (dryRun) {
+      return {
+        action: 'would_update',
+        operation: 'update',
+        target: {
+          id: currentTask.id,
+          index: currentTask.index,
+          identifier: currentTask.identifier,
+          project: currentTask.project,
+          title: currentTask.title,
+        },
+        changed: Object.keys(body),
+        before: beforeState,
+        after: {
+          ...beforeState,
+          ...(body.title !== undefined ? { title: body.title } : {}),
+          ...(body.done !== undefined ? { done: body.done } : {}),
+          ...(body.priority !== undefined ? { priority: body.priority } : {}),
+          ...(body.due_date !== undefined ? { dueDate: body.due_date } : {}),
+        },
+        dryRun: true,
+      };
+    }
     const patchOperations = Object.entries(body).map(([field, value]) => ({
       op: 'replace',
       path: `/${field}`,
@@ -1597,6 +1664,14 @@ export async function updateTask(
         project: task.project,
         title: task.title,
       },
+      before: beforeState,
+      after: {
+        title: task.title,
+        done: task.done,
+        priority: task.priority,
+        dueDate: task.dueDate,
+        updatedAt: task.updated || null,
+      },
     };
   }
 
@@ -1609,6 +1684,8 @@ export async function updateTask(
       project: currentTask.project,
       title: currentTask.title,
     },
+    before: beforeState,
+    after: beforeState,
   };
 }
 
@@ -1627,8 +1704,27 @@ export async function deleteTask(
   client: VikunjaApiClient,
   taskSelector: TaskSelectorInput,
   projectSelector?: { id?: number; title?: string },
-): Promise<WriteEcho> {
+  dryRun = false,
+): Promise<any> {
   const taskRef = await resolveTask(client, taskSelector, projectSelector);
+
+  if (dryRun) {
+    return {
+      action: 'would_delete',
+      operation: 'delete',
+      target: {
+        id: taskRef.id,
+        index: taskRef.index,
+        identifier: taskRef.identifier,
+        project: taskRef.project,
+        title: taskRef.title,
+      },
+      changed: ['task'],
+      before: { exists: true },
+      after: { exists: false },
+      dryRun: true,
+    };
+  }
 
   await client.request<any>('DELETE', `/tasks/${taskRef.id}`);
 
@@ -1641,6 +1737,8 @@ export async function deleteTask(
       project: taskRef.project,
       title: taskRef.title,
     },
+    before: { exists: true },
+    after: { exists: false },
   };
 }
 
@@ -1649,6 +1747,25 @@ export interface CloseWithEvidenceResult {
   task: WriteEcho;
   changed: ('comment' | 'done')[];
   composedCalls: string[];
+  outcome?: 'completed' | 'partial' | 'preview';
+  evidenceStatus?: 'created' | 'not-created' | 'would-create';
+  taskStatus?: 'open' | 'closed' | 'would-close' | 'unknown';
+  before?: Record<string, unknown>;
+  after?: Record<string, unknown>;
+  verification?: { verdict: string };
+  error?: ReturnType<typeof toErrorEnvelope>['error'];
+}
+
+async function readBackTaskStatus(
+  client: VikunjaApiClient,
+  taskId: number,
+): Promise<'open' | 'closed' | 'unknown'> {
+  try {
+    const current = await client.request<any>('GET', `/tasks/${taskId}`);
+    return current.done === true ? 'closed' : 'open';
+  } catch {
+    return 'unknown';
+  }
 }
 
 export async function closeWithEvidence(
@@ -1658,10 +1775,35 @@ export async function closeWithEvidence(
   projectSelector?: { id?: number; title?: string },
   idempotencyKey?: string,
   actor?: string,
-): Promise<CloseWithEvidenceResult> {
+  dryRun = false,
+): Promise<any> {
   const payload = { taskSelector, projectSelector, evidenceComment, actor };
   const execute = async (): Promise<CloseWithEvidenceResult> => {
-    const taskRef = await resolveTask(client, taskSelector, projectSelector);
+    const taskRef = await resolveTask(client, taskSelector, projectSelector, { includeRawTask: true });
+    if (dryRun) {
+      return {
+        task: {
+          action: 'would_update',
+          target: {
+            id: taskRef.id,
+            index: taskRef.index,
+            identifier: taskRef.identifier,
+            project: taskRef.project,
+            title: taskRef.title,
+          },
+        } as any,
+        comment: { id: 0, author: {}, created: undefined },
+        changed: ['comment', 'done'],
+        composedCalls: [],
+        outcome: 'preview',
+        evidenceStatus: 'would-create',
+        taskStatus: 'would-close',
+        before: { done: Boolean(taskRef.rawTask?.done), evidencePresent: false },
+        after: { done: true, evidencePresent: true },
+        verification: { verdict: 'RECORDED' },
+        dryRun: true,
+      } as any;
+    }
     const composedCalls = [];
 
     composedCalls.push(`POST /tasks/${taskRef.id}/comments`);
@@ -1674,8 +1816,42 @@ export async function closeWithEvidence(
       actor,
     );
 
-    const taskEcho = await updateTask(client, taskRef.id, { done: true });
-    if (taskEcho.action !== 'unchanged') composedCalls.push(`PATCH /tasks/${taskRef.id}`);
+    let taskEcho: WriteEcho;
+    try {
+      taskEcho = await updateTask(client, taskRef.id, { done: true });
+      if (taskEcho.action !== 'unchanged') composedCalls.push(`PATCH /tasks/${taskRef.id}`);
+    } catch (error) {
+      const taskStatus = await readBackTaskStatus(client, taskRef.id);
+      return {
+        comment: {
+          id: comment.id,
+          author: comment.author,
+          created: comment.created,
+        },
+        task: {
+          action: 'unchanged',
+          target: {
+            id: taskRef.id,
+            index: taskRef.index,
+            identifier: taskRef.identifier,
+            project: taskRef.project,
+            title: taskRef.title,
+          },
+        },
+        changed: ['comment'],
+        composedCalls,
+        outcome: 'partial',
+        evidenceStatus: 'created',
+        taskStatus,
+        before: { done: Boolean(taskRef.rawTask?.done), evidencePresent: false },
+        after: {
+          done: taskStatus === 'unknown' ? null : taskStatus === 'closed',
+          evidencePresent: true,
+        },
+        verification: { verdict: 'RECORDED' },
+        error: toErrorEnvelope(error).error,
+      };
+    }
 
     return {
       comment: {
@@ -1686,12 +1862,311 @@ export async function closeWithEvidence(
       task: taskEcho,
       changed: taskEcho.action === 'unchanged' ? ['comment'] : ['comment', 'done'],
       composedCalls,
+      outcome: 'completed',
+      evidenceStatus: 'created',
+      taskStatus: 'closed',
+      before: { ...(taskEcho as any).before, evidencePresent: false },
+      after: { ...(taskEcho as any).after, evidencePresent: true },
+      verification: { verdict: 'RECORDED' },
     };
   };
 
-  return idempotencyKey
+  return idempotencyKey && !dryRun
     ? runDurableOperation('close-with-evidence', idempotencyKey, payload, execute)
     : execute();
+}
+
+export interface VerificationEvidence {
+  command: string;
+  result: string;
+  timestamp: string;
+  evidenceKey: string;
+  revision?: string;
+  taskState?: string;
+}
+
+function evidenceMarker(evidenceKey: string): string {
+  if (!EXTERNAL_KEY_PATTERN.test(evidenceKey)) {
+    throw new VikunjaError({
+      status: 400,
+      code: 'VALIDATION_ERROR',
+      method: 'TOOLS_CALL',
+      path: 'evidence.evidenceKey',
+      message: 'evidenceKey must use the same safe 1-120 character format as externalKey.',
+      fieldErrors: [],
+    });
+  }
+  return `[vfm-evidence:${evidenceKey}]`;
+}
+
+function evidenceMarkdown(evidence: VerificationEvidence): string {
+  const lines = [
+    '### Verification evidence',
+    `- Command: ${evidence.command}`,
+    `- Result: ${evidence.result}`,
+    `- Timestamp: ${evidence.timestamp}`,
+  ];
+  if (evidence.revision) lines.push(`- Revision: ${evidence.revision}`);
+  if (evidence.taskState) lines.push(`- Task state: ${evidence.taskState}`);
+  lines.push('', evidenceMarker(evidence.evidenceKey));
+  return lines.join('\n');
+}
+
+function verificationVerdict(markdown: string): 'PASS' | 'FAIL' | null {
+  const match = /(?:^|\n)\s*(?:[-*]\s*)?(?:Result:\s*)?(PASS|FAIL)\b/i.exec(markdown);
+  return match ? (match[1].toUpperCase() as 'PASS' | 'FAIL') : null;
+}
+
+function compactTarget(taskRef: Awaited<ReturnType<typeof resolveTask>>) {
+  return {
+    id: taskRef.id,
+    index: taskRef.index,
+    identifier: taskRef.identifier,
+    project: taskRef.project,
+    title: taskRef.title,
+  };
+}
+
+export async function appendEvidenceIfChanged(
+  client: VikunjaApiClient,
+  taskSelector: TaskSelectorInput,
+  evidence: VerificationEvidence,
+  projectSelector?: { id?: number; title?: string },
+  idempotencyKey?: string,
+  actor?: string,
+  dryRun = false,
+): Promise<any> {
+  const taskRef = await resolveTask(client, taskSelector, projectSelector);
+  const marker = evidenceMarker(evidence.evidenceKey);
+  const comments = await fetchAllCollectionItems<any>(
+    (path) => client.request<any>('GET', path),
+    `/tasks/${taskRef.id}/comments`,
+  );
+  const existing = comments.find((comment) =>
+    htmlToMarkdown(String(comment.comment ?? '')).includes(marker),
+  );
+  if (existing) {
+    return {
+      action: 'unchanged',
+      target: compactTarget(taskRef),
+      evidenceKey: evidence.evidenceKey,
+      commentId: existing.id,
+      changed: [],
+      before: { evidencePresent: true },
+      after: { evidencePresent: true },
+      verification: { verdict: verificationVerdict(htmlToMarkdown(String(existing.comment ?? ''))) },
+      dryRun,
+    };
+  }
+  if (dryRun) {
+    return {
+      action: 'would_comment',
+      target: compactTarget(taskRef),
+      evidenceKey: evidence.evidenceKey,
+      changed: ['comment'],
+      before: { evidencePresent: false },
+      after: { evidencePresent: true },
+      verification: { verdict: verificationVerdict(evidence.result) },
+      dryRun: true,
+    };
+  }
+  const comment = await createComment(
+    client,
+    { globalId: taskRef.id },
+    evidenceMarkdown(evidence),
+    undefined,
+    idempotencyKey,
+    actor,
+  );
+  return {
+    action: 'commented',
+    target: compactTarget(taskRef),
+    evidenceKey: evidence.evidenceKey,
+    commentId: comment.id,
+    changed: ['comment'],
+    before: { evidencePresent: false },
+    after: { evidencePresent: true },
+    verification: { verdict: verificationVerdict(evidence.result) },
+  };
+}
+
+export async function closeWithStructuredEvidence(
+  client: VikunjaApiClient,
+  taskSelector: TaskSelectorInput,
+  evidence: VerificationEvidence,
+  projectSelector: { id?: number; title?: string },
+  idempotencyKey: string,
+  actor: string,
+  dryRun = false,
+): Promise<any> {
+  const evidenceReceipt = await appendEvidenceIfChanged(
+    client,
+    taskSelector,
+    evidence,
+    projectSelector,
+    dryRun ? undefined : `${idempotencyKey}:evidence`,
+    actor,
+    dryRun,
+  );
+  try {
+    const task = await updateTask(
+      client,
+      taskSelector,
+      { done: true },
+      projectSelector,
+      undefined,
+      dryRun,
+    );
+    return {
+      action: dryRun ? 'would_close' : task.action,
+      target: task.target,
+      evidence: {
+        key: evidence.evidenceKey,
+        created: evidenceReceipt.action === 'commented',
+        commentId: evidenceReceipt.commentId ?? null,
+      },
+      taskStatus: dryRun ? 'would-close' : 'closed',
+      outcome: dryRun ? 'preview' : 'completed',
+      changed: [...evidenceReceipt.changed, ...(task.action === 'unchanged' ? [] : ['done'])],
+      before: { ...task.before, evidencePresent: evidenceReceipt.before.evidencePresent },
+      after: { ...task.after, evidencePresent: true },
+      verification: { verdict: verificationVerdict(evidence.result) ?? 'RECORDED' },
+      dryRun,
+    };
+  } catch (error) {
+    const taskStatus = await readBackTaskStatus(client, evidenceReceipt.target.id);
+    return {
+      action: 'partial',
+      target: evidenceReceipt.target,
+      evidence: {
+        key: evidence.evidenceKey,
+        created: evidenceReceipt.action === 'commented',
+        commentId: evidenceReceipt.commentId ?? null,
+      },
+      taskStatus,
+      outcome: 'partial',
+      changed: evidenceReceipt.changed,
+      before: { evidencePresent: evidenceReceipt.before.evidencePresent },
+      after: { done: taskStatus === 'closed', evidencePresent: true },
+      verification: { verdict: verificationVerdict(evidence.result) ?? 'RECORDED' },
+      error: toErrorEnvelope(error).error,
+    };
+  }
+}
+
+export async function closeIfVerified(
+  client: VikunjaApiClient,
+  taskSelector: TaskSelectorInput,
+  projectSelector: { id?: number; title?: string },
+  dryRun = false,
+): Promise<any> {
+  const taskRef = await resolveTask(client, taskSelector, projectSelector);
+  const comments = await fetchAllCollectionItems<any>(
+    (path) => client.request<any>('GET', path),
+    `/tasks/${taskRef.id}/comments?order_by=desc`,
+  );
+  const latestVerdict = comments
+    .map((comment) => ({
+      ...comment,
+      markdown: htmlToMarkdown(String(comment.comment ?? '')),
+      verdict: verificationVerdict(htmlToMarkdown(String(comment.comment ?? ''))),
+    }))
+    .sort((left, right) => String(right.created ?? '').localeCompare(String(left.created ?? '')))
+    .find((comment) => comment.verdict !== null);
+  if (!latestVerdict || latestVerdict.verdict !== 'PASS') {
+    throw new VikunjaError({
+      status: 409,
+      code: 'VERIFICATION_REQUIRED',
+      method: 'TOOLS_CALL',
+      path: `/tasks/${taskRef.id}/comments`,
+      message: latestVerdict
+        ? `Task ${taskRef.identifier || `#${taskRef.index}`} has a newer FAIL verification verdict.`
+        : `Task ${taskRef.identifier || `#${taskRef.index}`} has no PASS verification verdict.`,
+      fieldErrors: [],
+    });
+  }
+  const task = await updateTask(
+    client,
+    { globalId: taskRef.id },
+    { done: true },
+    { id: taskRef.project.id },
+    undefined,
+    dryRun,
+  );
+  return {
+    ...task,
+    operation: 'close_if_verified',
+    verification: {
+      verdict: 'PASS',
+      commentId: latestVerdict.id,
+      timestamp: latestVerdict.created ?? null,
+    },
+    dryRun,
+  };
+}
+
+export async function transitionWithEvidence(
+  client: VikunjaApiClient,
+  taskSelector: TaskSelectorInput,
+  statusLabel: string,
+  evidence: VerificationEvidence,
+  projectSelector: { id?: number; title?: string },
+  idempotencyKey: string,
+  actor: string,
+  createIfMissing = false,
+  dryRun = false,
+): Promise<any> {
+  const evidenceReceipt = await appendEvidenceIfChanged(
+    client,
+    taskSelector,
+    evidence,
+    projectSelector,
+    dryRun ? undefined : `${idempotencyKey}:evidence`,
+    actor,
+    dryRun,
+  );
+  try {
+    const status = await setTaskStatus(
+      client,
+      taskSelector,
+      statusLabel,
+      projectSelector,
+      createIfMissing,
+      dryRun,
+    );
+    return {
+      ...status,
+      operation: 'transition_with_evidence',
+      evidence: {
+        key: evidence.evidenceKey,
+        created: evidenceReceipt.action === 'commented',
+        commentId: evidenceReceipt.commentId ?? null,
+      },
+      outcome: dryRun ? 'preview' : 'completed',
+      changed: [...evidenceReceipt.changed, ...(status.action === 'unchanged' ? [] : ['status'])],
+      before: { ...status.before, evidencePresent: evidenceReceipt.before.evidencePresent },
+      after: { ...status.after, evidencePresent: true },
+      verification: { verdict: verificationVerdict(evidence.result) ?? 'RECORDED' },
+      dryRun,
+    };
+  } catch (error) {
+    return {
+      action: 'partial',
+      target: evidenceReceipt.target,
+      operation: 'transition_with_evidence',
+      evidence: {
+        key: evidence.evidenceKey,
+        created: evidenceReceipt.action === 'commented',
+        commentId: evidenceReceipt.commentId ?? null,
+      },
+      outcome: 'partial',
+      changed: evidenceReceipt.changed,
+      before: { evidencePresent: evidenceReceipt.before.evidencePresent },
+      after: { evidencePresent: true, statusLabels: null },
+      verification: { verdict: verificationVerdict(evidence.result) ?? 'RECORDED' },
+      error: toErrorEnvelope(error).error,
+    };
+  }
 }
 
 export async function resolveUser(
@@ -1823,7 +2298,8 @@ export async function assignTask(
   taskSelector: TaskSelectorInput,
   userSelector: string | number,
   projectSelector?: { id?: number; title?: string },
-): Promise<WriteEcho> {
+  dryRun = false,
+): Promise<any> {
   const taskRef = await resolveTask(client, taskSelector, projectSelector);
   const userId = await resolveUser(client, userSelector);
   const target = {
@@ -1833,9 +2309,28 @@ export async function assignTask(
     project: taskRef.project,
     title: taskRef.title,
   };
+  const beforeAssignees = taskRef.assignees.map((user) => user.id);
+  const afterAssignees = [...new Set([...beforeAssignees, userId])];
 
   if (taskRef.assignees.some((user) => user.id === userId)) {
-    return { action: 'unchanged', target };
+    return {
+      action: 'unchanged',
+      target,
+      before: { assigneeIds: beforeAssignees },
+      after: { assigneeIds: beforeAssignees },
+    };
+  }
+
+  if (dryRun) {
+    return {
+      action: 'would_update',
+      operation: 'assign',
+      target,
+      changed: ['assignee'],
+      before: { assigneeIds: beforeAssignees },
+      after: { assigneeIds: afterAssignees },
+      dryRun: true,
+    };
   }
 
   await client.request<any>('POST', `/tasks/${taskRef.id}/assignees`, {
@@ -1845,6 +2340,8 @@ export async function assignTask(
   return {
     action: 'updated',
     target,
+    before: { assigneeIds: beforeAssignees },
+    after: { assigneeIds: afterAssignees },
   };
 }
 
@@ -1853,7 +2350,8 @@ export async function unassignTask(
   taskSelector: TaskSelectorInput,
   userSelector: string | number,
   projectSelector?: { id?: number; title?: string },
-): Promise<WriteEcho> {
+  dryRun = false,
+): Promise<any> {
   const taskRef = await resolveTask(client, taskSelector, projectSelector);
   const userId = await resolveUser(client, userSelector);
   const target = {
@@ -1863,9 +2361,28 @@ export async function unassignTask(
     project: taskRef.project,
     title: taskRef.title,
   };
+  const beforeAssignees = taskRef.assignees.map((user) => user.id);
+  const afterAssignees = beforeAssignees.filter((id) => id !== userId);
 
   if (!taskRef.assignees.some((user) => user.id === userId)) {
-    return { action: 'unchanged', target };
+    return {
+      action: 'unchanged',
+      target,
+      before: { assigneeIds: beforeAssignees },
+      after: { assigneeIds: beforeAssignees },
+    };
+  }
+
+  if (dryRun) {
+    return {
+      action: 'would_update',
+      operation: 'unassign',
+      target,
+      changed: ['assignee'],
+      before: { assigneeIds: beforeAssignees },
+      after: { assigneeIds: afterAssignees },
+      dryRun: true,
+    };
   }
 
   await client.request<any>('DELETE', `/tasks/${taskRef.id}/assignees/${userId}`);
@@ -1873,6 +2390,8 @@ export async function unassignTask(
   return {
     action: 'updated',
     target,
+    before: { assigneeIds: beforeAssignees },
+    after: { assigneeIds: afterAssignees },
   };
 }
 
@@ -1894,7 +2413,8 @@ export async function applyLabel(
   taskSelector: TaskSelectorInput,
   labelTitle: string | number,
   projectSelector?: { id?: number; title?: string },
-): Promise<WriteEcho> {
+  dryRun = false,
+): Promise<any> {
   const taskRef = await resolveTask(client, taskSelector, projectSelector);
   const target = {
     id: taskRef.id,
@@ -1903,17 +2423,50 @@ export async function applyLabel(
     project: taskRef.project,
     title: taskRef.title,
   };
+  const beforeLabels = taskRef.labels.map((label) => ({ id: label.id, title: label.title }));
   const numericSelector = typeof labelTitle === 'number' || /^\d+$/.test(String(labelTitle).trim());
   if (
     !numericSelector &&
     taskRef.labels.some((label) => label.title.toLowerCase() === String(labelTitle).toLowerCase())
   ) {
-    return { action: 'unchanged', target };
+    return { action: 'unchanged', target, before: { labels: beforeLabels }, after: { labels: beforeLabels } };
   }
-  const labelId = await resolveOrCreateLabel(client, labelTitle);
+  let labelId: number;
+  try {
+    labelId = dryRun
+      ? await resolveLabel(client, String(labelTitle))
+      : await resolveOrCreateLabel(client, labelTitle);
+  } catch (error: any) {
+    if (dryRun && error instanceof VikunjaError && error.code === 'LABEL_NOT_FOUND') {
+      return {
+        action: 'would_update',
+        operation: 'apply-label',
+        target,
+        changed: ['label'],
+        wouldCreateLabel: String(labelTitle),
+        before: { labels: beforeLabels },
+        after: { labels: [...beforeLabels, { id: null, title: String(labelTitle) }] },
+        dryRun: true,
+      };
+    }
+    throw error;
+  }
 
   if (taskRef.labels.some((label) => label.id === labelId)) {
-    return { action: 'unchanged', target };
+    return { action: 'unchanged', target, before: { labels: beforeLabels }, after: { labels: beforeLabels } };
+  }
+  const applied = { id: labelId, title: String(labelTitle) };
+
+  if (dryRun) {
+    return {
+      action: 'would_update',
+      operation: 'apply-label',
+      target,
+      changed: ['label'],
+      before: { labels: beforeLabels },
+      after: { labels: [...beforeLabels, applied] },
+      dryRun: true,
+    };
   }
 
   await client.request<any>('POST', `/tasks/${taskRef.id}/labels`, {
@@ -1923,6 +2476,8 @@ export async function applyLabel(
   return {
     action: 'updated',
     target,
+    before: { labels: beforeLabels },
+    after: { labels: [...beforeLabels, applied] },
   };
 }
 
@@ -1931,7 +2486,8 @@ export async function removeLabel(
   taskSelector: TaskSelectorInput,
   labelTitle: string | number,
   projectSelector?: { id?: number; title?: string },
-): Promise<WriteEcho> {
+  dryRun = false,
+): Promise<any> {
   const taskRef = await resolveTask(client, taskSelector, projectSelector);
   const target = {
     id: taskRef.id,
@@ -1940,6 +2496,7 @@ export async function removeLabel(
     project: taskRef.project,
     title: taskRef.title,
   };
+  const beforeLabels = taskRef.labels.map((label) => ({ id: label.id, title: label.title }));
   const numericSelector = typeof labelTitle === 'number' || /^\d+$/.test(String(labelTitle).trim());
   const appliedLabel = taskRef.labels.find((label) =>
     numericSelector
@@ -1947,7 +2504,20 @@ export async function removeLabel(
       : label.title.toLowerCase() === String(labelTitle).toLowerCase(),
   );
   if (!appliedLabel) {
-    return { action: 'unchanged', target };
+    return { action: 'unchanged', target, before: { labels: beforeLabels }, after: { labels: beforeLabels } };
+  }
+  const afterLabels = beforeLabels.filter((label) => label.id !== appliedLabel.id);
+
+  if (dryRun) {
+    return {
+      action: 'would_update',
+      operation: 'remove-label',
+      target,
+      changed: ['label'],
+      before: { labels: beforeLabels },
+      after: { labels: afterLabels },
+      dryRun: true,
+    };
   }
 
   await client.request<any>('DELETE', `/tasks/${taskRef.id}/labels/${appliedLabel.id}`);
@@ -1955,6 +2525,8 @@ export async function removeLabel(
   return {
     action: 'updated',
     target,
+    before: { labels: beforeLabels },
+    after: { labels: afterLabels },
   };
 }
 
@@ -1983,7 +2555,8 @@ export async function setTaskStatus(
   statusLabel: string,
   projectSelector?: { id?: number; title?: string },
   createIfMissing = false,
-): Promise<SetStatusResult> {
+  dryRun = false,
+): Promise<any> {
   const prefix = client.getConfig().statusLabelPrefix ?? 'status:';
   if (!statusLabel.toLowerCase().startsWith(prefix.toLowerCase())) {
     throw new VikunjaError({
@@ -2010,6 +2583,7 @@ export async function setTaskStatus(
   const requestedCurrent = currentStatusLabels.find(
     (label) => label.title.toLowerCase() === statusLabel.toLowerCase(),
   );
+  const beforeStatus = currentStatusLabels.map((label) => label.title);
 
   if (currentStatusLabels.length === 1 && requestedCurrent) {
     return {
@@ -2018,14 +2592,49 @@ export async function setTaskStatus(
       statusLabel: requestedCurrent.title,
       removedStatusLabels: [],
       repaired: false,
+      before: { statusLabels: beforeStatus },
+      after: { statusLabels: beforeStatus },
     };
   }
 
-  const labelId =
-    requestedCurrent?.id ?? (await resolveOrCreateLabel(client, statusLabel, { createIfMissing }));
+  let labelId = requestedCurrent?.id;
+  let wouldCreateLabel = false;
+  if (!labelId) {
+    if (dryRun) {
+      try {
+        labelId = await resolveLabel(client, statusLabel);
+      } catch (error: any) {
+        if (!(error instanceof VikunjaError) || error.code !== 'LABEL_NOT_FOUND' || !createIfMissing) {
+          throw error;
+        }
+        wouldCreateLabel = true;
+        labelId = -1;
+      }
+    } else {
+      labelId = await resolveOrCreateLabel(client, statusLabel, { createIfMissing });
+    }
+  }
   const retained = taskRef.labels
     .filter((label) => !label.title.toLowerCase().startsWith(prefix.toLowerCase()))
     .map((label) => ({ id: label.id, title: label.title }));
+
+  if (dryRun) {
+    return {
+      action: 'would_update',
+      operation: 'set_status',
+      target,
+      statusLabel,
+      removedStatusLabels: currentStatusLabels
+        .filter((label) => label.id !== labelId)
+        .map((label) => label.title),
+      repaired: currentStatusLabels.length > 1,
+      wouldCreateLabel,
+      changed: ['labels'],
+      before: { statusLabels: beforeStatus },
+      after: { statusLabels: [statusLabel] },
+      dryRun: true,
+    };
+  }
 
   await client.request<any>('PUT', `/tasks/${taskRef.id}/labels/bulk`, {
     body: { labels: [...retained, { id: labelId, title: statusLabel }] },
@@ -2039,6 +2648,8 @@ export async function setTaskStatus(
       .filter((label) => label.id !== labelId)
       .map((label) => label.title),
     repaired: currentStatusLabels.length > 1,
+    before: { statusLabels: beforeStatus },
+    after: { statusLabels: [requestedCurrent?.title ?? statusLabel] },
   };
 }
 
@@ -2071,13 +2682,19 @@ function otherTaskProjectContext(
   return isGlobal ? undefined : projectSelector;
 }
 
+function hasRelatedTask(rawTask: any, relationKind: string, otherTaskId: number): boolean {
+  const related = rawTask?.related_tasks?.[relationKind];
+  return Array.isArray(related) && related.some((task: any) => task?.id === otherTaskId);
+}
+
 export async function relateTask(
   client: VikunjaApiClient,
   taskSelector: TaskSelectorInput,
   otherTaskSelector: TaskSelectorInput,
   relationKind: string,
   projectSelector?: { id?: number; title?: string },
-): Promise<WriteEcho> {
+  dryRun = false,
+): Promise<any> {
   if (!VALID_RELATION_KINDS.includes(relationKind)) {
     throw new VikunjaError({
       status: 400,
@@ -2089,12 +2706,44 @@ export async function relateTask(
     });
   }
 
-  const taskRef = await resolveTask(client, taskSelector, projectSelector);
+  const taskRef = await resolveTask(client, taskSelector, projectSelector, { includeRawTask: true });
   const otherTaskRef = await resolveTask(
     client,
     otherTaskSelector,
     otherTaskProjectContext(otherTaskSelector, projectSelector),
   );
+
+  const otherTask = {
+    id: otherTaskRef.id,
+    identifier: otherTaskRef.identifier || `#${otherTaskRef.index}`,
+    title: otherTaskRef.title,
+    project: otherTaskRef.project,
+  };
+  const relationWasPresent = hasRelatedTask(taskRef.rawTask, relationKind, otherTaskRef.id);
+  const before = { relation: { kind: relationKind, otherTaskId: otherTaskRef.id, present: relationWasPresent } };
+  const after = { relation: { kind: relationKind, otherTaskId: otherTaskRef.id, present: true } };
+  if (relationWasPresent) {
+    return { action: 'unchanged', target: compactTarget(taskRef), otherTask, relationKind, before, after: before };
+  }
+  if (dryRun) {
+    return {
+      action: 'would_update',
+      operation: 'relate',
+      target: {
+        id: taskRef.id,
+        index: taskRef.index,
+        identifier: taskRef.identifier,
+        project: taskRef.project,
+        title: taskRef.title,
+      },
+      otherTask,
+      relationKind,
+      changed: ['relation'],
+      before,
+      after,
+      dryRun: true,
+    };
+  }
 
   await client.request<any>('POST', `/tasks/${taskRef.id}/relations`, {
     body: {
@@ -2112,6 +2761,10 @@ export async function relateTask(
       project: taskRef.project,
       title: taskRef.title,
     },
+    otherTask,
+    relationKind,
+    before,
+    after,
   };
 }
 
@@ -2121,7 +2774,8 @@ export async function unrelateTask(
   otherTaskSelector: TaskSelectorInput,
   relationKind: string,
   projectSelector?: { id?: number; title?: string },
-): Promise<WriteEcho> {
+  dryRun = false,
+): Promise<any> {
   if (!VALID_RELATION_KINDS.includes(relationKind)) {
     throw new VikunjaError({
       status: 400,
@@ -2133,12 +2787,44 @@ export async function unrelateTask(
     });
   }
 
-  const taskRef = await resolveTask(client, taskSelector, projectSelector);
+  const taskRef = await resolveTask(client, taskSelector, projectSelector, { includeRawTask: true });
   const otherTaskRef = await resolveTask(
     client,
     otherTaskSelector,
     otherTaskProjectContext(otherTaskSelector, projectSelector),
   );
+
+  const otherTask = {
+    id: otherTaskRef.id,
+    identifier: otherTaskRef.identifier || `#${otherTaskRef.index}`,
+    title: otherTaskRef.title,
+    project: otherTaskRef.project,
+  };
+  const relationWasPresent = hasRelatedTask(taskRef.rawTask, relationKind, otherTaskRef.id);
+  const before = { relation: { kind: relationKind, otherTaskId: otherTaskRef.id, present: relationWasPresent } };
+  const after = { relation: { kind: relationKind, otherTaskId: otherTaskRef.id, present: false } };
+  if (!relationWasPresent) {
+    return { action: 'unchanged', target: compactTarget(taskRef), otherTask, relationKind, before, after: before };
+  }
+  if (dryRun) {
+    return {
+      action: 'would_update',
+      operation: 'unrelate',
+      target: {
+        id: taskRef.id,
+        index: taskRef.index,
+        identifier: taskRef.identifier,
+        project: taskRef.project,
+        title: taskRef.title,
+      },
+      otherTask,
+      relationKind,
+      changed: ['relation'],
+      before,
+      after,
+      dryRun: true,
+    };
+  }
 
   await client.request<any>(
     'DELETE',
@@ -2154,6 +2840,10 @@ export async function unrelateTask(
       project: taskRef.project,
       title: taskRef.title,
     },
+    otherTask,
+    relationKind,
+    before,
+    after,
   };
 }
 

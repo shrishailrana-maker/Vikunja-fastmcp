@@ -169,7 +169,12 @@ describe('Assignees, Labels and Relations tests', () => {
         ok: true,
         status: 200,
         text: async () =>
-          JSON.stringify({ id: 9005, index: 305, project_id: 101, project: { title: 'Alpha' } }),
+          JSON.stringify({
+            id: 9005,
+            index: 305,
+            project_id: 101,
+            project: { title: 'Alpha' },
+          }),
       } as Response);
       mockFetch.mockResolvedValueOnce({
         ok: true,
@@ -218,7 +223,12 @@ describe('Assignees, Labels and Relations tests', () => {
         ok: true,
         status: 200,
         text: async () =>
-          JSON.stringify({ id: 9005, index: 305, project_id: 101, project: { title: 'Alpha' } }),
+          JSON.stringify({
+            id: 9005,
+            index: 305,
+            project_id: 101,
+            project: { title: 'Alpha' },
+          }),
       } as Response);
 
       // 2. Search labels (absent)
@@ -530,7 +540,13 @@ describe('Assignees, Labels and Relations tests', () => {
         ok: true,
         status: 200,
         text: async () =>
-          JSON.stringify({ id: 9005, index: 305, project_id: 101, project: { title: 'Alpha' } }),
+          JSON.stringify({
+            id: 9005,
+            index: 305,
+            project_id: 101,
+            project: { title: 'Alpha' },
+            related_tasks: { subtask: [{ id: 9006 }] },
+          }),
       } as Response);
 
       // 2. Resolve task 2
@@ -557,7 +573,13 @@ describe('Assignees, Labels and Relations tests', () => {
         ok: true,
         status: 200,
         text: async () =>
-          JSON.stringify({ id: 9005, index: 305, project_id: 101, project: { title: 'Alpha' } }),
+          JSON.stringify({
+            id: 9005,
+            index: 305,
+            project_id: 101,
+            project: { title: 'Alpha' },
+            related_tasks: { blocking: [{ id: 9006 }] },
+          }),
       } as Response);
       mockFetch.mockResolvedValueOnce({
         ok: true,

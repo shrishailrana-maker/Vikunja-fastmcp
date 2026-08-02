@@ -40,6 +40,16 @@ const taskFieldsSchema = z.object({
   priority: z.number().int().min(0).max(5).optional(),
   dueDate: z.string().nullable().optional(),
 });
+const verificationEvidenceSchema = z
+  .object({
+    command: z.string().trim().min(1),
+    result: z.string().trim().min(1),
+    timestamp: z.string().datetime(),
+    evidenceKey: z.string().regex(EXTERNAL_KEY_PATTERN),
+    revision: z.string().trim().min(1).optional(),
+    taskState: z.string().trim().min(1).optional(),
+  })
+  .strict();
 
 export function createTypedTaskTools(dispatch: TaskDispatcher): TypedTaskToolDefinition[] {
   return [
@@ -118,6 +128,19 @@ export function createTypedTaskTools(dispatch: TaskDispatcher): TypedTaskToolDef
         idempotencyKey: z.string().trim().min(1).max(200).optional(),
         externalKey: z.string().regex(EXTERNAL_KEY_PATTERN).optional(),
         attachments: z.array(z.string()).optional(),
+        firstComment: z.string().trim().min(1).optional(),
+        relations: z
+          .array(
+            z
+              .object({
+                otherTaskSelector: taskSelectorSchema,
+                relationKind: z.string().trim().min(1),
+              })
+              .strict(),
+          )
+          .max(20)
+          .optional(),
+        dryRun: z.boolean().optional(),
         responseMode: responseModeSchema,
       }),
       handler: dispatch,
@@ -130,6 +153,9 @@ export function createTypedTaskTools(dispatch: TaskDispatcher): TypedTaskToolDef
           'close',
           'reopen',
           'close_with_evidence',
+          'append_evidence_if_changed',
+          'close_if_verified',
+          'transition_with_evidence',
           'assign',
           'unassign',
           'list-assignees',
@@ -144,6 +170,7 @@ export function createTypedTaskTools(dispatch: TaskDispatcher): TypedTaskToolDef
         taskSelector: taskSelectorSchema.optional(),
         projectSelector: projectSelectorSchema.optional(),
         evidenceComment: z.string().trim().min(1).optional(),
+        evidence: verificationEvidenceSchema.optional(),
         expectedUpdatedAt: z.string().optional(),
         actor: actorSchema,
         idempotencyKey: z.string().trim().min(1).max(200).optional(),
@@ -153,6 +180,7 @@ export function createTypedTaskTools(dispatch: TaskDispatcher): TypedTaskToolDef
         createIfMissing: z.boolean().optional(),
         otherTaskSelector: taskSelectorSchema.optional(),
         relationKind: z.string().optional(),
+        dryRun: z.boolean().optional(),
         responseMode: responseModeSchema,
       }),
       handler: dispatch,

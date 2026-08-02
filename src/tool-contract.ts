@@ -18,6 +18,7 @@ const taskSelector = [
   'projectSelector (required with taskSelector.projectIndex; optional guard otherwise)',
 ];
 const writeOptions = ['expectedUpdatedAt'];
+const mutationEnvelope = ['projectSelector', 'actor', 'idempotencyKey'];
 
 export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
   vikunja_auth: [
@@ -39,22 +40,22 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
   vikunja_tasks: [
     {
       action: 'create',
-      required: ['projectSelector', 'fields.title', 'actor', 'idempotencyKey'],
-      optional: ['fields', 'attachments', 'responseMode'],
+      required: [...mutationEnvelope, 'fields.title'],
+      optional: ['fields', 'attachments', 'firstComment', 'relations', 'dryRun', 'responseMode'],
       execution: 'Direct POST; MCP-composed when attachments are supplied',
       note: 'For 3 or more tasks use vikunja_task_bulk create instead of repeated create calls.',
     },
     {
       action: 'create_if_absent',
-      required: ['projectSelector', 'fields.title', 'actor', 'idempotencyKey'],
-      optional: ['fields', 'attachments', 'responseMode'],
+      required: [...mutationEnvelope, 'fields.title'],
+      optional: ['fields', 'attachments', 'dryRun', 'responseMode'],
       execution: 'MCP-composed exact-title search then optional create/attach',
       note: 'Best-effort duplicate prevention, not a distributed lock.',
     },
     {
       action: 'upsert',
-      required: ['projectSelector', 'fields.title', 'externalKey', 'actor'],
-      optional: ['fields', 'expectedUpdatedAt', 'responseMode'],
+      required: [...mutationEnvelope, 'fields.title', 'externalKey'],
+      optional: ['fields', 'expectedUpdatedAt', 'dryRun', 'responseMode'],
       execution: 'MCP-composed description-key lookup followed by create or conditional update',
       note: 'Requires server-side description filtering. Updating a matched title/description also requires expectedUpdatedAt.',
     },
@@ -146,11 +147,12 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     },
     {
       action: 'update',
-      required: ['taskSelector', 'fields'],
+      required: ['taskSelector', 'fields', ...mutationEnvelope],
       optional: [
         ...taskSelector,
         ...writeOptions,
         'fields.appendDescription (mutually exclusive with fields.description)',
+        'dryRun',
         'responseMode',
       ],
       execution: 'Identity/read preflight followed by RFC 6902 PATCH',
@@ -158,38 +160,56 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     },
     {
       action: 'delete',
-      required: ['taskSelector'],
-      optional: [...taskSelector, 'responseMode'],
+      required: ['taskSelector', ...mutationEnvelope],
+      optional: ['dryRun', 'responseMode'],
       execution: 'Identity preflight then DELETE /tasks/{id}',
     },
     {
       action: 'close',
-      required: ['taskSelector', 'actor'],
-      optional: [...taskSelector, 'responseMode'],
+      required: ['taskSelector', ...mutationEnvelope],
+      optional: ['dryRun', 'responseMode'],
       execution: 'Identity/read preflight then task update transport',
     },
     {
       action: 'reopen',
-      required: ['taskSelector'],
-      optional: [...taskSelector, 'responseMode'],
+      required: ['taskSelector', ...mutationEnvelope],
+      optional: ['dryRun', 'responseMode'],
       execution: 'Identity/read preflight then task update transport',
     },
     {
       action: 'close_with_evidence',
-      required: ['taskSelector', 'evidenceComment', 'actor', 'idempotencyKey'],
-      optional: [...taskSelector, 'responseMode'],
+      required: ['taskSelector', ...mutationEnvelope],
+      optional: ['evidence (preferred structured form)', 'evidenceComment (compatibility)', 'dryRun', 'responseMode'],
       execution: 'MCP-composed comment create followed by task close',
     },
     {
+      action: 'append_evidence_if_changed',
+      required: ['taskSelector', 'evidence', ...mutationEnvelope],
+      optional: ['dryRun', 'responseMode'],
+      execution: 'MCP-composed evidence-key lookup followed by optional comment create',
+    },
+    {
+      action: 'close_if_verified',
+      required: ['taskSelector', ...mutationEnvelope],
+      optional: ['dryRun', 'responseMode'],
+      execution: 'MCP-composed PASS-comment verification followed by conditional close',
+    },
+    {
+      action: 'transition_with_evidence',
+      required: ['taskSelector', 'statusLabel', 'evidence', ...mutationEnvelope],
+      optional: ['createIfMissing (default false)', 'dryRun', 'responseMode'],
+      execution: 'MCP-composed deduplicated evidence append followed by one status-label transition',
+    },
+    {
       action: 'assign',
-      required: ['taskSelector', 'userSelector'],
-      optional: [...taskSelector, 'responseMode'],
+      required: ['taskSelector', 'userSelector', ...mutationEnvelope],
+      optional: ['dryRun', 'responseMode'],
       execution: 'Identity preflight then POST assignee',
     },
     {
       action: 'unassign',
-      required: ['taskSelector', 'userSelector'],
-      optional: [...taskSelector, 'responseMode'],
+      required: ['taskSelector', 'userSelector', ...mutationEnvelope],
+      optional: ['dryRun', 'responseMode'],
       execution: 'Identity preflight then DELETE assignee',
     },
     {
@@ -200,16 +220,16 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     },
     {
       action: 'apply-label',
-      required: ['taskSelector', 'labelTitle'],
-      optional: [...taskSelector, 'responseMode'],
+      required: ['taskSelector', 'labelTitle', ...mutationEnvelope],
+      optional: ['dryRun', 'responseMode'],
       execution:
         'Return unchanged when already attached; otherwise resolve/create then POST task label',
       note: 'labelTitle accepts an exact title or numeric label ID.',
     },
     {
       action: 'remove-label',
-      required: ['taskSelector', 'labelTitle'],
-      optional: [...taskSelector, 'responseMode'],
+      required: ['taskSelector', 'labelTitle', ...mutationEnvelope],
+      optional: ['dryRun', 'responseMode'],
       execution: 'Resolve label then DELETE task label',
       note: 'labelTitle accepts an exact title or numeric label ID.',
     },
@@ -221,21 +241,21 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     },
     {
       action: 'set_status',
-      required: ['taskSelector', 'statusLabel'],
-      optional: [...taskSelector, 'createIfMissing (default false)', 'responseMode'],
+      required: ['taskSelector', 'statusLabel', ...mutationEnvelope],
+      optional: ['createIfMissing (default false)', 'dryRun', 'responseMode'],
       execution: 'Identity preflight then one bulk label-set replacement',
       note: 'Preserves non-status labels and repairs multiple configured-prefix labels.',
     },
     {
       action: 'relate',
-      required: ['taskSelector', 'otherTaskSelector', 'relationKind'],
-      optional: [...taskSelector, 'responseMode'],
+      required: ['taskSelector', 'otherTaskSelector', 'relationKind', ...mutationEnvelope],
+      optional: ['dryRun', 'responseMode'],
       execution: 'Resolve both tasks then POST relation',
     },
     {
       action: 'unrelate',
-      required: ['taskSelector', 'otherTaskSelector', 'relationKind'],
-      optional: [...taskSelector, 'responseMode'],
+      required: ['taskSelector', 'otherTaskSelector', 'relationKind', ...mutationEnvelope],
+      optional: ['dryRun', 'responseMode'],
       execution: 'Resolve both tasks then DELETE relation',
     },
     {
@@ -593,6 +613,9 @@ TOOL_OPERATION_DOCS.vikunja_task_workflow = taskActions([
   'close',
   'reopen',
   'close_with_evidence',
+  'append_evidence_if_changed',
+  'close_if_verified',
+  'transition_with_evidence',
   'assign',
   'unassign',
   'list-assignees',

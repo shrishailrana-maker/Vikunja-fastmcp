@@ -9,6 +9,12 @@
  * SPDX-License-Identifier: MIT
  */
 
+import fs from 'node:fs';
+
+const PACKAGE_VERSION = String(
+  JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version,
+);
+
 export interface FieldError {
   location: string;
   message: string;
@@ -21,6 +27,11 @@ export interface ErrorDetails {
   path: string;
   message: string;
   fieldErrors: FieldError[];
+  retryable?: boolean;
+  operationId?: string;
+  remediation?: string;
+  identity?: unknown;
+  capability?: { apiContract: 'v2'; packageVersion: string };
 }
 
 export class VikunjaError extends Error {
@@ -29,6 +40,8 @@ export class VikunjaError extends Error {
   public readonly method: string;
   public readonly path: string;
   public readonly fieldErrors: FieldError[];
+  public readonly operationId?: string;
+  public readonly identity?: unknown;
 
   constructor(details: ErrorDetails) {
     super(redactSecrets(details.message));
@@ -41,6 +54,8 @@ export class VikunjaError extends Error {
       location: normalizeFieldLocation(fieldError.location),
       message: String(fieldError.message ?? ''),
     }));
+    this.operationId = details.operationId;
+    this.identity = details.identity;
 
     // Set prototype explicitly for custom error class in TS/ES5
     Object.setPrototypeOf(this, VikunjaError.prototype);
@@ -135,9 +150,28 @@ export function toErrorEnvelope(
     location: redactSecrets(fe.location, currentToken),
     message: redactSecrets(fe.message, currentToken),
   }));
+  details.retryable = details.status === 408 || details.status === 429 || details.status >= 500;
+  if (typeof error?.operationId === 'string' && error.operationId) {
+    details.operationId = redactSecrets(error.operationId, currentToken);
+  }
+  if (error?.identity !== undefined) details.identity = error.identity;
+  details.remediation = remediationFor(details);
+  details.capability = { apiContract: 'v2', packageVersion: PACKAGE_VERSION };
 
   return {
     ok: false,
     error: details,
   };
+}
+
+function remediationFor(details: ErrorDetails): string {
+  if (details.status === 401) return 'Check the Vikunja URL and API token, then retry once.';
+  if (details.status === 403) return 'Check the caller and target-project permissions.';
+  if (details.status === 404) return 'Verify the project and human task identifier.';
+  if (details.status === 409) return 'Refresh the target state, then retry with a new precondition.';
+  if (details.status === 422 || details.status === 400) {
+    return 'Correct the named argument or field and retry.';
+  }
+  if (details.retryable) return 'Retry the same idempotent operation after a short delay.';
+  return 'Inspect the stable error code and operation path before retrying.';
 }

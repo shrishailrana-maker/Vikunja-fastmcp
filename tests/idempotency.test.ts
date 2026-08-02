@@ -153,4 +153,18 @@ describe('durable idempotency ledger', () => {
       updatedAt: expect.any(String),
     });
   });
+
+  it('does not cache a partial workflow receipt as completed', async () => {
+    const write = jest
+      .fn<() => Promise<any>>()
+      .mockResolvedValueOnce({ action: 'partial', outcome: 'partial' })
+      .mockResolvedValueOnce({ action: 'updated', outcome: 'completed' });
+
+    const first = await runDurableOperation('workflow', 'retry-partial', { task: 1 }, write);
+    const second = await runDurableOperation('workflow', 'retry-partial', { task: 1 }, write);
+
+    expect(first).toMatchObject({ outcome: 'partial' });
+    expect(second).toMatchObject({ outcome: 'completed' });
+    expect(write).toHaveBeenCalledTimes(2);
+  });
 });

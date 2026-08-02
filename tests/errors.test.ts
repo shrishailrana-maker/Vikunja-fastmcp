@@ -71,6 +71,32 @@ describe('Errors and Redaction tests', () => {
       );
       expect(envelope.error.fieldErrors[0].location).toBe('body.user_id');
       expect(envelope.error.fieldErrors[0].message).toBe('User is invalid');
+      expect(envelope.error).toMatchObject({
+        retryable: false,
+        remediation: 'Check the caller and target-project permissions.',
+        capability: { apiContract: 'v2', packageVersion: expect.any(String) },
+      });
+      expect(envelope.error.operationId).toBeUndefined();
+    });
+
+    it('preserves a real durable operation id and safe identity context', () => {
+      const err = new VikunjaError({
+        status: 503,
+        code: 'UPSTREAM_UNAVAILABLE',
+        method: 'PATCH',
+        path: '/tasks/99',
+        message: 'temporary failure',
+        fieldErrors: [],
+        operationId: 'task-update:caller-hash:payload-hash',
+        identity: { project: { id: 2 }, task: { identifier: 'ALPHA-5' } },
+      });
+
+      expect(toErrorEnvelope(err).error).toMatchObject({
+        operationId: 'task-update:caller-hash:payload-hash',
+        identity: { project: { id: 2 }, task: { identifier: 'ALPHA-5' } },
+        retryable: true,
+        capability: { apiContract: 'v2', packageVersion: expect.any(String) },
+      });
     });
 
     it('should format generic Error into standard error envelope', () => {
@@ -80,6 +106,8 @@ describe('Errors and Redaction tests', () => {
       expect(envelope.error.status).toBe(500);
       expect(envelope.error.code).toBe('INTERNAL_SERVER_ERROR');
       expect(envelope.error.message).toBe('Failed to connect to [REDACTED_TOKEN]');
+      expect(envelope.error.retryable).toBe(true);
+      expect(envelope.error.remediation).toContain('Retry the same idempotent operation');
     });
 
     it('normalizes non-string field error locations without crashing redaction', () => {
