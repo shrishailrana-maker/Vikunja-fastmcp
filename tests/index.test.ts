@@ -62,7 +62,7 @@ describe('MCP Server Registration and Dispatching tests', () => {
     const response = await handler({
       method: 'tools/list',
     });
-    expect(response.tools.length).toBe(21);
+    expect(response.tools.length).toBe(23);
 
     for (const name of [
       'vikunja_task_bulk',
@@ -73,6 +73,7 @@ describe('MCP Server Registration and Dispatching tests', () => {
       'vikunja_templates',
       'vikunja_webhooks',
       'vikunja_task_reminders',
+      'vikunja_project_migration',
     ]) {
       expect(response.tools.some((tool: any) => tool.name === name)).toBe(true);
     }
@@ -86,12 +87,18 @@ describe('MCP Server Registration and Dispatching tests', () => {
     });
 
     const importTool = response.tools.find((t: any) => t.name === 'vikunja_batch_import');
-    expect(importTool.inputSchema.properties.config).toMatchObject({
+    const importConfig = importTool.inputSchema.oneOf.find(
+      (branch: any) => branch.properties.config,
+    ).properties.config;
+    expect(importConfig).toMatchObject({
       type: 'object',
       additionalProperties: {},
     });
     const templateTool = response.tools.find((t: any) => t.name === 'vikunja_templates');
-    expect(templateTool.inputSchema.properties.variables).toMatchObject({
+    const templateVariables = templateTool.inputSchema.oneOf.find(
+      (branch: any) => branch.properties.variables,
+    ).properties.variables;
+    expect(templateVariables).toMatchObject({
       type: 'object',
       additionalProperties: { type: 'string' },
     });
@@ -110,7 +117,10 @@ describe('MCP Server Registration and Dispatching tests', () => {
         taskSelector: 99,
       }).success,
     ).toBe(false);
-    expect(taskTool.inputSchema.properties.responseMode).toMatchObject({
+    const taskResponseMode = taskTool.inputSchema.oneOf.find(
+      (branch: any) => branch.properties.responseMode,
+    ).properties.responseMode;
+    expect(taskResponseMode).toMatchObject({
       type: 'string',
       enum: ['minimal', 'receipt', 'compact', 'standard', 'full'],
     });
@@ -229,6 +239,18 @@ describe('MCP Server Registration and Dispatching tests', () => {
       ]),
     );
     expect(attachmentDeleteBranch.additionalProperties).toBe(false);
+    const attachmentAttachBranch = attachmentTool.inputSchema.oneOf.find(
+      (branch: any) => branch.properties.action.const === 'attach',
+    );
+    expect(attachmentAttachBranch.required).toEqual(
+      expect.arrayContaining(['taskSelector', 'projectSelector', 'actor', 'idempotencyKey']),
+    );
+    expect(attachmentAttachBranch.properties).toEqual(
+      expect.objectContaining({
+        computeSha256: { type: 'boolean' },
+        warnOnDuplicate: { type: 'boolean' },
+      }),
+    );
     const attachmentListBranch = attachmentTool.inputSchema.oneOf.find(
       (branch: any) => branch.properties.action.const === 'list',
     );
@@ -259,6 +281,17 @@ describe('MCP Server Registration and Dispatching tests', () => {
       );
       expect(branch.required).toContain('actor');
     }
+    const commentListBranch = commentTool.inputSchema.oneOf.find(
+      (branch: any) => branch.properties.action.const === 'list',
+    );
+    expect(commentListBranch.properties).toEqual(
+      expect.objectContaining({
+        since: { type: 'string' },
+        countOnly: { type: 'boolean' },
+        includeLatest: { type: 'boolean' },
+        maxScanPages: { type: 'number' },
+      }),
+    );
 
     const bulkTool = response.tools.find((t: any) => t.name === 'vikunja_task_bulk');
     expect(bulkTool.inputSchema.oneOf.map((branch: any) => branch.properties.action.const)).toEqual(
@@ -303,6 +336,8 @@ describe('MCP Server Registration and Dispatching tests', () => {
       ]),
     );
     expect(coreNames).not.toContain('vikunja_tasks');
+    expect(coreNames).not.toContain('vikunja_task_organize');
+    expect(core.tools.every((tool: any) => !tool.description.includes('Actions:'))).toBe(true);
     expect(JSON.stringify(core.tools).length).toBeLessThan(
       JSON.stringify(compatibility.tools).length * 0.65,
     );
@@ -337,11 +372,21 @@ describe('MCP Server Registration and Dispatching tests', () => {
     const names = response.tools.map((tool: any) => tool.name);
 
     expect(names).toEqual(
-      expect.arrayContaining(['vikunja_task_bulk', 'vikunja_batch_import', 'vikunja_export_project']),
+      expect.arrayContaining([
+        'vikunja_task_organize',
+        'vikunja_task_bulk',
+        'vikunja_batch_import',
+        'vikunja_export_project',
+      ]),
     );
     expect(names).not.toContain('vikunja_teams');
     expect(names).not.toContain('vikunja_webhooks');
     expect(names).not.toContain('vikunja_tasks');
+    expect(names).not.toContain('vikunja_project_migration');
+
+    process.env.VIKUNJA_MCP_TOOL_PROFILE = 'full';
+    const full = await handler({ method: 'tools/list' });
+    expect(full.tools.map((tool: any) => tool.name)).toContain('vikunja_project_migration');
   });
 
   it('requires actor attribution and optimistic concurrency before dispatching writes', async () => {
@@ -523,10 +568,7 @@ describe('MCP Server Registration and Dispatching tests', () => {
             otherTask: expect.objectContaining({ id: 9006, identifier: 'ALPHA-306' }),
           }),
         ],
-        composedCalls: [
-          'POST /tasks/9005/comments',
-          'POST /tasks/9005/relations',
-        ],
+        composedCalls: ['POST /tasks/9005/comments', 'POST /tasks/9005/relations'],
       }),
     );
     expect(second).toEqual(first);
@@ -618,8 +660,11 @@ describe('MCP Server Registration and Dispatching tests', () => {
       ],
     });
     expect(relationAttempts).toBe(2);
-    expect(request.mock.calls.filter(([method, apiPath]) =>
-      method === 'POST' && apiPath === '/projects/101/tasks')).toHaveLength(1);
+    expect(
+      request.mock.calls.filter(
+        ([method, apiPath]) => method === 'POST' && apiPath === '/projects/101/tasks',
+      ),
+    ).toHaveLength(1);
   });
 
   it('puts the next-page instruction before a large task-list envelope', async () => {
@@ -770,6 +815,7 @@ describe('MCP Server Registration and Dispatching tests', () => {
     expect(envelope.data.diagnostics).not.toHaveProperty('projects');
     expect(envelope.data.diagnostics).not.toHaveProperty('supportedSubcommands');
     expect(envelope.data.diagnostics).not.toHaveProperty('operationalNotes');
+    expect(envelope.data.diagnostics).not.toHaveProperty('serverDependentCapabilities');
     expect(
       mockFetch.mock.calls.some(([url]: [string]) => {
         const requestUrl = new URL(url);
@@ -833,6 +879,20 @@ describe('MCP Server Registration and Dispatching tests', () => {
     expect(diagnostics.agentSkillPath).toEqual(expect.stringContaining('vikunja-fastmcp'));
     expect(diagnostics.supportedTools).toContain('vikunja_tasks');
     expect(diagnostics.supportedSubcommands.vikunja_tasks).toContain('create');
+    expect(diagnostics.serverDependentCapabilities).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          capability: 'external-key-uniqueness',
+          supported: false,
+          upstreamIssue: 'https://github.com/go-vikunja/vikunja/issues/3391',
+        }),
+        expect.objectContaining({
+          capability: 'server-attachment-hash',
+          supported: false,
+          upstreamIssue: 'https://github.com/go-vikunja/vikunja/issues/3395',
+        }),
+      ]),
+    );
     expect(JSON.stringify(diagnostics)).not.toContain(process.env.VIKUNJA_API_TOKEN);
   });
 

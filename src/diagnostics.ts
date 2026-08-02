@@ -31,12 +31,53 @@ export const OPERATIONAL_NOTES: string[] = [
   'Task list defaults to open tasks only (done=false). Pass allStates:true for open+closed, or done:true for closed-only.',
   'create_if_absent is best-effort (not a distributed lock). Uses server title equality when safe; otherwise paginated q+exact match.',
   'Team add-member returns userId (Vikunja user id). Do not treat membership row ids as user ids.',
-  'Bulk create/delete and project export are MCP-composed; bulk create/delete are bounded and non-atomic.',
+  'Bulk writes use durable local row receipts and resume, but remain non-atomic across hosts.',
   'Templates are machine-local JSON, not Vikunja server entities. Set VIKUNJA_TEMPLATE_FILE to relocate the store.',
   'CSV imports, exports, and downloads obey the configured attachment size/path sandbox.',
   'User-data export authentication is server-specific; some Vikunja builds reject API tokens and require JWT/local-password confirmation.',
   'Task label operations require the caller to have the corresponding label and project permissions.',
 ];
+
+export const SERVER_DEPENDENT_CAPABILITIES = [
+  {
+    capability: 'external-key-uniqueness',
+    supported: false,
+    upstreamIssue: 'https://github.com/go-vikunja/vikunja/issues/3391',
+    fallback: 'Bounded lookup plus durable local idempotency; concurrent hosts can still race.',
+  },
+  {
+    capability: 'task-write-if-match',
+    supported: false,
+    upstreamIssue: 'https://github.com/go-vikunja/vikunja/issues/3392',
+    fallback:
+      'Replacement updates require expectedUpdatedAt and perform a best-effort preflight check.',
+  },
+  {
+    capability: 'atomic-evidence-transition',
+    supported: false,
+    upstreamIssue: 'https://github.com/go-vikunja/vikunja/issues/3393',
+    fallback: 'MCP-composed comment then transition with truthful partial receipts and read-back.',
+  },
+  {
+    capability: 'cross-host-task-lease',
+    supported: false,
+    upstreamIssue: 'https://github.com/go-vikunja/vikunja/issues/3394',
+    fallback: 'SQLite/WAL leases coordinate one machine only.',
+  },
+  {
+    capability: 'server-attachment-hash',
+    supported: false,
+    upstreamIssue: 'https://github.com/go-vikunja/vikunja/issues/3395',
+    fallback: 'Optional local SHA-256 receipts and filename/size duplicate warnings.',
+  },
+  {
+    capability: 'collection-etag',
+    supported: false,
+    upstreamIssue: 'https://github.com/go-vikunja/vikunja/issues/3396',
+    fallback:
+      'Only short-lived identity-resolution caches are used; task/list content is never cached.',
+  },
+] as const;
 
 export interface DiagnosticResult {
   ok: boolean;
@@ -60,6 +101,7 @@ export interface DiagnosticResult {
     supportedSubcommands?: Record<string, string[]>;
     unsupportedOperations?: { operation: string; reason: string }[];
     operationalNotes?: string[];
+    serverDependentCapabilities?: typeof SERVER_DEPENDENT_CAPABILITIES;
   };
 }
 
@@ -107,6 +149,7 @@ export async function runSelfCheck(
       ),
       unsupportedOperations: UNSUPPORTED_OPERATIONS,
       operationalNotes: OPERATIONAL_NOTES,
+      serverDependentCapabilities: SERVER_DEPENDENT_CAPABILITIES,
     });
   }
 

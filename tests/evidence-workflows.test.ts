@@ -75,7 +75,11 @@ describe('structured evidence workflows', () => {
       'Codex',
     );
 
-    expect(result).toMatchObject({ action: 'unchanged', evidenceKey: 'revision:abc123', commentId: 7 });
+    expect(result).toMatchObject({
+      action: 'unchanged',
+      evidenceKey: 'revision:abc123',
+      commentId: 7,
+    });
     expect(request.mock.calls.every(([method]) => method === 'GET')).toBe(true);
   });
 

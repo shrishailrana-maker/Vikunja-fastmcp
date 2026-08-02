@@ -168,7 +168,8 @@ function remediationFor(details: ErrorDetails): string {
   if (details.status === 401) return 'Check the Vikunja URL and API token, then retry once.';
   if (details.status === 403) return 'Check the caller and target-project permissions.';
   if (details.status === 404) return 'Verify the project and human task identifier.';
-  if (details.status === 409) return 'Refresh the target state, then retry with a new precondition.';
+  if (details.status === 409)
+    return 'Refresh the target state, then retry with a new precondition.';
   if (details.status === 422 || details.status === 400) {
     return 'Correct the named argument or field and retry.';
   }

@@ -16,6 +16,7 @@ const CORE_TOOLS = new Set([
 
 const QA_TOOLS = new Set([
   ...CORE_TOOLS,
+  'vikunja_task_organize',
   'vikunja_labels',
   'vikunja_users',
   'vikunja_task_bulk',

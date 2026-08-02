@@ -166,7 +166,11 @@ export interface EnvelopeFormatOptions {
   structuredOnly?: boolean;
 }
 
-function renderEnvelope(summary: string, envelope: unknown, options?: EnvelopeFormatOptions): string {
+function renderEnvelope(
+  summary: string,
+  envelope: unknown,
+  options?: EnvelopeFormatOptions,
+): string {
   const jsonBlock = `\`\`\`json\n${stringifyEnvelope(envelope)}\n\`\`\``;
   return options?.structuredOnly ? jsonBlock : `${summary}\n\n${jsonBlock}`;
 }

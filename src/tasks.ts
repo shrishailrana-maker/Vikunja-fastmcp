@@ -347,7 +347,10 @@ function decodeListCursor(value: string | undefined): ListCursor | undefined {
       !Number.isInteger(parsed.projectId) ||
       parsed.projectId <= 0 ||
       !(
-        (Number.isInteger(parsed.page) && parsed.page! > 0 && Number.isInteger(parsed.offset) && parsed.offset! >= 0) ||
+        (Number.isInteger(parsed.page) &&
+          parsed.page! > 0 &&
+          Number.isInteger(parsed.offset) &&
+          parsed.offset! >= 0) ||
         (typeof parsed.updated === 'string' &&
           Number.isFinite(Date.parse(parsed.updated)) &&
           Number.isInteger(parsed.id) &&
@@ -751,7 +754,9 @@ export async function programmeSnapshot(
     if (!isDone && assignees.length === 0) unassignedOpen += 1;
     const labels = Array.isArray(task.labels) ? task.labels : [];
     const statusLabels = labels.filter((label: any) =>
-      String(label?.title ?? '').toLowerCase().startsWith(statusPrefix.toLowerCase()),
+      String(label?.title ?? '')
+        .toLowerCase()
+        .startsWith(statusPrefix.toLowerCase()),
     );
     if (!isDone && statusLabels.length === 0) missingStatus += 1;
     if (!isDone && statusLabels.length > 1) multipleStatus += 1;
@@ -764,12 +769,14 @@ export async function programmeSnapshot(
         byPhaseLabel[title] = (byPhaseLabel[title] ?? 0) + 1;
       }
     }
-    const relations = task.related_tasks && typeof task.related_tasks === 'object'
-      ? Object.entries(task.related_tasks)
-      : [];
+    const relations =
+      task.related_tasks && typeof task.related_tasks === 'object'
+        ? Object.entries(task.related_tasks)
+        : [];
     if (
       relations.some(
-        ([kind, values]) => kind.toLowerCase().includes('blocked') && Array.isArray(values) && values.length > 0,
+        ([kind, values]) =>
+          kind.toLowerCase().includes('blocked') && Array.isArray(values) && values.length > 0,
       )
     ) {
       blocked += 1;
@@ -792,8 +799,10 @@ export async function programmeSnapshot(
   const allChanged = options.changedSince
     ? tasks
         .filter((task) => String(task.updated ?? '') >= options.changedSince!)
-        .sort((left, right) =>
-          String(left.updated ?? '').localeCompare(String(right.updated ?? '')) || left.id - right.id,
+        .sort(
+          (left, right) =>
+            String(left.updated ?? '').localeCompare(String(right.updated ?? '')) ||
+            left.id - right.id,
         )
     : [];
   const remainingChanged = cursor?.updated
@@ -930,7 +939,9 @@ export async function verifyTaskState(
       ...comment,
       markdown: htmlToMarkdown(String(comment.comment ?? '')),
     }))
-    .sort((left, right) => String(right.created ?? '').localeCompare(String(left.created ?? '')))[0];
+    .sort((left, right) =>
+      String(right.created ?? '').localeCompare(String(left.created ?? '')),
+    )[0];
   const verdictMatch = latest?.markdown.match(/\b(PASS|FAIL)\b/i);
 
   return {
@@ -1221,7 +1232,10 @@ export async function taskDedupe(
     id: task.id,
     portalRef: task.identifier || `#${task.index}`,
     title: task.title,
-    exact: String(task.title ?? '').trim().toLowerCase() === trimmed.toLowerCase(),
+    exact:
+      String(task.title ?? '')
+        .trim()
+        .toLowerCase() === trimmed.toLowerCase(),
   }));
   return {
     project,
@@ -1779,7 +1793,9 @@ export async function closeWithEvidence(
 ): Promise<any> {
   const payload = { taskSelector, projectSelector, evidenceComment, actor };
   const execute = async (): Promise<CloseWithEvidenceResult> => {
-    const taskRef = await resolveTask(client, taskSelector, projectSelector, { includeRawTask: true });
+    const taskRef = await resolveTask(client, taskSelector, projectSelector, {
+      includeRawTask: true,
+    });
     if (dryRun) {
       return {
         task: {
@@ -1954,7 +1970,9 @@ export async function appendEvidenceIfChanged(
       changed: [],
       before: { evidencePresent: true },
       after: { evidencePresent: true },
-      verification: { verdict: verificationVerdict(htmlToMarkdown(String(existing.comment ?? ''))) },
+      verification: {
+        verdict: verificationVerdict(htmlToMarkdown(String(existing.comment ?? ''))),
+      },
       dryRun,
     };
   }
@@ -2429,7 +2447,12 @@ export async function applyLabel(
     !numericSelector &&
     taskRef.labels.some((label) => label.title.toLowerCase() === String(labelTitle).toLowerCase())
   ) {
-    return { action: 'unchanged', target, before: { labels: beforeLabels }, after: { labels: beforeLabels } };
+    return {
+      action: 'unchanged',
+      target,
+      before: { labels: beforeLabels },
+      after: { labels: beforeLabels },
+    };
   }
   let labelId: number;
   try {
@@ -2453,7 +2476,12 @@ export async function applyLabel(
   }
 
   if (taskRef.labels.some((label) => label.id === labelId)) {
-    return { action: 'unchanged', target, before: { labels: beforeLabels }, after: { labels: beforeLabels } };
+    return {
+      action: 'unchanged',
+      target,
+      before: { labels: beforeLabels },
+      after: { labels: beforeLabels },
+    };
   }
   const applied = { id: labelId, title: String(labelTitle) };
 
@@ -2504,7 +2532,12 @@ export async function removeLabel(
       : label.title.toLowerCase() === String(labelTitle).toLowerCase(),
   );
   if (!appliedLabel) {
-    return { action: 'unchanged', target, before: { labels: beforeLabels }, after: { labels: beforeLabels } };
+    return {
+      action: 'unchanged',
+      target,
+      before: { labels: beforeLabels },
+      after: { labels: beforeLabels },
+    };
   }
   const afterLabels = beforeLabels.filter((label) => label.id !== appliedLabel.id);
 
@@ -2604,7 +2637,11 @@ export async function setTaskStatus(
       try {
         labelId = await resolveLabel(client, statusLabel);
       } catch (error: any) {
-        if (!(error instanceof VikunjaError) || error.code !== 'LABEL_NOT_FOUND' || !createIfMissing) {
+        if (
+          !(error instanceof VikunjaError) ||
+          error.code !== 'LABEL_NOT_FOUND' ||
+          !createIfMissing
+        ) {
           throw error;
         }
         wouldCreateLabel = true;
@@ -2706,7 +2743,9 @@ export async function relateTask(
     });
   }
 
-  const taskRef = await resolveTask(client, taskSelector, projectSelector, { includeRawTask: true });
+  const taskRef = await resolveTask(client, taskSelector, projectSelector, {
+    includeRawTask: true,
+  });
   const otherTaskRef = await resolveTask(
     client,
     otherTaskSelector,
@@ -2720,10 +2759,19 @@ export async function relateTask(
     project: otherTaskRef.project,
   };
   const relationWasPresent = hasRelatedTask(taskRef.rawTask, relationKind, otherTaskRef.id);
-  const before = { relation: { kind: relationKind, otherTaskId: otherTaskRef.id, present: relationWasPresent } };
+  const before = {
+    relation: { kind: relationKind, otherTaskId: otherTaskRef.id, present: relationWasPresent },
+  };
   const after = { relation: { kind: relationKind, otherTaskId: otherTaskRef.id, present: true } };
   if (relationWasPresent) {
-    return { action: 'unchanged', target: compactTarget(taskRef), otherTask, relationKind, before, after: before };
+    return {
+      action: 'unchanged',
+      target: compactTarget(taskRef),
+      otherTask,
+      relationKind,
+      before,
+      after: before,
+    };
   }
   if (dryRun) {
     return {
@@ -2787,7 +2835,9 @@ export async function unrelateTask(
     });
   }
 
-  const taskRef = await resolveTask(client, taskSelector, projectSelector, { includeRawTask: true });
+  const taskRef = await resolveTask(client, taskSelector, projectSelector, {
+    includeRawTask: true,
+  });
   const otherTaskRef = await resolveTask(
     client,
     otherTaskSelector,
@@ -2801,10 +2851,19 @@ export async function unrelateTask(
     project: otherTaskRef.project,
   };
   const relationWasPresent = hasRelatedTask(taskRef.rawTask, relationKind, otherTaskRef.id);
-  const before = { relation: { kind: relationKind, otherTaskId: otherTaskRef.id, present: relationWasPresent } };
+  const before = {
+    relation: { kind: relationKind, otherTaskId: otherTaskRef.id, present: relationWasPresent },
+  };
   const after = { relation: { kind: relationKind, otherTaskId: otherTaskRef.id, present: false } };
   if (!relationWasPresent) {
-    return { action: 'unchanged', target: compactTarget(taskRef), otherTask, relationKind, before, after: before };
+    return {
+      action: 'unchanged',
+      target: compactTarget(taskRef),
+      otherTask,
+      relationKind,
+      before,
+      after: before,
+    };
   }
   if (dryRun) {
     return {
@@ -2878,12 +2937,11 @@ export async function listRelations(
         }
         relations.push({
           relationKind: kind,
-          task:
-            ['minimal', 'receipt', 'compact'].includes(responseMode)
-              ? normalizeCompactTask(t, project, webUrl)
-              : responseMode === 'full'
-                ? normalizeTask(t, project, webUrl)
-                : normalizeTaskListItem(t, project, webUrl),
+          task: ['minimal', 'receipt', 'compact'].includes(responseMode)
+            ? normalizeCompactTask(t, project, webUrl)
+            : responseMode === 'full'
+              ? normalizeTask(t, project, webUrl)
+              : normalizeTaskListItem(t, project, webUrl),
         });
       }
     }

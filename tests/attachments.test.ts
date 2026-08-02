@@ -24,6 +24,7 @@ import { cache } from '../src/identity.js';
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
+import { createHash } from 'node:crypto';
 
 describe('Attachment Upload, Verification and Download tests', () => {
   const config = {
@@ -564,6 +565,50 @@ describe('Attachment Upload, Verification and Download tests', () => {
       expect(res.uploaded.map((u) => u.id)).toEqual([3001, 3002]);
       expect(res.failed.length).toBe(0);
       expect(res.task).toEqual({ id: 9005, portalRef: '#305', title: 'Evidence task' });
+    });
+
+    it('returns optional SHA-256 receipts and warns about metadata duplicates', async () => {
+      mockFetch.mockResolvedValueOnce(okTask);
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            items: [
+              {
+                id: 2999,
+                created: 't0',
+                file: { name: 'evidence.log', mime: 'text/plain', size: 4 },
+              },
+            ],
+            page: 1,
+            per_page: 1000,
+            total: 1,
+            total_pages: 1,
+          }),
+      } as Response);
+      mockFetch.mockResolvedValueOnce(uploadOk(3005, 'evidence.log'));
+
+      const res = await attachFiles(
+        client,
+        9005,
+        [{ filename: 'evidence.log', base64Content: Buffer.from('data').toString('base64') }],
+        undefined,
+        'hash-upload',
+        { computeSha256: true, warnOnDuplicate: true },
+      );
+
+      expect(res.uploaded[0]).toMatchObject({
+        id: 3005,
+        sha256: createHash('sha256').update('data').digest('hex'),
+      });
+      expect(res.warnings).toEqual([
+        {
+          file: 'evidence.log',
+          message: expect.stringContaining('same filename and size'),
+          matchingAttachmentIds: [2999],
+        },
+      ]);
     });
 
     it('returns the cached task-to-attachment mapping on an idempotent retry', async () => {

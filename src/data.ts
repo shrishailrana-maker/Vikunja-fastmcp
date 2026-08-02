@@ -303,6 +303,7 @@ export async function exportProject(
           ? related.map((item: any) => ({
               kind,
               taskId: item.id,
+              identifier: item.identifier || (item.index ? `#${item.index}` : null),
               title: item.title,
             }))
           : [],

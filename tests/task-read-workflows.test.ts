@@ -16,7 +16,11 @@ const config = {
 };
 
 function response(data: unknown, status = 200): Response {
-  return { ok: status >= 200 && status < 300, status, text: async () => JSON.stringify(data) } as Response;
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    text: async () => JSON.stringify(data),
+  } as Response;
 }
 
 describe('bounded task read workflows', () => {
@@ -140,45 +144,47 @@ describe('bounded task read workflows', () => {
   });
 
   it('builds one programme snapshot with assignee, blocked, stale, and changed counts', async () => {
-    mockFetch
-      .mockResolvedValueOnce(response({ id: 101, title: 'Alpha' }))
-      .mockResolvedValueOnce(
-        response({
-          items: [
-            {
-              id: 1,
-              identifier: 'ALPHA-1',
-              title: 'Open stale',
-              done: false,
-              priority: 5,
-              updated: '2026-01-01T00:00:00Z',
-              labels: [{ title: 'status:open' }],
-              assignees: [{ username: 'developer' }],
-              related_tasks: { blocked: [{ id: 9 }] },
-            },
-            {
-              id: 2,
-              identifier: 'ALPHA-2',
-              title: 'Done',
-              done: true,
-              priority: 1,
-              updated: '2026-07-20T00:00:00Z',
-              labels: [{ title: 'status:done' }],
-              assignees: [{ username: 'tester' }],
-            },
-          ],
-          page: 1,
-          per_page: 100,
-          total: 2,
-          total_pages: 1,
-        }),
-      );
+    mockFetch.mockResolvedValueOnce(response({ id: 101, title: 'Alpha' })).mockResolvedValueOnce(
+      response({
+        items: [
+          {
+            id: 1,
+            identifier: 'ALPHA-1',
+            title: 'Open stale',
+            done: false,
+            priority: 5,
+            updated: '2026-01-01T00:00:00Z',
+            labels: [{ title: 'status:open' }],
+            assignees: [{ username: 'developer' }],
+            related_tasks: { blocked: [{ id: 9 }] },
+          },
+          {
+            id: 2,
+            identifier: 'ALPHA-2',
+            title: 'Done',
+            done: true,
+            priority: 1,
+            updated: '2026-07-20T00:00:00Z',
+            labels: [{ title: 'status:done' }],
+            assignees: [{ username: 'tester' }],
+          },
+        ],
+        page: 1,
+        per_page: 100,
+        total: 2,
+        total_pages: 1,
+      }),
+    );
 
-    const result = await programmeSnapshot(client, { id: 101 }, {
-      staleDays: 1,
-      changedSince: '2026-07-01T00:00:00Z',
-      now: new Date('2026-08-01T00:00:00Z'),
-    });
+    const result = await programmeSnapshot(
+      client,
+      { id: 101 },
+      {
+        staleDays: 1,
+        changedSince: '2026-07-01T00:00:00Z',
+        now: new Date('2026-08-01T00:00:00Z'),
+      },
+    );
 
     expect(result).toMatchObject({
       project: { id: 101, title: 'Alpha' },
@@ -199,34 +205,32 @@ describe('bounded task read workflows', () => {
   });
 
   it('offers an MPF reconciliation preset without a second aggregation pass', async () => {
-    mockFetch
-      .mockResolvedValueOnce(response({ id: 101, title: 'Alpha' }))
-      .mockResolvedValueOnce(
-        response({
-          items: [
-            {
-              id: 1,
-              identifier: 'ALPHA-1',
-              title: 'Needs status',
-              done: false,
-              labels: [{ title: 'phase:build' }],
-              assignees: [],
-            },
-            {
-              id: 2,
-              identifier: 'ALPHA-2',
-              title: 'Conflicting status',
-              done: false,
-              labels: [{ title: 'status:open' }, { title: 'status:review' }, { title: 'phase:test' }],
-              assignees: [{ username: 'tester' }],
-            },
-          ],
-          page: 1,
-          per_page: 100,
-          total: 2,
-          total_pages: 1,
-        }),
-      );
+    mockFetch.mockResolvedValueOnce(response({ id: 101, title: 'Alpha' })).mockResolvedValueOnce(
+      response({
+        items: [
+          {
+            id: 1,
+            identifier: 'ALPHA-1',
+            title: 'Needs status',
+            done: false,
+            labels: [{ title: 'phase:build' }],
+            assignees: [],
+          },
+          {
+            id: 2,
+            identifier: 'ALPHA-2',
+            title: 'Conflicting status',
+            done: false,
+            labels: [{ title: 'status:open' }, { title: 'status:review' }, { title: 'phase:test' }],
+            assignees: [{ username: 'tester' }],
+          },
+        ],
+        page: 1,
+        per_page: 100,
+        total: 2,
+        total_pages: 1,
+      }),
+    );
 
     const result = await programmeSnapshot(client, { id: 101 }, { preset: 'mpf' });
 
@@ -251,15 +255,23 @@ describe('bounded task read workflows', () => {
       .mockResolvedValueOnce(response({ id: 101, title: 'Alpha' }))
       .mockResolvedValueOnce(response(collection));
 
-    const first = await programmeSnapshot(client, { id: 101 }, {
-      changedSince: '2026-07-01T00:00:00Z',
-      changedLimit: 1,
-    });
-    const second = await programmeSnapshot(client, { id: 101 }, {
-      changedSince: '2026-07-01T00:00:00Z',
-      changedLimit: 1,
-      cursor: first.nextCursor ?? undefined,
-    });
+    const first = await programmeSnapshot(
+      client,
+      { id: 101 },
+      {
+        changedSince: '2026-07-01T00:00:00Z',
+        changedLimit: 1,
+      },
+    );
+    const second = await programmeSnapshot(
+      client,
+      { id: 101 },
+      {
+        changedSince: '2026-07-01T00:00:00Z',
+        changedLimit: 1,
+        cursor: first.nextCursor ?? undefined,
+      },
+    );
 
     expect(first.changedTasks.map((task: any) => task.identifier)).toEqual(['ALPHA-1']);
     expect(first.incomplete).toBe(true);
@@ -268,26 +280,24 @@ describe('bounded task read workflows', () => {
   });
 
   it('looks up a stable external key without listing the whole project', async () => {
-    mockFetch
-      .mockResolvedValueOnce(response({ id: 101, title: 'Alpha' }))
-      .mockResolvedValueOnce(
-        response({
-          items: [
-            {
-              id: 9005,
-              index: 5,
-              identifier: 'ALPHA-5',
-              project_id: 101,
-              title: 'Existing',
-              description: 'Body\n\n[vfm-key:file:5]',
-            },
-          ],
-          page: 1,
-          per_page: 5,
-          total: 1,
-          total_pages: 1,
-        }),
-      );
+    mockFetch.mockResolvedValueOnce(response({ id: 101, title: 'Alpha' })).mockResolvedValueOnce(
+      response({
+        items: [
+          {
+            id: 9005,
+            index: 5,
+            identifier: 'ALPHA-5',
+            project_id: 101,
+            title: 'Existing',
+            description: 'Body\n\n[vfm-key:file:5]',
+          },
+        ],
+        page: 1,
+        per_page: 5,
+        total: 1,
+        total_pages: 1,
+      }),
+    );
 
     const result = await lookupTaskByExternalKey(client, { id: 101 }, 'file:5');
     expect(result).toEqual({

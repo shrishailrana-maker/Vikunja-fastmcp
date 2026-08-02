@@ -22,7 +22,14 @@ const projectSelectorSchema = z
   .strict();
 const taskSelectorSchema = z.union([
   z.object({ globalId: z.number().int().positive() }).strict(),
-  z.object({ identifier: z.string().trim().regex(/^.+-\d+$/) }).strict(),
+  z
+    .object({
+      identifier: z
+        .string()
+        .trim()
+        .regex(/^.+-\d+$/),
+    })
+    .strict(),
   z.object({ projectIndex: z.number().int().positive() }).strict(),
 ]);
 const actorSchema = z
@@ -95,7 +102,16 @@ export function createTypedTaskTools(dispatch: TaskDispatcher): TypedTaskToolDef
         titleMaxChars: z.number().int().min(8).max(500).optional(),
         maxResponseChars: z.number().int().min(500).max(100_000).optional(),
         cursor: z.string().min(1).optional(),
-        identifiers: z.array(z.string().trim().regex(/^.+-\d+$/)).min(1).max(100).optional(),
+        identifiers: z
+          .array(
+            z
+              .string()
+              .trim()
+              .regex(/^.+-\d+$/),
+          )
+          .min(1)
+          .max(100)
+          .optional(),
         staleDays: z.number().int().min(1).max(3650).optional(),
         changedLimit: z.number().int().min(1).max(100).optional(),
         preset: z.enum(['programme', 'mpf']).optional(),
@@ -117,7 +133,8 @@ export function createTypedTaskTools(dispatch: TaskDispatcher): TypedTaskToolDef
     },
     {
       name: 'vikunja_task_write',
-      description: 'Create, upsert, update, or delete Vikunja tasks with identity and write guards.',
+      description:
+        'Create, upsert, update, or delete Vikunja tasks with identity and write guards.',
       inputSchema: z.object({
         action: z.enum(['create', 'create_if_absent', 'upsert', 'update', 'delete']),
         taskSelector: taskSelectorSchema.optional(),
@@ -156,6 +173,26 @@ export function createTypedTaskTools(dispatch: TaskDispatcher): TypedTaskToolDef
           'append_evidence_if_changed',
           'close_if_verified',
           'transition_with_evidence',
+        ]),
+        taskSelector: taskSelectorSchema.optional(),
+        projectSelector: projectSelectorSchema.optional(),
+        evidenceComment: z.string().trim().min(1).optional(),
+        evidence: verificationEvidenceSchema.optional(),
+        expectedUpdatedAt: z.string().optional(),
+        actor: actorSchema,
+        idempotencyKey: z.string().trim().min(1).max(200).optional(),
+        statusLabel: z.string().trim().min(1).optional(),
+        createIfMissing: z.boolean().optional(),
+        dryRun: z.boolean().optional(),
+        responseMode: responseModeSchema,
+      }),
+      handler: dispatch,
+    },
+    {
+      name: 'vikunja_task_organize',
+      description: 'Assign, label, set status, and relate tasks through guarded workflows.',
+      inputSchema: z.object({
+        action: z.enum([
           'assign',
           'unassign',
           'list-assignees',
@@ -169,9 +206,6 @@ export function createTypedTaskTools(dispatch: TaskDispatcher): TypedTaskToolDef
         ]),
         taskSelector: taskSelectorSchema.optional(),
         projectSelector: projectSelectorSchema.optional(),
-        evidenceComment: z.string().trim().min(1).optional(),
-        evidence: verificationEvidenceSchema.optional(),
-        expectedUpdatedAt: z.string().optional(),
         actor: actorSchema,
         idempotencyKey: z.string().trim().min(1).max(200).optional(),
         userSelector: z.union([z.string().trim().min(1), z.number().int().positive()]).optional(),

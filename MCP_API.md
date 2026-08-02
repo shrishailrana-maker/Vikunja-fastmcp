@@ -102,6 +102,8 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
   * `destinationPath`: string (optional)
   * `overwrite`: boolean (optional)
   * `filenamePrefix`: string (optional); max 255
+  * `computeSha256`: boolean (optional)
+  * `warnOnDuplicate`: boolean (optional)
   * `confirm`: boolean (optional)
   * `dryRun`: boolean (optional)
   * `idempotencyKey`: string (optional); min 1, max 200
@@ -141,7 +143,7 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 | `relate` | taskSelector, otherTaskSelector, relationKind, projectSelector, actor, idempotencyKey | dryRun, responseMode | Resolve both tasks then POST relation |
 | `unrelate` | taskSelector, otherTaskSelector, relationKind, projectSelector, actor, idempotencyKey | dryRun, responseMode | Resolve both tasks then DELETE relation |
 | `list-relations` | taskSelector | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), responseMode (compact default; standard/full explicit) | MCP-composed from task related_tasks data |
-| `attach` | taskSelector, filePaths or base64Content+filename, idempotencyKey | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), mimeType, responseMode | Multipart POST per file after identity resolution |
+| `attach` | taskSelector, projectSelector, filePaths or base64Content+filename, actor, idempotencyKey | mimeType, computeSha256, warnOnDuplicate, responseMode | Multipart POST per file after identity resolution. Local hashes and duplicate warnings are opt-in; the server does not expose hashes. |
 | `list-attachments` | taskSelector | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), page, perPage, countOnly, filenamePrefix | Direct paginated GET or bounded MCP-side prefix page after identity resolution. Calls without paging/filter arguments retain the legacy attachment-array response. |
 | `download-attachment` | taskSelector, attachmentId | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), destinationPath, overwrite | Authenticated streaming GET to sandboxed local disk |
 | `delete-attachment` | taskSelector, projectSelector, attachmentId, confirm, actor, idempotencyKey | none | Resolve task, verify attachment ownership, then direct DELETE. confirm must be true; durable retries return the original deletion receipt. |
@@ -163,6 +165,8 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
   * `perPage`: number (optional); integer, min 1, max 1000
   * `countOnly`: boolean (optional)
   * `filenamePrefix`: string (optional); max 255
+  * `computeSha256`: boolean (optional)
+  * `warnOnDuplicate`: boolean (optional)
   * `confirm`: boolean (optional)
   * `actor`: string (optional); min 1, max 80
   * `idempotencyKey`: string (optional); min 1, max 200
@@ -171,7 +175,7 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 
 | Action | Required | Optional | Execution |
 | --- | --- | --- | --- |
-| `attach` | taskSelector, filePaths or base64Content+filename, idempotencyKey | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), mimeType | Multipart POST per file after identity resolution |
+| `attach` | taskSelector, projectSelector, filePaths or base64Content+filename, actor, idempotencyKey | mimeType, computeSha256, warnOnDuplicate | Multipart POST per file after identity resolution. Local hashes and duplicate warnings are opt-in; the server does not expose hashes. |
 | `list` | taskSelector | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), page, perPage, countOnly, filenamePrefix | Bounded direct GET or MCP-side prefix page after identity resolution |
 | `download` | taskSelector, attachmentId | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), destinationPath, overwrite | Authenticated streaming GET to sandboxed local disk |
 | `delete` | taskSelector, projectSelector, attachmentId, confirm, actor, idempotencyKey | none | Resolve task, verify attachment ownership, then direct DELETE. Never deletes an attachment that is absent from the resolved task. |
@@ -188,13 +192,17 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
   * `actor`: string (optional); min 1, max 80
   * `page`: number (optional); integer, min 0
   * `perPage`: number (optional); integer, min 1, max 100
+  * `since`: string (optional)
+  * `countOnly`: boolean (optional)
+  * `includeLatest`: boolean (optional)
+  * `maxScanPages`: number (optional); integer, min 1, max 50
 
 #### Operations
 
 | Action | Required | Optional | Execution |
 | --- | --- | --- | --- |
 | `create` | taskSelector, comment, actor, idempotencyKey | projectSelector (required with taskSelector.projectIndex; optional guard otherwise) | Direct POST after identity resolution |
-| `list` | taskSelector | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), page (default 1), perPage (default 20, max 100) | Direct paginated GET after identity resolution |
+| `list` | taskSelector | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), page (default 1), perPage (default 20, max 100), since, countOnly, includeLatest, maxScanPages (default 20, max 50) | Direct paginated GET or bounded newest-first MCP-side since scan. A capped since scan reports incomplete=true rather than silently truncating. |
 | `get` | taskSelector, commentId | projectSelector (required with taskSelector.projectIndex; optional guard otherwise) | Direct GET after identity resolution |
 | `update` | taskSelector, commentId, comment, actor | projectSelector (required with taskSelector.projectIndex; optional guard otherwise) | Direct PATCH after identity resolution |
 | `delete` | taskSelector, commentId, actor | projectSelector (required with taskSelector.projectIndex; optional guard otherwise) | Direct DELETE after identity resolution |
@@ -364,6 +372,29 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 | --- | --- | --- | --- |
 | `export` | projectSelector | format, destinationPath, includeComments, includeAttachments, includeRelations | MCP-composed paginated export to sandboxed JSON or CSV. Creator is always included; comments, attachments, and relations are fetched only when their include flags are true. |
 
+### `vikunja_project_migration`
+* **Description**: Preview, run, resume, or inspect a durable Vikunja-to-GitHub project migration. Available only in the full tool profile.
+* **Parameters**:
+  * `action`: enum ["preview", "run", "status"] (required)
+  * `projectSelector`: object (optional)
+  * `destination`: object (optional)
+  * `actor`: string (optional); min 1, max 80
+  * `idempotencyKey`: string (optional); min 1, max 200
+  * `archiveSource`: boolean (optional)
+  * `publicSanitize`: boolean (optional)
+  * `operationId`: string (optional); min 1, max 120
+  * `cursor`: number (optional); integer, min 0
+  * `perPage`: number (optional); integer, min 1, max 100
+  * `countOnly`: boolean (optional)
+
+#### Operations
+
+| Action | Required | Optional | Execution |
+| --- | --- | --- | --- |
+| `preview` | projectSelector, destination, actor, idempotencyKey | publicSanitize (default true) | Versioned sanitized manifest written under the configured local sandbox. No GitHub write occurs; binary attachment transfer is reported unsupported. |
+| `run` | projectSelector, destination, actor, idempotencyKey | archiveSource, publicSanitize (default true) | Durable per-task GitHub create/reuse, comment copy, read-back, optional source close. GITHUB_TOKEN or GH_TOKEN is read from the process environment and never accepted as a tool argument. |
+| `status` | operationId | cursor, perPage, countOnly | Paginated durable local migration receipts |
+
 ### `vikunja_request_user_export`
 * **Description**: Request a native Vikunja user-data export. Password input is never returned.
 * **Parameters**:
@@ -516,12 +547,36 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 ### `vikunja_task_workflow`
 * **Description**: Close, assign, label, status, and relate tasks through guarded workflows.
 * **Parameters**:
-  * `action`: enum ["close", "reopen", "close_with_evidence", "append_evidence_if_changed", "close_if_verified", "transition_with_evidence", "assign", "unassign", "list-assignees", "apply-label", "remove-label", "list-labels", "set_status", "relate", "unrelate", "list-relations"] (required)
+  * `action`: enum ["close", "reopen", "close_with_evidence", "append_evidence_if_changed", "close_if_verified", "transition_with_evidence"] (required)
   * `taskSelector`: object (optional)
   * `projectSelector`: object (optional)
   * `evidenceComment`: string (optional); min 1
   * `evidence`: object (optional)
   * `expectedUpdatedAt`: string (optional)
+  * `actor`: string (optional); min 1, max 80
+  * `idempotencyKey`: string (optional); min 1, max 200
+  * `statusLabel`: string (optional); min 1
+  * `createIfMissing`: boolean (optional)
+  * `dryRun`: boolean (optional)
+  * `responseMode`: enum ["minimal", "receipt", "compact", "standard", "full"] (optional)
+
+#### Operations
+
+| Action | Required | Optional | Execution |
+| --- | --- | --- | --- |
+| `close` | taskSelector, projectSelector, actor, idempotencyKey | dryRun, responseMode | Identity/read preflight then task update transport |
+| `reopen` | taskSelector, projectSelector, actor, idempotencyKey | dryRun, responseMode | Identity/read preflight then task update transport |
+| `close_with_evidence` | taskSelector, projectSelector, actor, idempotencyKey | evidence (preferred structured form), evidenceComment (compatibility), dryRun, responseMode | MCP-composed comment create followed by task close |
+| `append_evidence_if_changed` | taskSelector, evidence, projectSelector, actor, idempotencyKey | dryRun, responseMode | MCP-composed evidence-key lookup followed by optional comment create |
+| `close_if_verified` | taskSelector, projectSelector, actor, idempotencyKey | dryRun, responseMode | MCP-composed PASS-comment verification followed by conditional close |
+| `transition_with_evidence` | taskSelector, statusLabel, evidence, projectSelector, actor, idempotencyKey | createIfMissing (default false), dryRun, responseMode | MCP-composed deduplicated evidence append followed by one status-label transition |
+
+### `vikunja_task_organize`
+* **Description**: Assign, label, set status, and relate tasks through guarded workflows.
+* **Parameters**:
+  * `action`: enum ["assign", "unassign", "list-assignees", "apply-label", "remove-label", "list-labels", "set_status", "relate", "unrelate", "list-relations"] (required)
+  * `taskSelector`: object (optional)
+  * `projectSelector`: object (optional)
   * `actor`: string (optional); min 1, max 80
   * `idempotencyKey`: string (optional); min 1, max 200
   * `userSelector`: string | number (optional)
@@ -537,12 +592,6 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 
 | Action | Required | Optional | Execution |
 | --- | --- | --- | --- |
-| `close` | taskSelector, projectSelector, actor, idempotencyKey | dryRun, responseMode | Identity/read preflight then task update transport |
-| `reopen` | taskSelector, projectSelector, actor, idempotencyKey | dryRun, responseMode | Identity/read preflight then task update transport |
-| `close_with_evidence` | taskSelector, projectSelector, actor, idempotencyKey | evidence (preferred structured form), evidenceComment (compatibility), dryRun, responseMode | MCP-composed comment create followed by task close |
-| `append_evidence_if_changed` | taskSelector, evidence, projectSelector, actor, idempotencyKey | dryRun, responseMode | MCP-composed evidence-key lookup followed by optional comment create |
-| `close_if_verified` | taskSelector, projectSelector, actor, idempotencyKey | dryRun, responseMode | MCP-composed PASS-comment verification followed by conditional close |
-| `transition_with_evidence` | taskSelector, statusLabel, evidence, projectSelector, actor, idempotencyKey | createIfMissing (default false), dryRun, responseMode | MCP-composed deduplicated evidence append followed by one status-label transition |
 | `assign` | taskSelector, userSelector, projectSelector, actor, idempotencyKey | dryRun, responseMode | Identity preflight then POST assignee |
 | `unassign` | taskSelector, userSelector, projectSelector, actor, idempotencyKey | dryRun, responseMode | Identity preflight then DELETE assignee |
 | `list-assignees` | taskSelector | projectSelector (required with taskSelector.projectIndex; optional guard otherwise) | Direct GET after identity resolution |

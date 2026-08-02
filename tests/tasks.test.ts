@@ -81,9 +81,9 @@ describe('Tasks List and Scoping tests', () => {
 
     it('should filter open tasks by assignee username', () => {
       const filter = buildFilterString({
-        assignee: 'sudhir',
+        assignee: 'example-user',
       });
-      expect(filter).toBe("done = false && assignees in 'sudhir'");
+      expect(filter).toBe("done = false && assignees in 'example-user'");
     });
 
     it('builds precise title and changed-since filters without broad q search', () => {
@@ -322,9 +322,7 @@ describe('Tasks List and Scoping tests', () => {
         maxResponseChars: 3800,
         cursor: minimal.nextCursor,
       });
-      expect(resumed.tasks[0].portalRef).toBe(
-        `ALPHA-${300 + minimal.returnedCount}`,
-      );
+      expect(resumed.tasks[0].portalRef).toBe(`ALPHA-${300 + minimal.returnedCount}`);
     });
 
     it('should group subset query results by project with independent pagination', async () => {

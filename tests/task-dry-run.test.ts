@@ -72,9 +72,12 @@ describe('task mutation dry runs', () => {
     const project = { id: 101 };
     const task = { globalId: 9005 } as const;
 
-    await expect(createTask(client, project, { title: 'New task' }, undefined, undefined, 'Codex', true))
-      .resolves.toMatchObject({ action: 'would_create', dryRun: true });
-    await expect(updateTask(client, task, { priority: 5 }, project, undefined, true)).resolves.toMatchObject({
+    await expect(
+      createTask(client, project, { title: 'New task' }, undefined, undefined, 'Codex', true),
+    ).resolves.toMatchObject({ action: 'would_create', dryRun: true });
+    await expect(
+      updateTask(client, task, { priority: 5 }, project, undefined, true),
+    ).resolves.toMatchObject({
       action: 'would_update',
       changed: ['priority'],
       before: { priority: 1 },
@@ -96,14 +99,18 @@ describe('task mutation dry runs', () => {
       wouldCreateLabel: 'new-label',
       dryRun: true,
     });
-    await expect(setTaskStatus(client, task, 'status:review', project, true, true)).resolves.toMatchObject({
+    await expect(
+      setTaskStatus(client, task, 'status:review', project, true, true),
+    ).resolves.toMatchObject({
       operation: 'set_status',
       wouldCreateLabel: true,
       before: { statusLabels: ['status:todo'] },
       after: { statusLabels: ['status:review'] },
       dryRun: true,
     });
-    await expect(relateTask(client, task, { globalId: 9006 }, 'blocking', project, true)).resolves.toMatchObject({
+    await expect(
+      relateTask(client, task, { globalId: 9006 }, 'blocking', project, true),
+    ).resolves.toMatchObject({
       operation: 'relate',
       otherTask: { identifier: 'ALPHA-6', title: 'Other task' },
       dryRun: true,

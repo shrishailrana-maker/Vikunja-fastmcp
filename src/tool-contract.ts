@@ -272,9 +272,16 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     },
     {
       action: 'attach',
-      required: ['taskSelector', 'filePaths or base64Content+filename', 'idempotencyKey'],
-      optional: [...taskSelector, 'mimeType', 'responseMode'],
+      required: [
+        'taskSelector',
+        'projectSelector',
+        'filePaths or base64Content+filename',
+        'actor',
+        'idempotencyKey',
+      ],
+      optional: ['mimeType', 'computeSha256', 'warnOnDuplicate', 'responseMode'],
       execution: 'Multipart POST per file after identity resolution',
+      note: 'Local hashes and duplicate warnings are opt-in; the server does not expose hashes.',
     },
     {
       action: 'list-attachments',
@@ -306,9 +313,16 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
   vikunja_task_attachments: [
     {
       action: 'attach',
-      required: ['taskSelector', 'filePaths or base64Content+filename', 'idempotencyKey'],
-      optional: [...taskSelector, 'mimeType'],
+      required: [
+        'taskSelector',
+        'projectSelector',
+        'filePaths or base64Content+filename',
+        'actor',
+        'idempotencyKey',
+      ],
+      optional: ['mimeType', 'computeSha256', 'warnOnDuplicate'],
       execution: 'Multipart POST per file after identity resolution',
+      note: 'Local hashes and duplicate warnings are opt-in; the server does not expose hashes.',
     },
     {
       action: 'list',
@@ -346,8 +360,17 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     {
       action: 'list',
       required: ['taskSelector'],
-      optional: [...taskSelector, 'page (default 1)', 'perPage (default 20, max 100)'],
-      execution: 'Direct paginated GET after identity resolution',
+      optional: [
+        ...taskSelector,
+        'page (default 1)',
+        'perPage (default 20, max 100)',
+        'since',
+        'countOnly',
+        'includeLatest',
+        'maxScanPages (default 20, max 50)',
+      ],
+      execution: 'Direct paginated GET or bounded newest-first MCP-side since scan',
+      note: 'A capped since scan reports incomplete=true rather than silently truncating.',
     },
     {
       action: 'get',
@@ -554,6 +577,29 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
       note: 'Creator is always included; comments, attachments, and relations are fetched only when their include flags are true.',
     },
   ],
+  vikunja_project_migration: [
+    {
+      action: 'preview',
+      required: ['projectSelector', 'destination', 'actor', 'idempotencyKey'],
+      optional: ['publicSanitize (default true)'],
+      execution: 'Versioned sanitized manifest written under the configured local sandbox',
+      note: 'No GitHub write occurs; binary attachment transfer is reported unsupported.',
+    },
+    {
+      action: 'run',
+      required: ['projectSelector', 'destination', 'actor', 'idempotencyKey'],
+      optional: ['archiveSource', 'publicSanitize (default true)'],
+      execution:
+        'Durable per-task GitHub create/reuse, comment copy, read-back, optional source close',
+      note: 'GITHUB_TOKEN or GH_TOKEN is read from the process environment and never accepted as a tool argument.',
+    },
+    {
+      action: 'status',
+      required: ['operationId'],
+      optional: ['cursor', 'perPage', 'countOnly'],
+      execution: 'Paginated durable local migration receipts',
+    },
+  ],
   vikunja_request_user_export: [
     {
       action: 'request',
@@ -648,6 +694,8 @@ TOOL_OPERATION_DOCS.vikunja_task_workflow = taskActions([
   'append_evidence_if_changed',
   'close_if_verified',
   'transition_with_evidence',
+]);
+TOOL_OPERATION_DOCS.vikunja_task_organize = taskActions([
   'assign',
   'unassign',
   'list-assignees',

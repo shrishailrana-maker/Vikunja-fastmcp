@@ -294,7 +294,7 @@ export class IdempotencyCache {
         current &&
         (current.status === undefined ||
           current.status === 'completed' ||
-          (lease?.expires_at ?? current.leaseUntil ?? 0) > now)
+          (lease?.expires_at ?? 0) > now)
       ) {
         this.database.exec('COMMIT');
         return { acquired: false, value: current };
@@ -379,6 +379,41 @@ export class IdempotencyCache {
     }
   }
 
+  setIfLeaseOwner(key: string, leaseToken: string, result: any): boolean {
+    this.database.exec('BEGIN IMMEDIATE');
+    try {
+      const lease = this.database
+        .prepare('SELECT token, expires_at FROM idempotency_leases WHERE key = ?')
+        .get(key) as unknown as StoredLease | undefined;
+      const now = Date.now();
+      if (!lease || lease.token !== leaseToken || lease.expires_at <= now) {
+        this.database.exec('COMMIT');
+        return false;
+      }
+      const update = this.database
+        .prepare(
+          `UPDATE idempotency_records
+           SET result_json = ?, updated_at = ?
+           WHERE key = ?`,
+        )
+        .run(JSON.stringify(result), now, key);
+      if (Number(update.changes) !== 1) {
+        this.database.exec('COMMIT');
+        return false;
+      }
+      if (result?.status !== 'running') {
+        this.database
+          .prepare('DELETE FROM idempotency_leases WHERE key = ? AND token = ?')
+          .run(key, leaseToken);
+      }
+      this.database.exec('COMMIT');
+      return true;
+    } catch (error) {
+      this.database.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
   list(prefix: string): any[] {
     return this.entries(prefix).map((entry) => entry.value);
   }
@@ -400,7 +435,11 @@ export class IdempotencyCache {
       if (now - row.updated_at >= this.ttlMs) {
         this.delete(row.key);
       } else {
-        active.push({ key: row.key, value: JSON.parse(row.result_json), updatedAt: row.updated_at });
+        active.push({
+          key: row.key,
+          value: JSON.parse(row.result_json),
+          updatedAt: row.updated_at,
+        });
       }
     }
     return active;

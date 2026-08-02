@@ -160,6 +160,96 @@ describe('Comments and Compound Operations tests', () => {
       expect(mockFetch.mock.calls[1][0]).toContain('/tasks/9005/comments?page=2&per_page=10');
     });
 
+    it('returns count-only comment metadata without comment bodies', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({ id: 9005, index: 305, project_id: 101, project: { title: 'Alpha' } }),
+      } as Response);
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            items: [{ id: 2001, comment: '<p>large body</p>', created: '2026-07-12T00:00:00Z' }],
+            page: 1,
+            per_page: 1,
+            total: 21,
+            total_pages: 21,
+          }),
+      } as Response);
+
+      const list = await listComments(client, 9005, undefined, 1, 20, { countOnly: true });
+
+      expect(list).toMatchObject({
+        comments: [],
+        pagination: {
+          page: 1,
+          perPage: 20,
+          total: 21,
+          totalPages: 2,
+          hasMore: true,
+          nextPage: 2,
+        },
+        returnedCount: 0,
+        totalCount: 21,
+        nextCursor: '2',
+        incomplete: false,
+        countOnly: true,
+      });
+      expect(mockFetch.mock.calls[1][0]).toContain('page=1&per_page=1');
+    });
+
+    it('scans recent comments in descending order until the since boundary', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({ id: 9005, index: 305, project_id: 101, project: { title: 'Alpha' } }),
+      } as Response);
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            items: [
+              {
+                id: 2002,
+                comment: '<p>recent</p>',
+                author: { id: 1, username: 'tester' },
+                created: '2026-07-12T12:00:00Z',
+              },
+              {
+                id: 2001,
+                comment: '<p>old</p>',
+                author: { id: 1, username: 'tester' },
+                created: '2026-07-10T12:00:00Z',
+              },
+            ],
+            page: 1,
+            per_page: 100,
+            total: 2,
+            total_pages: 1,
+          }),
+      } as Response);
+
+      const list = await listComments(client, 9005, undefined, 1, 20, {
+        since: '2026-07-11T00:00:00Z',
+      });
+
+      expect(list).toMatchObject({
+        comments: [expect.objectContaining({ id: 2002, comment: 'recent' })],
+        returnedCount: 1,
+        totalCount: 1,
+        nextCursor: null,
+        incomplete: false,
+        latestCommentAt: '2026-07-12T12:00:00Z',
+        since: '2026-07-11T00:00:00Z',
+      });
+      expect(mockFetch.mock.calls[1][0]).toContain('order_by=desc&page=1&per_page=100');
+    });
+
     it('should get comment details', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,

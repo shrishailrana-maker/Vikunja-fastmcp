@@ -84,6 +84,34 @@ describe('durable idempotency ledger', () => {
     }
   });
 
+  it('persists operation state only for the current unexpired lease owner', () => {
+    const cache = new IdempotencyCache({ databasePath: ':memory:' });
+    const now = jest.spyOn(Date, 'now').mockReturnValue(1_000);
+    try {
+      const acquired = cache.acquireLease('migration:lease', { status: 'running' }, 100);
+      expect(
+        cache.setIfLeaseOwner('migration:lease', acquired.leaseToken!, {
+          status: 'running',
+          receipts: [{ row: 1 }],
+        }),
+      ).toBe(true);
+      expect(cache.setIfLeaseOwner('migration:lease', 'wrong-token', { status: 'completed' })).toBe(
+        false,
+      );
+      now.mockReturnValue(1_101);
+      expect(
+        cache.setIfLeaseOwner('migration:lease', acquired.leaseToken!, { status: 'completed' }),
+      ).toBe(false);
+      expect(cache.get('migration:lease')).toMatchObject({
+        status: 'running',
+        receipts: [{ row: 1 }],
+      });
+    } finally {
+      now.mockRestore();
+      cache.close();
+    }
+  });
+
   it('lists operation receipts by namespace for resumable bulk status', () => {
     const cache = new IdempotencyCache({ databasePath: ':memory:' });
     cache.set('bulk-operation:alpha', { operationId: 'alpha', status: 'partial' });

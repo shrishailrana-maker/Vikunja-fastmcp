@@ -132,6 +132,11 @@ import {
   updateWebhook,
 } from './webhooks.js';
 import { instantiateTemplate, TemplateStore } from './templates.js';
+import {
+  getProjectMigrationStatus,
+  previewProjectMigration,
+  runProjectMigration,
+} from './migration.js';
 
 const PACKAGE_VERSION = String(
   JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version,
@@ -255,21 +260,14 @@ function addActionRequirements(toolName: string, schema: any): any {
       additionalProperties: false,
     };
   });
-  return { ...schema, oneOf: branches };
+  return { type: 'object', oneOf: branches };
 }
 
 function toolDescription(tool: McpToolDefinition): string {
-  const operations = TOOL_OPERATION_DOCS[tool.name];
-  if (!operations) return tool.description;
-  const actionGuide = operations
-    .map((operation) => {
-      const required = operation.required?.length
-        ? ` requires ${operation.required.join(', ')}`
-        : '';
-      return `${operation.action}${required}`;
-    })
-    .join('; ');
-  return `${tool.description} Actions: ${actionGuide}.`;
+  // The discriminated JSON Schema already exposes every action and required
+  // field. Repeating that contract in the description loads it twice into
+  // every agent session.
+  return tool.description;
 }
 
 function taskLink(webUrl: string, taskId: number, portalRef: string): string {
@@ -958,6 +956,8 @@ export const TOOLS: McpToolDefinition[] = [
       destinationPath: z.string().optional(),
       overwrite: z.boolean().optional(),
       filenamePrefix: z.string().max(255).optional(),
+      computeSha256: z.boolean().optional(),
+      warnOnDuplicate: z.boolean().optional(),
       confirm: z.boolean().optional(),
       dryRun: z.boolean().optional(),
       idempotencyKey: z.string().trim().min(1).max(200).optional(),
@@ -1474,7 +1474,7 @@ export const TOOLS: McpToolDefinition[] = [
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
           return listRelations(client, args.taskSelector, args.projectSelector, args.responseMode);
         case 'attach': {
-          requireIdempotencyKey(args.idempotencyKey, 'attachment upload');
+          const envelope = requireTaskMutationEnvelope(args, 'attachment upload');
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
           const files: AttachFileSpec[] = [];
           if (Array.isArray(args.filePaths)) {
@@ -1499,6 +1499,11 @@ export const TOOLS: McpToolDefinition[] = [
             files,
             args.projectSelector,
             args.idempotencyKey,
+            {
+              computeSha256: args.computeSha256,
+              warnOnDuplicate: args.warnOnDuplicate,
+              actor: envelope.actor,
+            },
           );
         }
         case 'list-attachments':
@@ -1570,6 +1575,8 @@ export const TOOLS: McpToolDefinition[] = [
       perPage: z.number().int().min(1).max(1000).optional(),
       countOnly: z.boolean().optional(),
       filenamePrefix: z.string().max(255).optional(),
+      computeSha256: z.boolean().optional(),
+      warnOnDuplicate: z.boolean().optional(),
       confirm: z.boolean().optional(),
       actor: actorSchema,
       idempotencyKey: z.string().trim().min(1).max(200).optional(),
@@ -1577,7 +1584,7 @@ export const TOOLS: McpToolDefinition[] = [
     handler: async (args, client) => {
       switch (args.action) {
         case 'attach': {
-          requireIdempotencyKey(args.idempotencyKey, 'attachment upload');
+          const envelope = requireTaskMutationEnvelope(args, 'attachment upload');
           const files: AttachFileSpec[] = [];
           if (Array.isArray(args.filePaths)) {
             for (const filePath of args.filePaths) files.push({ filePath });
@@ -1601,6 +1608,11 @@ export const TOOLS: McpToolDefinition[] = [
             files,
             args.projectSelector,
             args.idempotencyKey,
+            {
+              computeSha256: args.computeSha256,
+              warnOnDuplicate: args.warnOnDuplicate,
+              actor: envelope.actor,
+            },
           );
         }
         case 'list':
@@ -1655,6 +1667,10 @@ export const TOOLS: McpToolDefinition[] = [
       actor: actorSchema,
       page: z.number().int().positive().optional(),
       perPage: z.number().int().min(1).max(100).optional(),
+      since: z.string().datetime().optional(),
+      countOnly: z.boolean().optional(),
+      includeLatest: z.boolean().optional(),
+      maxScanPages: z.number().int().min(1).max(50).optional(),
     }),
     handler: async (args, client) => {
       switch (args.action) {
@@ -1677,6 +1693,12 @@ export const TOOLS: McpToolDefinition[] = [
             args.projectSelector,
             args.page,
             args.perPage,
+            {
+              since: args.since,
+              countOnly: args.countOnly,
+              includeLatest: args.includeLatest,
+              maxScanPages: args.maxScanPages,
+            },
           );
         case 'get':
           if (!args.commentId) throw badRequest('commentId is required.');
@@ -2243,6 +2265,65 @@ export const TOOLS: McpToolDefinition[] = [
       ),
   },
   {
+    name: 'vikunja_project_migration',
+    description:
+      'Preview, run, resume, or inspect a durable Vikunja-to-GitHub project migration. Available only in the full tool profile.',
+    inputSchema: z.object({
+      action: z.enum(['preview', 'run', 'status']),
+      projectSelector: z
+        .object({
+          id: z.number().int().positive().optional(),
+          title: z.string().trim().min(1).optional(),
+        })
+        .optional(),
+      destination: z
+        .object({
+          owner: z.string().trim().min(1),
+          repo: z.string().trim().min(1),
+          apiUrl: z.string().url().optional(),
+        })
+        .strict()
+        .optional(),
+      actor: actorSchema,
+      idempotencyKey: z.string().trim().min(1).max(200).optional(),
+      archiveSource: z.boolean().optional(),
+      publicSanitize: z.boolean().optional(),
+      operationId: z.string().trim().min(1).max(120).optional(),
+      cursor: z.number().int().min(0).optional(),
+      perPage: z.number().int().min(1).max(100).optional(),
+      countOnly: z.boolean().optional(),
+    }),
+    handler: async (args, client) => {
+      if (args.action === 'status') {
+        if (!args.operationId) throw badRequest('operationId is required for migration status.');
+        return getProjectMigrationStatus(
+          args.operationId,
+          args.cursor,
+          args.perPage,
+          args.countOnly,
+        );
+      }
+      if (!args.projectSelector) throw badRequest('projectSelector is required.');
+      if (!args.destination) throw badRequest('destination is required.');
+      const actor = requireActor(args.actor, `project migration ${args.action}`);
+      const idempotencyKey = requireIdempotencyKey(
+        args.idempotencyKey,
+        `project migration ${args.action}`,
+      );
+      const options = {
+        projectSelector: args.projectSelector,
+        destination: args.destination,
+        actor,
+        idempotencyKey,
+        archiveSource: args.archiveSource,
+        publicSanitize: args.publicSanitize,
+      };
+      return args.action === 'preview'
+        ? previewProjectMigration(client, options)
+        : runProjectMigration(client, options);
+    },
+  },
+  {
     name: 'vikunja_request_user_export',
     description: 'Request a native Vikunja user-data export. Password input is never returned.',
     inputSchema: z.object({ password: z.string().optional() }),
@@ -2414,7 +2495,12 @@ function enforceToolMutationScope(
 ): void {
   const mode = client.getConfig().mutationScopeMode ?? 'require';
   if (
-    ['vikunja_tasks', 'vikunja_task_write', 'vikunja_task_workflow'].includes(name) &&
+    [
+      'vikunja_tasks',
+      'vikunja_task_write',
+      'vikunja_task_workflow',
+      'vikunja_task_organize',
+    ].includes(name) &&
     TASK_MUTATIONS.has(args.action)
   ) {
     enforceMutationProjectScope(
@@ -2594,6 +2680,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         'vikunja_tasks',
         'vikunja_task_write',
         'vikunja_task_workflow',
+        'vikunja_task_organize',
         'vikunja_task_bulk',
       ].includes(name) && ['minimal', 'receipt', 'compact'].includes(effectiveResponseMode)
         ? compactWriteEchoes(rawResult)

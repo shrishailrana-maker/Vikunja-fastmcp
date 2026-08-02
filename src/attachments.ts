@@ -12,7 +12,7 @@
 import { VikunjaApiClient } from './api.js';
 import { resolveTaskInput as resolveTask, type TaskSelectorInput } from './identity.js';
 import { redactSecrets, VikunjaError } from './errors.js';
-import { runDurableOperation } from './idempotency.js';
+import { idempotency, runDurableOperation } from './idempotency.js';
 import { DEFAULT_MAX_ATTACHMENT_BYTES } from './config.js';
 import { fetchAllCollectionItems, normalizePagination, toItemArray } from './format.js';
 import path from 'path';
@@ -26,6 +26,8 @@ export interface AttachmentInfo {
   mime: string;
   fileSize: number;
   created: string;
+  sha256?: string;
+  duplicateWarning?: string;
 }
 
 export interface AttachmentListOptions {
@@ -89,7 +91,9 @@ async function fetchAllAttachments(
     `/tasks/${taskId}/attachments${query}`,
     1000,
   );
-  const normalized = raw.map(normalizeAttachment);
+  const normalized = raw.map((attachment) =>
+    withKnownAttachmentHash(taskId, normalizeAttachment(attachment)),
+  );
   if (!prefix) return normalized;
   const foldedPrefix = prefix.toLocaleLowerCase();
   return normalized.filter((attachment) =>
@@ -440,6 +444,32 @@ export interface AttachResult {
   task: { id: number; portalRef: string; title: string };
   uploaded: AttachmentInfo[];
   failed: { file: string; error: string }[];
+  warnings: { file: string; message: string; matchingAttachmentIds: number[] }[];
+  actor?: string;
+}
+
+export interface AttachOptions {
+  computeSha256?: boolean;
+  warnOnDuplicate?: boolean;
+  actor?: string;
+}
+
+function attachmentHashKey(taskId: number, attachmentId: number): string {
+  return `attachment-sha256:${taskId}:${attachmentId}`;
+}
+
+function knownAttachmentHash(taskId: number, attachmentId: number): string | undefined {
+  const stored = idempotency.get(attachmentHashKey(taskId, attachmentId));
+  return typeof stored?.sha256 === 'string' ? stored.sha256 : undefined;
+}
+
+function rememberAttachmentHash(taskId: number, attachmentId: number, sha256: string): void {
+  idempotency.set(attachmentHashKey(taskId, attachmentId), { sha256 });
+}
+
+function withKnownAttachmentHash(taskId: number, attachment: AttachmentInfo): AttachmentInfo {
+  const sha256 = knownAttachmentHash(taskId, attachment.id);
+  return sha256 ? { ...attachment, sha256 } : attachment;
 }
 
 async function attachmentPayload(files: AttachFileSpec[]): Promise<unknown[]> {
@@ -447,7 +477,10 @@ async function attachmentPayload(files: AttachFileSpec[]): Promise<unknown[]> {
     files.map(async (file) => {
       let contentHash: string | undefined;
       if (file.base64Content !== undefined) {
-        contentHash = crypto.createHash('sha256').update(file.base64Content).digest('hex');
+        contentHash = crypto
+          .createHash('sha256')
+          .update(decodeBase64(file.base64Content, '/attachments'))
+          .digest('hex');
       } else if (file.filePath) {
         try {
           const hash = crypto.createHash('sha256');
@@ -525,6 +558,7 @@ export async function attachFiles(
   files: AttachFileSpec[],
   projectSelector?: { id?: number; title?: string },
   idempotencyKey?: string,
+  options: AttachOptions = {},
 ): Promise<AttachResult> {
   if (!Array.isArray(files) || files.length === 0) {
     throw new VikunjaError({
@@ -541,11 +575,16 @@ export async function attachFiles(
   const payload = {
     taskId: task.id,
     files: idempotencyKey ? await attachmentPayload(files) : [],
+    actor: options.actor,
+    computeSha256: options.computeSha256 === true,
+    warnOnDuplicate: options.warnOnDuplicate === true,
   };
   const execute = async (): Promise<AttachResult> => {
     const pathUrl = `/tasks/${task.id}/attachments`;
     const uploaded: AttachmentInfo[] = [];
     const failed: { file: string; error: string }[] = [];
+    const warnings: AttachResult['warnings'] = [];
+    const existing = options.warnOnDuplicate ? await fetchAllAttachments(client, task.id) : [];
 
     for (const spec of files) {
       const label = spec.filePath || spec.filename || 'unnamed';
@@ -565,7 +604,46 @@ export async function attachFiles(
           });
         }
         assertWithinSizeLimit(client, filename, buffer.length, pathUrl);
-        uploaded.push(await uploadBufferToTask(client, task.id, filename, mimeType, buffer));
+        const sha256 =
+          options.computeSha256 || options.warnOnDuplicate
+            ? crypto.createHash('sha256').update(buffer).digest('hex')
+            : undefined;
+        if (options.warnOnDuplicate) {
+          const candidates = existing.filter(
+            (attachment) =>
+              attachment.fileName.toLocaleLowerCase() === filename.toLocaleLowerCase() &&
+              attachment.fileSize === buffer.length,
+          );
+          if (candidates.length > 0) {
+            const exact = sha256
+              ? candidates.filter(
+                  (attachment) => knownAttachmentHash(task.id, attachment.id) === sha256,
+                )
+              : [];
+            warnings.push({
+              file: filename,
+              message:
+                exact.length > 0
+                  ? 'An attachment with the same locally verified SHA-256 already exists.'
+                  : 'An attachment with the same filename and size already exists; the server does not expose a content hash.',
+              matchingAttachmentIds: (exact.length > 0 ? exact : candidates).map(
+                (attachment) => attachment.id,
+              ),
+            });
+          }
+        }
+        const uploadedAttachment = await uploadBufferToTask(
+          client,
+          task.id,
+          filename,
+          mimeType,
+          buffer,
+        );
+        if (sha256) {
+          uploadedAttachment.sha256 = sha256;
+          rememberAttachmentHash(task.id, uploadedAttachment.id, sha256);
+        }
+        uploaded.push(uploadedAttachment);
       } catch (err: any) {
         failed.push({
           file: label,
@@ -582,6 +660,8 @@ export async function attachFiles(
       },
       uploaded,
       failed,
+      warnings,
+      actor: options.actor,
     };
   };
 
@@ -726,6 +806,7 @@ export async function downloadAttachment(
   await handle.close();
 
   const checksum = hash.digest('hex');
+  rememberAttachmentHash(task.id, attachmentId, checksum);
 
   return {
     success: true,
@@ -761,7 +842,9 @@ export async function listAttachments(
   const task = await resolveTask(client, taskSelector, projectSelector);
   if (options === undefined) {
     const rawList = await client.request<any>('GET', `/tasks/${task.id}/attachments`);
-    return toItemArray(rawList).map(normalizeAttachment);
+    return toItemArray(rawList).map((attachment) =>
+      withKnownAttachmentHash(task.id, normalizeAttachment(attachment)),
+    );
   }
 
   const page = options.page ?? 1;
@@ -784,7 +867,11 @@ export async function listAttachments(
       `/tasks/${task.id}/attachments?page=${requestPage}&per_page=${requestPerPage}`,
     );
     total = normalizePagination(rawList).total;
-    attachments = countOnly ? [] : toItemArray(rawList).map(normalizeAttachment);
+    attachments = countOnly
+      ? []
+      : toItemArray(rawList).map((attachment) =>
+          withKnownAttachmentHash(task.id, normalizeAttachment(attachment)),
+        );
   }
 
   const totalPages = total === 0 ? 0 : Math.ceil(total / perPage);
@@ -869,6 +956,7 @@ export async function deleteAttachment(
     }
 
     await client.request('DELETE', apiPath);
+    idempotency.delete(attachmentHashKey(task.id, attachmentId));
     return {
       action: 'deleted',
       task: attachmentTaskSummary(task),
