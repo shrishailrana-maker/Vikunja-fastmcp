@@ -5,10 +5,15 @@ import {
   bulkDeleteTasks,
   bulkUnassignTasks,
   bulkUpdateTasks,
+  bulkWorkflowTasks,
   getBulkOperationStatus,
 } from '../src/bulk-reminders.js';
 import { idempotency } from '../src/idempotency.js';
+import { IdempotencyCache } from '../src/idempotency.js';
 import { VikunjaError } from '../src/errors.js';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 describe('bulk task composition', () => {
   beforeEach(() => idempotency.clear());
@@ -87,8 +92,63 @@ describe('bulk task composition', () => {
     const writes = request.mock.calls.filter(([method]) => method === 'POST').length;
     const second = await bulkCreateTasks(client, { id: 101 }, [{ title: 'First' }], 'batch-1');
 
-    expect(second).toEqual(first);
+    expect(first).toMatchObject({ changed: 1, skipped: 0 });
+    expect(second).toMatchObject({ changed: 1, skipped: 1 });
     expect(request.mock.calls.filter(([method]) => method === 'POST')).toHaveLength(writes);
+  });
+
+  it('does not persist response-only skip metadata without owning the bulk lease', async () => {
+    let releaseSecondRow!: () => void;
+    const secondRowReleased = new Promise<void>((resolve) => {
+      releaseSecondRow = resolve;
+    });
+    let announceSecondRow!: () => void;
+    const secondRowStarted = new Promise<void>((resolve) => {
+      announceSecondRow = resolve;
+    });
+    const request = jest.fn(async (method: string, path: string, options?: any) => {
+      if (method === 'GET' && path === '/projects/101') return { id: 101, title: 'Alpha' };
+      if (method === 'POST' && path === '/projects/101/tasks') {
+        if (options.body.title === 'Second') {
+          announceSecondRow();
+          await secondRowReleased;
+        }
+        const index = options.body.title === 'First' ? 1 : 2;
+        return {
+          id: 9000 + index,
+          index,
+          identifier: `ALPHA-${index}`,
+          title: options.body.title,
+          project_id: 101,
+        };
+      }
+      throw new Error(`Unexpected ${method} ${path}`);
+    });
+    const client = {
+      request,
+      getConfig: () => ({
+        vikunjaWebUrl: 'https://vikunja.example.com/',
+        vikunjaToken: 'test-token',
+      }),
+    } as any;
+    const rows = [{ title: 'First' }, { title: 'Second' }];
+
+    const running = bulkCreateTasks(client, { id: 101 }, rows, 'concurrent-batch');
+    await secondRowStarted;
+    const writesBeforeRetry = request.mock.calls.filter(([method]) => method === 'POST').length;
+    const retry = await bulkCreateTasks(client, { id: 101 }, rows, 'concurrent-batch');
+
+    expect(retry).toMatchObject({ status: 'running', changed: 1, skipped: 1 });
+    expect(request.mock.calls.filter(([method]) => method === 'POST')).toHaveLength(
+      writesBeforeRetry,
+    );
+    expect(getBulkOperationStatus(retry.operationId).receipts[0]).toMatchObject({
+      row: 1,
+      skipped: false,
+    });
+
+    releaseSecondRow();
+    await expect(running).resolves.toMatchObject({ status: 'completed', changed: 2 });
   });
 
   it('rejects one bulk-create idempotency key reused for a different payload', async () => {
@@ -115,7 +175,12 @@ describe('bulk task composition', () => {
 
     const first = await bulkCreateTasks(client, { id: 101 }, [{ title: 'First' }], 'batch-1');
 
-    expect(first.created[0].id).toBe(9001);
+    expect(first).toMatchObject({ changed: 1, failed: 0, status: 'completed' });
+    expect(getBulkOperationStatus(first.operationId).receipts[0]).toMatchObject({
+      state: 'changed',
+      finalIdentity: { id: 9001, portalRef: 'ALPHA-1' },
+      resultHash: expect.any(String),
+    });
     await expect(
       bulkCreateTasks(client, { id: 101 }, [{ title: 'Second' }], 'batch-1'),
     ).rejects.toMatchObject({ status: 409, code: 'IDEMPOTENCY_KEY_REUSED' });
@@ -161,17 +226,190 @@ describe('bulk task composition', () => {
     expect(first.status).toBe('partial');
     expect(getBulkOperationStatus(first.operationId)).toMatchObject({
       status: 'partial',
-      failed: [{ row: 2 }],
+      failed: 1,
+      receipts: [
+        { row: 1, state: 'changed' },
+        { row: 2, state: 'failed', retryCount: 0 },
+      ],
     });
     const second = (await bulkCreateTasks(client, { id: 101 }, rows, 'resume-1')) as any;
     expect(second.status).toBe('completed');
     expect(getBulkOperationStatus(second.operationId).status).toBe('completed');
-    expect(second.created).toHaveLength(2);
+    expect(second).toMatchObject({ changed: 2, skipped: 1, failed: 0, status: 'completed' });
+    expect(getBulkOperationStatus(second.operationId).receipts[0]).toMatchObject({
+      row: 1,
+      skipped: true,
+      skipReason: 'already-complete',
+    });
+    expect(getBulkOperationStatus(second.operationId).receipts[1]).toMatchObject({
+      row: 2,
+      state: 'changed',
+      retryCount: 1,
+      resultHash: expect.any(String),
+    });
     expect(
       request.mock.calls.filter(
         ([method, , options]) => method === 'POST' && options.body.title === 'First',
       ),
     ).toHaveLength(1);
+  });
+
+  it('does not retry a permanent row failure and records the resume skip', async () => {
+    let attempts = 0;
+    const request = jest.fn(async (method: string, path: string) => {
+      if (method === 'GET' && path === '/projects/101') return { id: 101, title: 'Alpha' };
+      if (method === 'POST' && path === '/projects/101/tasks') {
+        attempts += 1;
+        throw new VikunjaError({
+          status: 422,
+          code: 'VALIDATION_ERROR',
+          method,
+          path,
+          message: 'Permanent row error',
+          fieldErrors: [],
+        });
+      }
+      throw new Error(`Unexpected ${method} ${path}`);
+    });
+    const client = {
+      request,
+      getConfig: () => ({
+        vikunjaWebUrl: 'https://vikunja.example.com/',
+        vikunjaToken: 'test-token',
+      }),
+    } as any;
+    const rows = [{ title: 'Invalid' }];
+
+    const first = await bulkCreateTasks(client, { id: 101 }, rows, 'permanent-row');
+    const second = await bulkCreateTasks(client, { id: 101 }, rows, 'permanent-row');
+    const status = getBulkOperationStatus(second.operationId);
+
+    expect(attempts).toBe(1);
+    expect(first).toMatchObject({ status: 'partial', failed: 1, skipped: 0 });
+    expect(second).toMatchObject({ status: 'partial', failed: 1, skipped: 1 });
+    expect(status.receipts[0]).toMatchObject({
+      row: 1,
+      ok: false,
+      state: 'failed',
+      failed: true,
+      retryable: false,
+      retryCount: 0,
+      skipped: true,
+      skipReason: 'non-retryable',
+    });
+  });
+
+  it('persists bulk-shaped row receipts across a ledger reopen', async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'vikunja-bulk-ledger-'));
+    const databasePath = path.join(directory, 'operations.sqlite');
+    const operationId = 'create-restart-proof';
+    const first = new IdempotencyCache({ databasePath });
+    first.set(`bulk-operation:${operationId}`, {
+      operationId,
+      status: 'partial',
+      requested: 2,
+      receipts: [
+        {
+          row: 1,
+          ok: true,
+          state: 'changed',
+          selected: true,
+          changed: true,
+          unchanged: false,
+          skipped: false,
+          failed: false,
+          retryCount: 0,
+          resultHash: 'immutable-row-hash',
+        },
+      ],
+    });
+    first.close();
+
+    const reopened = new IdempotencyCache({ databasePath });
+    expect(reopened.get(`bulk-operation:${operationId}`)).toMatchObject({
+      status: 'partial',
+      receipts: [
+        expect.objectContaining({ row: 1, state: 'changed', resultHash: 'immutable-row-hash' }),
+      ],
+    });
+    reopened.close();
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+
+  it('returns compact mutation summaries and bounded durable receipt pages', async () => {
+    const request = jest.fn(async (method: string, path: string, options?: any) => {
+      if (method === 'GET' && path === '/projects/101') return { id: 101, title: 'Alpha' };
+      if (method === 'POST' && path === '/projects/101/tasks') {
+        const index = Number(String(options.body.title).split(' ')[1]);
+        return {
+          id: 9100 + index,
+          index,
+          identifier: `ALPHA-${index}`,
+          title: options.body.title,
+          project_id: 101,
+        };
+      }
+      throw new Error(`Unexpected ${method} ${path}`);
+    });
+    const client = {
+      request,
+      getConfig: () => ({
+        vikunjaWebUrl: 'https://vikunja.example.com/',
+        vikunjaToken: 'test-token',
+      }),
+    } as any;
+
+    const result = await bulkCreateTasks(
+      client,
+      { id: 101 },
+      [{ title: 'Row 1' }, { title: 'Row 2' }, { title: 'Row 3' }],
+      'paged-receipts',
+      'Codex',
+    );
+
+    expect(result).toMatchObject({
+      status: 'completed',
+      requested: 3,
+      selected: 3,
+      changed: 3,
+      unchanged: 0,
+      skipped: 0,
+      failed: 0,
+      actor: 'Codex',
+    });
+    expect(result).not.toHaveProperty('receipts');
+
+    const firstPage = getBulkOperationStatus(result.operationId, undefined, 2);
+    expect(firstPage).toMatchObject({
+      returnedCount: 2,
+      totalCount: 3,
+      nextCursor: '2',
+      incomplete: true,
+    });
+    expect(firstPage.receipts).toEqual([
+      expect.objectContaining({
+        row: 1,
+        state: 'changed',
+        retryCount: 0,
+        resultHash: expect.any(String),
+        finalIdentity: expect.objectContaining({ portalRef: 'ALPHA-1' }),
+      }),
+      expect.objectContaining({ row: 2, state: 'changed' }),
+    ]);
+    expect(getBulkOperationStatus(result.operationId, firstPage.nextCursor, 2)).toMatchObject({
+      returnedCount: 1,
+      totalCount: 3,
+      nextCursor: null,
+      incomplete: false,
+      receipts: [expect.objectContaining({ row: 3, state: 'changed' })],
+    });
+    expect(getBulkOperationStatus(result.operationId, undefined, 2, true)).toMatchObject({
+      receipts: [],
+      returnedCount: 0,
+      totalCount: 3,
+      nextCursor: null,
+      incomplete: false,
+    });
   });
 
   it('bulk assigns a mixed batch and isolates a wrong-project task', async () => {
@@ -312,7 +550,8 @@ describe('bulk task composition', () => {
       false,
       'assign-1',
     );
-    expect(assignedRetry).toEqual(assignedFirst);
+    expect(assignedFirst).toMatchObject({ changed: 1, skipped: 0 });
+    expect(assignedRetry).toMatchObject({ changed: 1, skipped: 1 });
     expect(request.mock.calls.filter(([method]) => method === 'POST')).toHaveLength(assignWrites);
 
     const unassignedFirst = await bulkUnassignTasks(
@@ -332,7 +571,8 @@ describe('bulk task composition', () => {
       false,
       'unassign-1',
     );
-    expect(unassignedRetry).toEqual(unassignedFirst);
+    expect(unassignedFirst).toMatchObject({ changed: 1, skipped: 0 });
+    expect(unassignedRetry).toMatchObject({ changed: 1, skipped: 1 });
     expect(request.mock.calls.filter(([method]) => method === 'DELETE')).toHaveLength(
       unassignWrites,
     );
@@ -364,20 +604,166 @@ describe('bulk task composition', () => {
     expect(request.mock.calls.length).toBeGreaterThan(callsAfterFirst);
   });
 
-  it('returns cached bulk-update and bulk-delete receipts without repeated writes', async () => {
+  it('previews bulk create, update, and delete without writes or durable receipts', async () => {
     const request = jest.fn(async (method: string, path: string) => {
-      if (method === 'PUT' && path === '/tasks/bulk') {
+      if (method === 'GET' && path === '/projects/101') return { id: 101, title: 'Alpha' };
+      if (method === 'GET' && path === '/tasks/1') {
         return {
-          tasks: [
-            {
-              id: 1,
-              index: 1,
-              identifier: 'ALPHA-1',
-              project_id: 101,
-              title: 'Updated',
-              done: true,
-            },
+          id: 1,
+          index: 1,
+          identifier: 'ALPHA-1',
+          title: 'Preview target',
+          project_id: 101,
+          done: false,
+          labels: [],
+          assignees: [],
+        };
+      }
+      throw new Error(`Unexpected ${method} ${path}`);
+    });
+    const client = {
+      request,
+      getConfig: () => ({
+        vikunjaWebUrl: 'https://vikunja.example.com/',
+        vikunjaToken: 'test-token',
+      }),
+    } as any;
+
+    const created = await bulkCreateTasks(
+      client,
+      { id: 101 },
+      [{ title: 'Preview create' }],
+      'dry-create',
+      'Codex',
+      true,
+    );
+    const updated = await bulkUpdateTasks(
+      client,
+      [{ globalId: 1 }],
+      { title: 'Preview update' },
+      { id: 101 },
+      'dry-update',
+      'Codex',
+      true,
+    );
+    const deleted = await bulkDeleteTasks(
+      client,
+      [{ globalId: 1 }],
+      { id: 101 },
+      'dry-delete',
+      'Codex',
+      true,
+    );
+
+    expect([created, updated, deleted]).toEqual([
+      expect.objectContaining({ status: 'preview', changed: 1, dryRun: true }),
+      expect.objectContaining({ status: 'preview', changed: 1, dryRun: true }),
+      expect.objectContaining({ status: 'preview', changed: 1, dryRun: true }),
+    ]);
+    expect([created, updated, deleted].every((result) => result.operationId === undefined)).toBe(
+      true,
+    );
+    expect(
+      request.mock.calls.some(([method]) => ['POST', 'PATCH', 'PUT', 'DELETE'].includes(method)),
+    ).toBe(false);
+  });
+
+  it('previews status, label, and evidence-close workflows without writes', async () => {
+    const request = jest.fn(async (method: string, path: string) => {
+      if (method === 'GET' && path === '/projects/101') return { id: 101, title: 'Alpha' };
+      if (method === 'GET' && path === '/tasks/1') {
+        return {
+          id: 1,
+          index: 1,
+          identifier: 'ALPHA-1',
+          title: 'Workflow preview',
+          project_id: 101,
+          done: false,
+          labels: [
+            { id: 7, title: 'status:todo' },
+            { id: 8, title: 'status:review' },
           ],
+          assignees: [],
+        };
+      }
+      throw new Error(`Unexpected ${method} ${path}`);
+    });
+    const client = {
+      request,
+      getConfig: () => ({
+        statusLabelPrefix: 'status:',
+        vikunjaWebUrl: 'https://vikunja.example.com/',
+        vikunjaToken: 'test-token',
+      }),
+    } as any;
+    const common = {
+      dryRun: true,
+      idempotencyKey: 'workflow-preview',
+      actor: 'Codex',
+    };
+
+    const status = await bulkWorkflowTasks(
+      client,
+      'set_status',
+      [{ globalId: 1 }],
+      { id: 101 },
+      {
+        ...common,
+        statusLabel: 'status:review',
+      },
+    );
+    const applied = await bulkWorkflowTasks(
+      client,
+      'apply-label',
+      [{ globalId: 1 }],
+      { id: 101 },
+      {
+        ...common,
+        labelTitle: 9,
+      },
+    );
+    const removed = await bulkWorkflowTasks(
+      client,
+      'remove-label',
+      [{ globalId: 1 }],
+      { id: 101 },
+      {
+        ...common,
+        labelTitle: 7,
+      },
+    );
+    const closed = await bulkWorkflowTasks(
+      client,
+      'close_with_evidence',
+      [{ globalId: 1 }],
+      { id: 101 },
+      { ...common, evidenceComment: 'PASS: preview evidence' },
+    );
+
+    expect([status, applied, removed, closed]).toEqual([
+      expect.objectContaining({ status: 'preview', changed: 1, dryRun: true }),
+      expect.objectContaining({ status: 'preview', changed: 1, dryRun: true }),
+      expect.objectContaining({ status: 'preview', changed: 1, dryRun: true }),
+      expect.objectContaining({ status: 'preview', changed: 1, dryRun: true }),
+    ]);
+    expect(
+      request.mock.calls.some(([method]) => ['POST', 'PATCH', 'PUT', 'DELETE'].includes(method)),
+    ).toBe(false);
+  });
+
+  it('returns cached bulk-update and bulk-delete receipts without repeated writes', async () => {
+    const request = jest.fn(async (method: string, path: string, options?: any) => {
+      if (method === 'PATCH' && path === '/tasks/1') {
+        return {
+          id: 1,
+          index: 1,
+          identifier: 'ALPHA-1',
+          project_id: 101,
+          project: { id: 101, title: 'Alpha' },
+          title: 'Delete target',
+          done: options.body.done,
+          labels: [],
+          assignees: [],
         };
       }
       if (method === 'GET' && path === '/tasks/1') {
@@ -404,15 +790,17 @@ describe('bulk task composition', () => {
     } as any;
 
     const updateFirst = await bulkUpdateTasks(client, [1], { done: true }, undefined, 'update-1');
-    const updateWrites = request.mock.calls.filter(([method]) => method === 'PUT').length;
+    const updateWrites = request.mock.calls.filter(([method]) => method === 'PATCH').length;
     const updateRetry = await bulkUpdateTasks(client, [1], { done: true }, undefined, 'update-1');
-    expect(updateRetry).toEqual(updateFirst);
-    expect(request.mock.calls.filter(([method]) => method === 'PUT')).toHaveLength(updateWrites);
+    expect(updateRetry).toMatchObject({ changed: 1, skipped: 1 });
+    expect(updateFirst).toMatchObject({ status: 'completed', changed: 1, failed: 0 });
+    expect(request.mock.calls.filter(([method]) => method === 'PATCH')).toHaveLength(updateWrites);
 
     const deleteFirst = await bulkDeleteTasks(client, [1], undefined, 'delete-1');
     const deleteWrites = request.mock.calls.filter(([method]) => method === 'DELETE').length;
     const deleteRetry = await bulkDeleteTasks(client, [1], undefined, 'delete-1');
-    expect(deleteRetry).toEqual(deleteFirst);
+    expect(deleteFirst).toMatchObject({ changed: 1, skipped: 0 });
+    expect(deleteRetry).toMatchObject({ changed: 1, skipped: 1 });
     expect(request.mock.calls.filter(([method]) => method === 'DELETE')).toHaveLength(deleteWrites);
   });
 });

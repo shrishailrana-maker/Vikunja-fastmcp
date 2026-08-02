@@ -100,6 +100,7 @@ import {
   bulkAssignTasks,
   bulkCreateTasks,
   bulkDeleteTasks,
+  bulkWorkflowTasks,
   getBulkOperationStatus,
   bulkUnassignTasks,
   bulkUpdateTasks,
@@ -441,7 +442,9 @@ function finalizeTaskMutationReceipt(
     ...result,
     ...(result?.error ? { error: contextualize(result.error) } : {}),
     ...(result?.firstComment?.error
-      ? { firstComment: { ...result.firstComment, error: contextualize(result.firstComment.error) } }
+      ? {
+          firstComment: { ...result.firstComment, error: contextualize(result.firstComment.error) },
+        }
       : {}),
     ...(Array.isArray(result?.relations)
       ? {
@@ -483,9 +486,7 @@ async function runDirectTaskMutation(
   operation: () => Promise<any>,
 ) {
   const operationId =
-    args.dryRun === true
-      ? undefined
-      : durableOperationKey(namespace, args.idempotencyKey, payload);
+    args.dryRun === true ? undefined : durableOperationKey(namespace, args.idempotencyKey, payload);
   try {
     return finalizeTaskMutationReceipt(namespace, args, await operation(), operationId);
   } catch (error) {
@@ -517,10 +518,14 @@ async function runTaskMutation(
   };
   const operationId = durableOperationKey(namespace, envelope.idempotencyKey, durablePayload);
   try {
-    const result = await runDurableOperation(namespace, envelope.idempotencyKey, durablePayload, () =>
-      operation(false).then((receipt) =>
-        finalizeTaskMutationReceipt(namespace, args, receipt, operationId),
-      ),
+    const result = await runDurableOperation(
+      namespace,
+      envelope.idempotencyKey,
+      durablePayload,
+      () =>
+        operation(false).then((receipt) =>
+          finalizeTaskMutationReceipt(namespace, args, receipt, operationId),
+        ),
     );
     return result;
   } catch (error) {
@@ -884,7 +889,16 @@ export const TOOLS: McpToolDefinition[] = [
       titleMaxChars: z.number().int().min(8).max(500).optional(),
       maxResponseChars: z.number().int().min(500).max(100_000).optional(),
       cursor: z.string().min(1).optional(),
-      identifiers: z.array(z.string().trim().regex(/^.+-\d+$/)).min(1).max(100).optional(),
+      identifiers: z
+        .array(
+          z
+            .string()
+            .trim()
+            .regex(/^.+-\d+$/),
+        )
+        .min(1)
+        .max(100)
+        .optional(),
       staleDays: z.number().int().min(1).max(3650).optional(),
       changedLimit: z.number().int().min(1).max(100).optional(),
       preset: z.enum(['programme', 'mpf']).optional(),
@@ -955,7 +969,12 @@ export const TOOLS: McpToolDefinition[] = [
           if (args.q !== undefined && args.search !== undefined && args.q !== args.search) {
             throw badRequest('q and search must match when both are supplied.');
           }
-          if (args.searchIn && args.searchIn !== 'all' && args.q === undefined && args.search === undefined) {
+          if (
+            args.searchIn &&
+            args.searchIn !== 'all' &&
+            args.q === undefined &&
+            args.search === undefined
+          ) {
             throw badRequest('q or search is required when searchIn is title or description.');
           }
           const searchText = args.q ?? args.search;
@@ -1010,7 +1029,8 @@ export const TOOLS: McpToolDefinition[] = [
             preset: args.preset,
           });
         case 'task_dedupe':
-          if (!args.projectSelector) throw badRequest('projectSelector is required for task_dedupe.');
+          if (!args.projectSelector)
+            throw badRequest('projectSelector is required for task_dedupe.');
           if (!args.title) throw badRequest('title is required for task_dedupe.');
           return taskDedupe(client, args.projectSelector, args.title);
         case 'lookup_external_key':
@@ -1101,7 +1121,11 @@ export const TOOLS: McpToolDefinition[] = [
             client,
             'task-upsert',
             args,
-            { fields: args.fields, externalKey: args.externalKey, expectedUpdatedAt: args.expectedUpdatedAt },
+            {
+              fields: args.fields,
+              externalKey: args.externalKey,
+              expectedUpdatedAt: args.expectedUpdatedAt,
+            },
             (dryRun) =>
               upsertTask(
                 client,
@@ -1151,7 +1175,11 @@ export const TOOLS: McpToolDefinition[] = [
             client,
             'task-update',
             args,
-            { taskSelector: args.taskSelector, fields: args.fields, expectedUpdatedAt: args.expectedUpdatedAt },
+            {
+              taskSelector: args.taskSelector,
+              fields: args.fields,
+              expectedUpdatedAt: args.expectedUpdatedAt,
+            },
             (dryRun) =>
               updateTask(
                 client,
@@ -1186,7 +1214,14 @@ export const TOOLS: McpToolDefinition[] = [
             args,
             { taskSelector: args.taskSelector },
             (dryRun) =>
-              updateTask(client, args.taskSelector, { done: true }, args.projectSelector, undefined, dryRun),
+              updateTask(
+                client,
+                args.taskSelector,
+                { done: true },
+                args.projectSelector,
+                undefined,
+                dryRun,
+              ),
           );
         case 'reopen':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
@@ -1196,7 +1231,14 @@ export const TOOLS: McpToolDefinition[] = [
             args,
             { taskSelector: args.taskSelector },
             (dryRun) =>
-              updateTask(client, args.taskSelector, { done: false }, args.projectSelector, undefined, dryRun),
+              updateTask(
+                client,
+                args.taskSelector,
+                { done: false },
+                args.projectSelector,
+                undefined,
+                dryRun,
+              ),
           );
         case 'close_with_evidence':
           requireTaskMutationEnvelope(args, 'close_with_evidence');
@@ -1307,7 +1349,13 @@ export const TOOLS: McpToolDefinition[] = [
             args,
             { taskSelector: args.taskSelector, userSelector: args.userSelector },
             (dryRun) =>
-              assignTask(client, args.taskSelector, args.userSelector, args.projectSelector, dryRun),
+              assignTask(
+                client,
+                args.taskSelector,
+                args.userSelector,
+                args.projectSelector,
+                dryRun,
+              ),
           );
         case 'unassign':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
@@ -1318,7 +1366,13 @@ export const TOOLS: McpToolDefinition[] = [
             args,
             { taskSelector: args.taskSelector, userSelector: args.userSelector },
             (dryRun) =>
-              unassignTask(client, args.taskSelector, args.userSelector, args.projectSelector, dryRun),
+              unassignTask(
+                client,
+                args.taskSelector,
+                args.userSelector,
+                args.projectSelector,
+                dryRun,
+              ),
           );
         case 'list-assignees':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
@@ -1874,9 +1928,20 @@ export const TOOLS: McpToolDefinition[] = [
   {
     name: 'vikunja_task_bulk',
     description:
-      'Preferred way to create or upsert several tasks in one call. Supports durable resumable update, delete, assign, and unassign batches plus status lookup.',
+      'Preferred way to create or upsert several tasks in one call. Mutations return compact counts; use paginated status lookup for durable row receipts.',
     inputSchema: z.object({
-      action: z.enum(['update', 'create', 'delete', 'assign', 'unassign', 'status']),
+      action: z.enum([
+        'update',
+        'create',
+        'delete',
+        'assign',
+        'unassign',
+        'set_status',
+        'apply-label',
+        'remove-label',
+        'close_with_evidence',
+        'status',
+      ]),
       taskSelectors: z.array(taskSelectorSchema).min(1).max(100).optional(),
       projectSelector: z
         .object({
@@ -1909,22 +1974,40 @@ export const TOOLS: McpToolDefinition[] = [
         .max(100)
         .optional(),
       userSelector: z.union([z.string().trim().min(1), z.number().int().positive()]).optional(),
+      statusLabel: z.string().trim().min(1).optional(),
+      labelTitle: z.union([z.string().trim().min(1), z.number().int().positive()]).optional(),
+      evidenceComment: z.string().trim().min(1).optional(),
+      createIfMissing: z.boolean().optional(),
       dryRun: z.boolean().optional(),
       idempotencyKey: z.string().trim().min(1).max(200).optional(),
       operationId: z.string().trim().min(1).max(120).optional(),
+      cursor: z.string().regex(/^\d+$/).optional(),
+      perPage: z.number().int().min(1).max(100).optional(),
+      countOnly: z.boolean().optional(),
       actor: actorSchema,
       confirm: z.boolean().optional(),
     }),
     handler: async (args, client) => {
       if (args.action === 'status') {
         if (!args.operationId) throw badRequest('operationId is required for bulk status.');
-        return getBulkOperationStatus(args.operationId);
+        return getBulkOperationStatus(
+          args.operationId,
+          args.cursor,
+          args.perPage,
+          args.countOnly ?? false,
+        );
       }
       requireActor(args.actor, `bulk ${args.action}`);
       if (!args.idempotencyKey) {
         throw policyError(
           'IDEMPOTENCY_KEY_REQUIRED',
           `idempotencyKey is required for bulk ${args.action}.`,
+        );
+      }
+      if (!args.projectSelector) {
+        throw policyError(
+          'PROJECT_SCOPE_REQUIRED',
+          `projectSelector is required for bulk ${args.action}.`,
         );
       }
       switch (args.action) {
@@ -1946,6 +2029,7 @@ export const TOOLS: McpToolDefinition[] = [
             args.projectSelector,
             args.idempotencyKey,
             args.actor,
+            args.dryRun ?? false,
           );
         case 'create':
           if (!args.projectSelector) {
@@ -1958,6 +2042,7 @@ export const TOOLS: McpToolDefinition[] = [
             args.tasks,
             args.idempotencyKey,
             args.actor,
+            args.dryRun ?? false,
           );
         case 'delete':
           if (!args.taskSelectors) {
@@ -1970,6 +2055,7 @@ export const TOOLS: McpToolDefinition[] = [
             args.projectSelector,
             args.idempotencyKey,
             args.actor,
+            args.dryRun ?? false,
           );
         case 'assign':
           if (!args.taskSelectors) {
@@ -2003,6 +2089,22 @@ export const TOOLS: McpToolDefinition[] = [
             args.idempotencyKey,
             args.actor,
           );
+        case 'set_status':
+        case 'apply-label':
+        case 'remove-label':
+        case 'close_with_evidence':
+          if (!args.taskSelectors) {
+            throw badRequest(`taskSelectors is required for bulk ${args.action}.`);
+          }
+          return bulkWorkflowTasks(client, args.action, args.taskSelectors, args.projectSelector, {
+            statusLabel: args.statusLabel,
+            labelTitle: args.labelTitle,
+            evidenceComment: args.evidenceComment,
+            createIfMissing: args.createIfMissing,
+            dryRun: args.dryRun ?? false,
+            idempotencyKey: args.idempotencyKey,
+            actor: args.actor,
+          });
         default:
           throw badRequest(`Unknown bulk action: ${args.action}`);
       }
@@ -2268,9 +2370,7 @@ export const TOOLS: McpToolDefinition[] = [
 
 const legacyTaskTool = TOOLS.find((tool) => tool.name === 'vikunja_tasks');
 if (!legacyTaskTool) throw new Error('Internal task router is not registered.');
-TOOLS.push(
-  ...createTypedTaskTools((args, client) => legacyTaskTool.handler(args, client)),
-);
+TOOLS.push(...createTypedTaskTools((args, client) => legacyTaskTool.handler(args, client)));
 
 function getActiveTools(): McpToolDefinition[] {
   return selectToolsForProfile(TOOLS, loadToolProfile());
@@ -2349,7 +2449,16 @@ function enforceToolMutationScope(
     );
   } else if (
     name === 'vikunja_task_bulk' &&
-    ['update', 'delete', 'assign', 'unassign'].includes(args.action) &&
+    [
+      'update',
+      'delete',
+      'assign',
+      'unassign',
+      'set_status',
+      'apply-label',
+      'remove-label',
+      'close_with_evidence',
+    ].includes(args.action) &&
     Array.isArray(args.taskSelectors) &&
     args.taskSelectors.length > 0
   ) {
@@ -2486,8 +2595,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         'vikunja_task_write',
         'vikunja_task_workflow',
         'vikunja_task_bulk',
-      ].includes(name) &&
-      ['minimal', 'receipt', 'compact'].includes(effectiveResponseMode)
+      ].includes(name) && ['minimal', 'receipt', 'compact'].includes(effectiveResponseMode)
         ? compactWriteEchoes(rawResult)
         : rawResult;
     const summary = summaryFor(name, parsedArgs, result, client.getConfig().vikunjaWebUrl);

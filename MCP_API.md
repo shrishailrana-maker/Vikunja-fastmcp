@@ -273,17 +273,24 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 | `delete` | filterId | none | Direct DELETE /filters/{id} |
 
 ### `vikunja_task_bulk`
-* **Description**: Preferred way to create or upsert several tasks in one call. Supports durable resumable update, delete, assign, and unassign batches plus status lookup.
+* **Description**: Preferred way to create or upsert several tasks in one call. Mutations return compact counts; use paginated status lookup for durable row receipts.
 * **Parameters**:
-  * `action`: enum ["update", "create", "delete", "assign", "unassign", "status"] (required)
+  * `action`: enum ["update", "create", "delete", "assign", "unassign", "set_status", "apply-label", "remove-label", "close_with_evidence", "status"] (required)
   * `taskSelectors`: array (optional)
   * `projectSelector`: object (optional)
   * `fields`: object (optional)
   * `tasks`: array (optional)
   * `userSelector`: string | number (optional)
+  * `statusLabel`: string (optional); min 1
+  * `labelTitle`: string | number (optional)
+  * `evidenceComment`: string (optional); min 1
+  * `createIfMissing`: boolean (optional)
   * `dryRun`: boolean (optional)
   * `idempotencyKey`: string (optional); min 1, max 200
   * `operationId`: string (optional); min 1, max 120
+  * `cursor`: string (optional)
+  * `perPage`: number (optional); integer, min 1, max 100
+  * `countOnly`: boolean (optional)
   * `actor`: string (optional); min 1, max 80
   * `confirm`: boolean (optional)
 
@@ -291,12 +298,16 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 
 | Action | Required | Optional | Execution |
 | --- | --- | --- | --- |
-| `update` | taskSelectors, fields, actor, idempotencyKey | projectSelector | MCP-composed per-task updates with durable row receipts. Bulk title/description replacement is rejected; use individual optimistic updates. |
-| `create` | projectSelector, tasks, actor, idempotencyKey | none | MCP-composed bounded task creates with durable row receipts. Each row may provide externalKey and expectedUpdatedAt. Repeating the same request resumes failed rows and skips recorded successes. |
-| `delete` | taskSelectors, confirm, actor, idempotencyKey | projectSelector | MCP-composed verified task deletes with durable row receipts |
-| `assign` | taskSelectors, userSelector, actor, idempotencyKey | projectSelector, dryRun | Resolve user once, verify each task scope, then compose bounded assignee writes |
-| `unassign` | taskSelectors, userSelector, actor, idempotencyKey | projectSelector, dryRun | Resolve user once, verify each task scope, then compose bounded assignee deletes |
-| `status` | operationId | none | Read a durable local bulk-operation receipt |
+| `update` | projectSelector, taskSelectors, fields, actor, idempotencyKey | dryRun | MCP-composed per-task updates with durable row receipts. Bulk title/description replacement is rejected; use individual optimistic updates. |
+| `create` | projectSelector, tasks, actor, idempotencyKey | dryRun | MCP-composed bounded task creates with durable row receipts. Each row may provide externalKey and expectedUpdatedAt. Repeating the same request resumes failed rows and skips recorded successes. |
+| `delete` | projectSelector, taskSelectors, confirm, actor, idempotencyKey | dryRun | MCP-composed verified task deletes with durable row receipts |
+| `assign` | projectSelector, taskSelectors, userSelector, actor, idempotencyKey | dryRun | Resolve user once, verify each task scope, then compose bounded assignee writes |
+| `unassign` | projectSelector, taskSelectors, userSelector, actor, idempotencyKey | dryRun | Resolve user once, verify each task scope, then compose bounded assignee deletes |
+| `set_status` | projectSelector, taskSelectors, statusLabel, actor, idempotencyKey | createIfMissing, dryRun | MCP-composed per-task status-label transitions with durable row receipts |
+| `apply-label` | projectSelector, taskSelectors, labelTitle, actor, idempotencyKey | dryRun | MCP-composed per-task label application with durable row receipts |
+| `remove-label` | projectSelector, taskSelectors, labelTitle, actor, idempotencyKey | dryRun | MCP-composed per-task label removal with durable row receipts |
+| `close_with_evidence` | projectSelector, taskSelectors, evidenceComment, actor, idempotencyKey | dryRun | MCP-composed evidence comment plus close with resumable per-row receipts |
+| `status` | operationId | cursor, perPage, countOnly | Read paginated durable local bulk-operation receipts |
 
 ### `vikunja_task_reminders`
 * **Description**: List, add, or remove reminders stored on a task.

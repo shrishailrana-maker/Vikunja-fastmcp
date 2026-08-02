@@ -179,7 +179,12 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     {
       action: 'close_with_evidence',
       required: ['taskSelector', ...mutationEnvelope],
-      optional: ['evidence (preferred structured form)', 'evidenceComment (compatibility)', 'dryRun', 'responseMode'],
+      optional: [
+        'evidence (preferred structured form)',
+        'evidenceComment (compatibility)',
+        'dryRun',
+        'responseMode',
+      ],
       execution: 'MCP-composed comment create followed by task close',
     },
     {
@@ -198,7 +203,8 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
       action: 'transition_with_evidence',
       required: ['taskSelector', 'statusLabel', 'evidence', ...mutationEnvelope],
       optional: ['createIfMissing (default false)', 'dryRun', 'responseMode'],
-      execution: 'MCP-composed deduplicated evidence append followed by one status-label transition',
+      execution:
+        'MCP-composed deduplicated evidence append followed by one status-label transition',
     },
     {
       action: 'assign',
@@ -424,39 +430,65 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
   vikunja_task_bulk: [
     {
       action: 'update',
-      required: ['taskSelectors', 'fields', 'actor', 'idempotencyKey'],
-      optional: ['projectSelector'],
+      required: ['projectSelector', 'taskSelectors', 'fields', 'actor', 'idempotencyKey'],
+      optional: ['dryRun'],
       execution: 'MCP-composed per-task updates with durable row receipts',
       note: 'Bulk title/description replacement is rejected; use individual optimistic updates.',
     },
     {
       action: 'create',
       required: ['projectSelector', 'tasks', 'actor', 'idempotencyKey'],
+      optional: ['dryRun'],
       execution: 'MCP-composed bounded task creates with durable row receipts',
       note: 'Each row may provide externalKey and expectedUpdatedAt. Repeating the same request resumes failed rows and skips recorded successes.',
     },
     {
       action: 'delete',
-      required: ['taskSelectors', 'confirm', 'actor', 'idempotencyKey'],
-      optional: ['projectSelector'],
+      required: ['projectSelector', 'taskSelectors', 'confirm', 'actor', 'idempotencyKey'],
+      optional: ['dryRun'],
       execution: 'MCP-composed verified task deletes with durable row receipts',
     },
     {
       action: 'assign',
-      required: ['taskSelectors', 'userSelector', 'actor', 'idempotencyKey'],
-      optional: ['projectSelector', 'dryRun'],
+      required: ['projectSelector', 'taskSelectors', 'userSelector', 'actor', 'idempotencyKey'],
+      optional: ['dryRun'],
       execution: 'Resolve user once, verify each task scope, then compose bounded assignee writes',
     },
     {
       action: 'unassign',
-      required: ['taskSelectors', 'userSelector', 'actor', 'idempotencyKey'],
-      optional: ['projectSelector', 'dryRun'],
+      required: ['projectSelector', 'taskSelectors', 'userSelector', 'actor', 'idempotencyKey'],
+      optional: ['dryRun'],
       execution: 'Resolve user once, verify each task scope, then compose bounded assignee deletes',
+    },
+    {
+      action: 'set_status',
+      required: ['projectSelector', 'taskSelectors', 'statusLabel', 'actor', 'idempotencyKey'],
+      optional: ['createIfMissing', 'dryRun'],
+      execution: 'MCP-composed per-task status-label transitions with durable row receipts',
+    },
+    {
+      action: 'apply-label',
+      required: ['projectSelector', 'taskSelectors', 'labelTitle', 'actor', 'idempotencyKey'],
+      optional: ['dryRun'],
+      execution: 'MCP-composed per-task label application with durable row receipts',
+    },
+    {
+      action: 'remove-label',
+      required: ['projectSelector', 'taskSelectors', 'labelTitle', 'actor', 'idempotencyKey'],
+      optional: ['dryRun'],
+      execution: 'MCP-composed per-task label removal with durable row receipts',
+    },
+    {
+      action: 'close_with_evidence',
+      required: ['projectSelector', 'taskSelectors', 'evidenceComment', 'actor', 'idempotencyKey'],
+      optional: ['dryRun'],
+      execution: 'MCP-composed evidence comment plus close with resumable per-row receipts',
     },
     {
       action: 'status',
       required: ['operationId'],
-      execution: 'Read a durable local bulk-operation receipt',
+      optional: ['cursor', 'perPage', 'countOnly'],
+      execution: 'Read paginated durable local bulk-operation receipts',
     },
   ],
   vikunja_task_reminders: [

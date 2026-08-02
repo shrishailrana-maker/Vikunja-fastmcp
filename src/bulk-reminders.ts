@@ -4,9 +4,13 @@ import { redactSecrets, VikunjaError } from './errors.js';
 import { resolveTaskInput as resolveTask, type TaskSelectorInput } from './identity.js';
 import {
   createTask,
+  closeWithEvidence,
   deleteTask,
+  applyLabel,
   patchTaskFields,
+  removeLabel,
   resolveUser,
+  setTaskStatus,
   updateTask,
   upsertTask,
 } from './tasks.js';
@@ -74,6 +78,76 @@ interface BulkOperationContext {
   leaseToken?: string;
 }
 
+type BulkRowState = 'changed' | 'unchanged' | 'skipped' | 'failed';
+
+function bulkRowReceipt(
+  row: number,
+  state: BulkRowState,
+  details: Record<string, unknown>,
+  previous?: any,
+) {
+  const receipt = {
+    row,
+    ok: state !== 'failed',
+    state,
+    selected: true,
+    changed: state === 'changed',
+    unchanged: state === 'unchanged',
+    skipped: false,
+    failed: state === 'failed',
+    retryCount: previous ? Number(previous.retryCount ?? 0) + 1 : 0,
+    ...details,
+  };
+  return { ...receipt, resultHash: payloadFingerprint(receipt) };
+}
+
+function retryableBulkError(error: any): boolean {
+  const status = Number(error?.status ?? error?.error?.status);
+  if (!Number.isFinite(status)) return true;
+  return status === 408 || status === 429 || status >= 500;
+}
+
+function skipRecordedRow(state: any, row: number): boolean {
+  const receipt = state.receipts?.find((candidate: any) => candidate.row === row);
+  if (!receipt) return false;
+  const reason = receipt.ok
+    ? 'already-complete'
+    : receipt.retryable === false
+      ? 'non-retryable'
+      : null;
+  if (!reason) return false;
+  receipt.skipped = true;
+  receipt.skipReason = reason;
+  return true;
+}
+
+function bulkSummary(state: any) {
+  const receipts = Array.isArray(state.receipts) ? state.receipts : [];
+  const receiptState = (receipt: any): BulkRowState => {
+    if (receipt.state) return receipt.state;
+    if (receipt.ok === false) return 'failed';
+    if (receipt.outcome === 'alreadyCorrect' || receipt.action === 'unchanged') return 'unchanged';
+    return 'changed';
+  };
+  const count = (name: BulkRowState) => {
+    if (name === 'skipped')
+      return receipts.filter((receipt: any) => receipt.skipped === true).length;
+    if (name === 'failed') return receipts.filter((receipt: any) => receipt.ok === false).length;
+    return receipts.filter((receipt: any) => receiptState(receipt) === name).length;
+  };
+  return {
+    operationId: state.operationId,
+    status: state.status,
+    requested: state.requested,
+    selected: state.requested,
+    changed: count('changed'),
+    unchanged: count('unchanged'),
+    skipped: count('skipped'),
+    failed: count('failed'),
+    actor: state.actor,
+  };
+}
+
 const BULK_LEASE_MS = 120_000;
 
 function bulkOperation(
@@ -130,7 +204,20 @@ function saveBulkOperation(context: BulkOperationContext | null, state: any): vo
   }
 }
 
-export function getBulkOperationStatus(operationId: string): any {
+function reusedBulkSummary(context: BulkOperationContext): any {
+  const responseState = structuredClone(context.state);
+  for (const receipt of responseState.receipts ?? []) {
+    skipRecordedRow(responseState, receipt.row);
+  }
+  return bulkSummary(responseState);
+}
+
+export function getBulkOperationStatus(
+  operationId: string,
+  cursor?: string,
+  perPage = 50,
+  countOnly = false,
+): any {
   const result = idempotency.get(`bulk-operation:${operationId}`);
   if (!result) {
     throw new VikunjaError({
@@ -142,7 +229,33 @@ export function getBulkOperationStatus(operationId: string): any {
       fieldErrors: [],
     });
   }
-  return result;
+  const receipts = Array.isArray(result.receipts)
+    ? [...result.receipts].sort((left: any, right: any) => left.row - right.row)
+    : [];
+  const offset = cursor === undefined ? 0 : Number(cursor);
+  if (!Number.isSafeInteger(offset) || offset < 0)
+    throw validationError('cursor must be a non-negative integer string.');
+  const safePerPage = Math.min(100, Math.max(1, perPage));
+  if (countOnly) {
+    return {
+      ...bulkSummary(result),
+      receipts: [],
+      returnedCount: 0,
+      totalCount: receipts.length,
+      nextCursor: null,
+      incomplete: false,
+    };
+  }
+  const page = receipts.slice(offset, offset + safePerPage);
+  const nextOffset = offset + page.length;
+  return {
+    ...bulkSummary(result),
+    receipts: page,
+    returnedCount: page.length,
+    totalCount: receipts.length,
+    nextCursor: nextOffset < receipts.length ? String(nextOffset) : null,
+    incomplete: nextOffset < receipts.length,
+  };
 }
 
 function selectorId(selector: TaskSelectorInput): number | null {
@@ -159,6 +272,7 @@ export async function bulkUpdateTasks(
   project?: { id?: number; title?: string },
   idempotencyKey?: string,
   actor?: string,
+  dryRun = false,
 ): Promise<any> {
   const values = apiFields(fields);
   if (taskSelectors.length === 0 || Object.keys(values).length === 0) {
@@ -177,8 +291,36 @@ export async function bulkUpdateTasks(
     values,
     actor,
   };
+  if (dryRun) {
+    const receipts = [];
+    for (const [index, taskSelector] of taskSelectors.entries()) {
+      try {
+        const echo = await updateTask(client, taskSelector, fields, project, undefined, true);
+        receipts.push(
+          bulkRowReceipt(index + 1, echo.action === 'unchanged' ? 'unchanged' : 'changed', {
+            action: echo.action,
+            finalIdentity: echo.target,
+          }),
+        );
+      } catch (error: any) {
+        receipts.push(
+          bulkRowReceipt(index + 1, 'failed', {
+            taskSelector,
+            error: redactSecrets(
+              error?.message || 'Task update preview failed',
+              client.getConfig().vikunjaToken,
+            ),
+          }),
+        );
+      }
+    }
+    return {
+      ...bulkSummary({ requested: taskSelectors.length, status: 'preview', receipts, actor }),
+      dryRun: true,
+    };
+  }
   const legacyNative = taskSelectors.every((selector) => typeof selector !== 'object');
-  if (!idempotencyKey || legacyNative) {
+  if (!idempotencyKey) {
     const cacheKey = idempotencyKey
       ? durableOperationKey('bulk-update-legacy', idempotencyKey, payload)
       : '';
@@ -222,10 +364,14 @@ export async function bulkUpdateTasks(
     failed: [],
     actor,
   })!;
-  if (!operation.acquired) return operation.state;
+  if (!operation.acquired) return reusedBulkSummary(operation);
   const result = operation.state;
   for (const [index, taskSelector] of taskSelectors.entries()) {
-    if (result.receipts.some((receipt: any) => receipt.row === index + 1 && receipt.ok)) continue;
+    if (skipRecordedRow(result, index + 1)) {
+      saveBulkOperation(operation, result);
+      continue;
+    }
+    const previous = result.receipts.find((receipt: any) => receipt.row === index + 1);
     result.failed = result.failed.filter((failure: any) => failure.row !== index + 1);
     result.receipts = result.receipts.filter((receipt: any) => receipt.row !== index + 1);
     try {
@@ -239,7 +385,14 @@ export async function bulkUpdateTasks(
       if (!result.updated.some((item: any) => item.id === updated.id)) {
         result.updated.push(updated);
       }
-      result.receipts.push({ row: index + 1, ok: true, ...updated });
+      result.receipts.push(
+        bulkRowReceipt(
+          index + 1,
+          echo.action === 'unchanged' ? 'unchanged' : 'changed',
+          { action: echo.action, finalIdentity: updated },
+          previous,
+        ),
+      );
     } catch (error: any) {
       const failure = {
         row: index + 1,
@@ -249,16 +402,17 @@ export async function bulkUpdateTasks(
           error?.message || 'Task update failed',
           client.getConfig().vikunjaToken,
         ),
+        retryable: retryableBulkError(error),
       };
       result.failed.push(failure);
-      result.receipts.push({ ...failure, ok: false });
+      result.receipts.push(bulkRowReceipt(index + 1, 'failed', failure, previous));
     }
     saveBulkOperation(operation, result);
   }
   result.status = result.failed.length === 0 ? 'completed' : 'partial';
   delete result.leaseUntil;
   saveBulkOperation(operation, result);
-  return result;
+  return bulkSummary(result);
 }
 
 export async function bulkCreateTasks(
@@ -267,7 +421,8 @@ export async function bulkCreateTasks(
   tasks: BulkCreateTaskFields[],
   idempotencyKey?: string,
   actor?: string,
-): Promise<BulkCreateResult> {
+  dryRun = false,
+): Promise<any> {
   if (tasks.length === 0 || tasks.length > 100 || tasks.some((task) => !task.title)) {
     throw validationError('Bulk create requires 1-100 tasks, each with a title.');
   }
@@ -276,13 +431,51 @@ export async function bulkCreateTasks(
     tasks,
     actor,
   };
+  if (dryRun) {
+    const receipts = [];
+    for (const [index, task] of tasks.entries()) {
+      try {
+        const echo = task.externalKey
+          ? await upsertTask(
+              client,
+              project,
+              task,
+              task.externalKey,
+              task.expectedUpdatedAt,
+              actor,
+              true,
+            )
+          : await createTask(client, project, task, undefined, undefined, actor, true);
+        receipts.push(
+          bulkRowReceipt(index + 1, echo.action === 'unchanged' ? 'unchanged' : 'changed', {
+            action: echo.action,
+            finalIdentity: echo.target,
+          }),
+        );
+      } catch (error: any) {
+        receipts.push(
+          bulkRowReceipt(index + 1, 'failed', {
+            title: task.title,
+            error: redactSecrets(
+              error?.message || 'Task create preview failed',
+              client.getConfig().vikunjaToken,
+            ),
+          }),
+        );
+      }
+    }
+    return {
+      ...bulkSummary({ requested: tasks.length, status: 'preview', receipts, actor }),
+      dryRun: true,
+    };
+  }
   const operation = bulkOperation('create', idempotencyKey, payload, {
     requested: tasks.length,
     created: [],
     failed: [],
     actor,
   });
-  if (operation && !operation.acquired) return operation.state;
+  if (operation && !operation.acquired) return reusedBulkSummary(operation) as any;
 
   const result: BulkCreateResult & Record<string, any> = operation?.state ?? {
     requested: tasks.length,
@@ -290,9 +483,11 @@ export async function bulkCreateTasks(
     failed: [],
   };
   for (const [index, task] of tasks.entries()) {
-    if (operation?.state.receipts.some((receipt: any) => receipt.row === index + 1 && receipt.ok)) {
+    if (operation && skipRecordedRow(operation.state, index + 1)) {
+      saveBulkOperation(operation, operation.state);
       continue;
     }
+    const previous = operation?.state.receipts.find((receipt: any) => receipt.row === index + 1);
     result.failed = result.failed.filter((failure: any) => failure.row !== index + 1);
     if (operation) {
       result.receipts = result.receipts.filter((receipt: any) => receipt.row !== index + 1);
@@ -309,7 +504,14 @@ export async function bulkCreateTasks(
       if (!result.created.some((item: any) => item.id === created.id)) {
         result.created.push(created);
       }
-      result.receipts?.push({ row: index + 1, ok: true, action: echo.action, ...created });
+      result.receipts?.push(
+        bulkRowReceipt(
+          index + 1,
+          echo.action === 'exists' || echo.action === 'unchanged' ? 'unchanged' : 'changed',
+          { action: echo.action, finalIdentity: created },
+          previous,
+        ),
+      );
     } catch (error: any) {
       const failure = {
         row: index + 1,
@@ -318,9 +520,10 @@ export async function bulkCreateTasks(
           error?.message || 'Task creation failed',
           client.getConfig().vikunjaToken,
         ),
+        ...(operation ? { retryable: retryableBulkError(error) } : {}),
       };
       result.failed.push(failure);
-      result.receipts?.push({ ok: false, ...failure });
+      result.receipts?.push(bulkRowReceipt(index + 1, 'failed', failure, previous));
     }
     saveBulkOperation(operation, result);
   }
@@ -330,7 +533,7 @@ export async function bulkCreateTasks(
     delete result.leaseUntil;
     saveBulkOperation(operation, result);
   }
-  return result;
+  return operation ? (bulkSummary(result) as any) : result;
 }
 
 export interface BulkAssignmentResult {
@@ -350,7 +553,7 @@ async function bulkChangeAssignee(
   assign: boolean,
   idempotencyKey?: string,
   actor?: string,
-): Promise<BulkAssignmentResult> {
+): Promise<any> {
   if (taskSelectors.length === 0 || taskSelectors.length > 100) {
     throw validationError('Bulk assign/unassign requires 1-100 task selectors.');
   }
@@ -375,7 +578,7 @@ async function bulkChangeAssignee(
           actor,
         },
       );
-  if (operation && !operation.acquired) return operation.state;
+  if (operation && !operation.acquired) return reusedBulkSummary(operation);
 
   const userId = await resolveUser(client, userSelector);
   const result: BulkAssignmentResult & Record<string, any> = operation?.state ?? {
@@ -387,9 +590,11 @@ async function bulkChangeAssignee(
   };
 
   for (const [index, taskSelector] of taskSelectors.entries()) {
-    if (operation?.state.receipts.some((receipt: any) => receipt.row === index + 1 && receipt.ok)) {
+    if (operation && skipRecordedRow(operation.state, index + 1)) {
+      saveBulkOperation(operation, operation.state);
       continue;
     }
+    const previous = operation?.state.receipts.find((receipt: any) => receipt.row === index + 1);
     result.failed = result.failed.filter((failure: any) => failure.row !== index + 1);
     if (operation) {
       result.receipts = result.receipts.filter((receipt: any) => receipt.row !== index + 1);
@@ -400,12 +605,21 @@ async function bulkChangeAssignee(
       const alreadyCorrect = assign ? isAssigned : !isAssigned;
       if (alreadyCorrect) {
         result.alreadyCorrect += 1;
-        result.receipts?.push({
-          row: index + 1,
-          ok: true,
-          taskId: task.id,
-          outcome: 'alreadyCorrect',
-        });
+        result.receipts?.push(
+          bulkRowReceipt(
+            index + 1,
+            'unchanged',
+            {
+              outcome: 'alreadyCorrect',
+              finalIdentity: {
+                id: task.id,
+                portalRef: task.identifier || `#${task.index}`,
+                title: task.title,
+              },
+            },
+            previous,
+          ),
+        );
         saveBulkOperation(operation, result);
         continue;
       }
@@ -421,12 +635,21 @@ async function bulkChangeAssignee(
         }
         result.changed += 1;
       }
-      result.receipts?.push({
-        row: index + 1,
-        ok: true,
-        taskId: task.id,
-        outcome: dryRun ? 'wouldChange' : 'changed',
-      });
+      result.receipts?.push(
+        bulkRowReceipt(
+          index + 1,
+          'changed',
+          {
+            outcome: dryRun ? 'wouldChange' : 'changed',
+            finalIdentity: {
+              id: task.id,
+              portalRef: task.identifier || `#${task.index}`,
+              title: task.title,
+            },
+          },
+          previous,
+        ),
+      );
     } catch (error: any) {
       const errorMessage = redactSecrets(
         error?.message || 'Assignee update failed',
@@ -438,10 +661,11 @@ async function bulkChangeAssignee(
             taskId: selectorId(taskSelector),
             taskSelector,
             error: errorMessage,
+            retryable: retryableBulkError(error),
           }
         : { taskId: selectorId(taskSelector), error: errorMessage };
       result.failed.push(failure);
-      result.receipts?.push({ ...failure, ok: false });
+      result.receipts?.push(bulkRowReceipt(index + 1, 'failed', failure, previous));
     }
     saveBulkOperation(operation, result);
   }
@@ -451,7 +675,7 @@ async function bulkChangeAssignee(
     delete result.leaseUntil;
     saveBulkOperation(operation, result);
   }
-  return result;
+  return operation ? bulkSummary(result) : result;
 }
 
 export function bulkAssignTasks(
@@ -462,7 +686,7 @@ export function bulkAssignTasks(
   dryRun = false,
   idempotencyKey?: string,
   actor?: string,
-): Promise<BulkAssignmentResult> {
+): Promise<any> {
   return bulkChangeAssignee(
     client,
     taskSelectors,
@@ -483,7 +707,7 @@ export function bulkUnassignTasks(
   dryRun = false,
   idempotencyKey?: string,
   actor?: string,
-): Promise<BulkAssignmentResult> {
+): Promise<any> {
   return bulkChangeAssignee(
     client,
     taskSelectors,
@@ -502,6 +726,7 @@ export async function bulkDeleteTasks(
   project?: { id?: number; title?: string },
   idempotencyKey?: string,
   actor?: string,
+  dryRun = false,
 ): Promise<unknown> {
   if (taskSelectors.length === 0 || taskSelectors.length > 100)
     throw validationError('Bulk delete requires 1-100 task selectors.');
@@ -510,13 +735,38 @@ export async function bulkDeleteTasks(
     taskSelectors,
     actor,
   };
+  if (dryRun) {
+    const receipts = [];
+    for (const [index, taskSelector] of taskSelectors.entries()) {
+      try {
+        const echo = await deleteTask(client, taskSelector, project, true);
+        receipts.push(
+          bulkRowReceipt(index + 1, 'changed', { action: echo.action, finalIdentity: echo.target }),
+        );
+      } catch (error: any) {
+        receipts.push(
+          bulkRowReceipt(index + 1, 'failed', {
+            taskSelector,
+            error: redactSecrets(
+              error?.message || 'Task delete preview failed',
+              client.getConfig().vikunjaToken,
+            ),
+          }),
+        );
+      }
+    }
+    return {
+      ...bulkSummary({ requested: taskSelectors.length, status: 'preview', receipts, actor }),
+      dryRun: true,
+    };
+  }
   const operation = bulkOperation('delete', idempotencyKey, payload, {
     requested: taskSelectors.length,
     deleted: [],
     failed: [],
     actor,
   });
-  if (operation && !operation.acquired) return operation.state;
+  if (operation && !operation.acquired) return reusedBulkSummary(operation);
   if (!operation) {
     const deleted = [];
     for (const selector of taskSelectors) {
@@ -527,7 +777,11 @@ export async function bulkDeleteTasks(
 
   const result = operation.state;
   for (const [index, taskSelector] of taskSelectors.entries()) {
-    if (result.receipts.some((receipt: any) => receipt.row === index + 1 && receipt.ok)) continue;
+    if (skipRecordedRow(result, index + 1)) {
+      saveBulkOperation(operation, result);
+      continue;
+    }
+    const previous = result.receipts.find((receipt: any) => receipt.row === index + 1);
     result.failed = result.failed.filter((failure: any) => failure.row !== index + 1);
     result.receipts = result.receipts.filter((receipt: any) => receipt.row !== index + 1);
     try {
@@ -538,7 +792,9 @@ export async function bulkDeleteTasks(
         title: echo.target.title,
       };
       result.deleted.push(deleted);
-      result.receipts.push({ row: index + 1, ok: true, ...deleted });
+      result.receipts.push(
+        bulkRowReceipt(index + 1, 'changed', { finalIdentity: deleted }, previous),
+      );
     } catch (error: any) {
       const failure = {
         row: index + 1,
@@ -548,16 +804,171 @@ export async function bulkDeleteTasks(
           error?.message || 'Task deletion failed',
           client.getConfig().vikunjaToken,
         ),
+        retryable: retryableBulkError(error),
       };
       result.failed.push(failure);
-      result.receipts.push({ ...failure, ok: false });
+      result.receipts.push(bulkRowReceipt(index + 1, 'failed', failure, previous));
     }
     saveBulkOperation(operation, result);
   }
   result.status = result.failed.length === 0 ? 'completed' : 'partial';
   delete result.leaseUntil;
   saveBulkOperation(operation, result);
-  return result;
+  return bulkSummary(result);
+}
+
+export type BulkWorkflowAction =
+  'set_status' | 'apply-label' | 'remove-label' | 'close_with_evidence';
+
+export interface BulkWorkflowOptions {
+  statusLabel?: string;
+  labelTitle?: string | number;
+  evidenceComment?: string;
+  createIfMissing?: boolean;
+  dryRun?: boolean;
+  idempotencyKey?: string;
+  actor?: string;
+}
+
+export async function bulkWorkflowTasks(
+  client: VikunjaApiClient,
+  action: BulkWorkflowAction,
+  taskSelectors: TaskSelectorInput[],
+  project: { id?: number; title?: string },
+  options: BulkWorkflowOptions,
+): Promise<any> {
+  if (taskSelectors.length === 0 || taskSelectors.length > 100) {
+    throw validationError('Bulk workflow requires 1-100 task selectors.');
+  }
+  if (action === 'set_status' && !options.statusLabel) {
+    throw validationError('statusLabel is required for bulk set_status.');
+  }
+  if ((action === 'apply-label' || action === 'remove-label') && !options.labelTitle) {
+    throw validationError('labelTitle is required for bulk label changes.');
+  }
+  if (action === 'close_with_evidence' && !options.evidenceComment) {
+    throw validationError('evidenceComment is required for bulk close_with_evidence.');
+  }
+  const payload = {
+    project: projectFingerprint(project),
+    taskSelectors,
+    action,
+    statusLabel: options.statusLabel,
+    labelTitle: options.labelTitle,
+    evidenceComment: options.evidenceComment,
+    createIfMissing: options.createIfMissing,
+    actor: options.actor,
+  };
+  const operation = options.dryRun
+    ? null
+    : bulkOperation(action, options.idempotencyKey, payload, {
+        requested: taskSelectors.length,
+        actor: options.actor,
+        failed: [],
+      });
+  if (operation && !operation.acquired) return reusedBulkSummary(operation);
+  const state: any = operation?.state ?? {
+    requested: taskSelectors.length,
+    status: 'preview',
+    actor: options.actor,
+    receipts: [],
+  };
+
+  for (const [index, taskSelector] of taskSelectors.entries()) {
+    const row = index + 1;
+    if (operation && skipRecordedRow(state, row)) {
+      saveBulkOperation(operation, state);
+      continue;
+    }
+    const previous = state.receipts.find((receipt: any) => receipt.row === row);
+    state.receipts = state.receipts.filter((receipt: any) => receipt.row !== row);
+    try {
+      let echo: any;
+      if (action === 'set_status') {
+        echo = await setTaskStatus(
+          client,
+          taskSelector,
+          options.statusLabel!,
+          project,
+          options.createIfMissing ?? false,
+          options.dryRun ?? false,
+        );
+      } else if (action === 'apply-label') {
+        echo = await applyLabel(
+          client,
+          taskSelector,
+          options.labelTitle!,
+          project,
+          options.dryRun ?? false,
+        );
+      } else if (action === 'remove-label') {
+        echo = await removeLabel(
+          client,
+          taskSelector,
+          options.labelTitle!,
+          project,
+          options.dryRun ?? false,
+        );
+      } else {
+        echo = await closeWithEvidence(
+          client,
+          taskSelector,
+          options.evidenceComment!,
+          project,
+          options.dryRun ? undefined : `${options.idempotencyKey}:row:${row}`,
+          options.actor,
+          options.dryRun ?? false,
+        );
+      }
+      const target = echo.target ?? echo.task?.target;
+      const partial = echo.outcome === 'partial' || echo.action === 'partial';
+      state.receipts.push(
+        bulkRowReceipt(
+          row,
+          partial ? 'failed' : echo.action === 'unchanged' ? 'unchanged' : 'changed',
+          {
+            action: echo.action ?? echo.task?.action,
+            finalIdentity: target,
+            ...(partial
+              ? {
+                  error: echo.error?.message ?? 'Workflow partially completed',
+                  retryable: echo.error?.retryable ?? retryableBulkError(echo.error),
+                }
+              : {}),
+          },
+          previous,
+        ),
+      );
+    } catch (error: any) {
+      state.receipts.push(
+        bulkRowReceipt(
+          row,
+          'failed',
+          {
+            taskSelector,
+            error: redactSecrets(
+              error?.message || 'Bulk workflow row failed',
+              client.getConfig().vikunjaToken,
+            ),
+            retryable: retryableBulkError(error),
+          },
+          previous,
+        ),
+      );
+    }
+    saveBulkOperation(operation, state);
+  }
+  state.status = options.dryRun
+    ? 'preview'
+    : state.receipts.some((receipt: any) => receipt.state === 'failed')
+      ? 'partial'
+      : 'completed';
+  if (operation) {
+    state.operationId = operation.operationId;
+    delete state.leaseUntil;
+    saveBulkOperation(operation, state);
+  }
+  return { ...bulkSummary(state), dryRun: options.dryRun ?? false };
 }
 
 function normalizeReminder(reminder: any) {
