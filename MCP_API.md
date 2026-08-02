@@ -545,7 +545,7 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 | `delete` | taskSelector, projectSelector, actor, idempotencyKey | dryRun, responseMode | Identity preflight then DELETE /tasks/{id} |
 
 ### `vikunja_task_workflow`
-* **Description**: Close, assign, label, status, and relate tasks through guarded workflows.
+* **Description**: Close, reopen, and record verification evidence through guarded workflows.
 * **Parameters**:
   * `action`: enum ["close", "reopen", "close_with_evidence", "append_evidence_if_changed", "close_if_verified", "transition_with_evidence"] (required)
   * `taskSelector`: object (optional)

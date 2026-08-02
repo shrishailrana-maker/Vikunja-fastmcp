@@ -164,7 +164,7 @@ export function createTypedTaskTools(dispatch: TaskDispatcher): TypedTaskToolDef
     },
     {
       name: 'vikunja_task_workflow',
-      description: 'Close, assign, label, status, and relate tasks through guarded workflows.',
+      description: 'Close, reopen, and record verification evidence through guarded workflows.',
       inputSchema: z.object({
         action: z.enum([
           'close',

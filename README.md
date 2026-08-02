@@ -192,10 +192,9 @@ compatibility router:
 - `vikunja_projects` — project list and get.
 - `vikunja_task_read` — scoped list/search, projected get, batch get, task
   verification, project/programme snapshots, and durable receipt lookup.
-- `vikunja_task_write` — guarded create, upsert, update, close, reopen, delete,
-  assignee, label, status, and relation mutations.
-- `vikunja_task_workflow` — evidence append, verified close, and other composed
-  evidence workflows with compact receipts.
+- `vikunja_task_write` — guarded create, upsert, update, and delete operations.
+- `vikunja_task_workflow` — close, reopen, evidence append, verified close, and
+  other composed evidence workflows with compact receipts.
 - `vikunja_task_attachments` — typed upload, bounded list/count, authenticated
   download, optional local SHA-256/duplicate warnings, and ownership-verified
   deletion.
