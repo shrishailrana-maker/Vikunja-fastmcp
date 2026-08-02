@@ -7,6 +7,9 @@ This plan covers every VMCP backlog item migrated on 2026-08-02. GitHub issues
 truth; the previous Vikunja tasks are a closed archive with migration links.
 Later source-audit findings were fixed in the local audit commits and were not
 assigned nonexistent issue numbers.
+References written as `VMCP-N` below are the preserved identifiers of migrated
+Vikunja tasks; they are not GitHub issue numbers and may therefore be greater
+than 48.
 The primary product goal is to reduce agent context usage without weakening
 project scope, task identity, attribution, idempotency, evidence-before-close,
 or truthful error reporting.
@@ -185,7 +188,7 @@ Keep the old router only in an explicit compatibility profile. Add process-level
 profiles so a client can register `core`, `qa`, `developer`, or `full` tools.
 Measure the exact `tools/list` bytes for every profile.
 
-Tasks: VMCP-35.
+Tasks: VMCP-35, VMCP-52, VMCP-54.
 
 ### 1.2 Structured-only response modes
 
@@ -208,7 +211,7 @@ Implement `fields`, `includeUrl`, `titleMaxChars`, and a bounded response budget
 for every list-style operation. Projection happens before formatting. A budget
 limit never lies: it sets `incomplete: true` and returns a continuation cursor.
 
-Tasks: VMCP-32, VMCP-33, VMCP-41.
+Tasks: VMCP-32, VMCP-33, VMCP-41, VMCP-51.
 
 Acceptance:
 
@@ -296,7 +299,7 @@ Relation receipts echo both task identifiers and titles. Task creation may
 inline bounded relation creation and the first comment, with explicit composed
 call results rather than pretending the calls are atomic.
 
-Tasks: VMCP-25.
+Tasks: VMCP-25, VMCP-53.
 
 ### 3.5 Errors and diagnostics
 
@@ -331,7 +334,7 @@ projection, task-to-attachment mapping, optional local SHA-256 calculation,
 duplicate warnings, and content-hash receipts. Add bounded comment `since`,
 `countOnly`, and latest-comment metadata.
 
-Tasks: VMCP-12, VMCP-28.
+Tasks: VMCP-12, VMCP-28, VMCP-50.
 
 Server-provided hashes remain preferred because local hashing cannot detect a
 concurrent upload or avoid downloading old remote content.
@@ -372,7 +375,8 @@ claim these guarantees until Vikunja provides them:
 - collection ETags for safe identity-resolution caching:
   https://github.com/go-vikunja/vikunja/issues/3396
 
-Tasks: VMCP-18, VMCP-19, VMCP-23, VMCP-43, VMCP-44, VMCP-46, VMCP-47.
+Tasks: VMCP-18, VMCP-19, VMCP-23, VMCP-43, VMCP-44, VMCP-46, VMCP-47,
+VMCP-49, VMCP-50.
 
 The known `subscription.entity` server defect remains tracked separately in
 VMCP-9 and upstream issue 3316. FastMCP preserves the real error and read-back
@@ -402,7 +406,7 @@ After each public contract change:
 9. Live-test admin, developer, and read-only roles using neutral scratch tasks.
 10. Publish only after explicit approval.
 
-Tasks: VMCP-14, VMCP-35.
+Tasks: VMCP-14, VMCP-35, VMCP-51, VMCP-52, VMCP-54.
 
 ## Recommended Delivery Slices
 
