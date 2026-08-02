@@ -16,7 +16,7 @@ database uniqueness constraint, transaction, cross-host lock, or server-issued
 version validator are upstream dependencies, not promises FastMCP can make by
 itself.
 
-## Current Baseline
+## Starting Baseline
 
 The current source is package version `2.4.103` at commit `e4eb36c`. The existing
 response benchmark reports:
@@ -31,6 +31,30 @@ response benchmark reports:
 The 100-task search and always-loaded task schema are the first optimization
 targets. All later measurements must use fixed neutral fixtures and compare
 characters, estimated tokens, API-call count, and wall time.
+
+## Implementation Status
+
+As of 2026-08-02, Phases 0 through 7 are implemented and fully verified in the
+local branch. The automated gate passes 370 tests across 23 suites, the atomic
+build and generated API check pass, and the response and tool-schema budgets
+are green. Package inspection and the production dependency audit are clean.
+The live three-role matrix remains a release acceptance step because temporary
+role credentials are not present in the executor environment. Nothing in this
+status authorizes a push, tag, npm publication, or tracker closure.
+
+The fixed neutral response benchmark now reports:
+
+- basic self-check: 322 characters, down 91.5 percent;
+- projected task get: 194 characters, down 97.9 percent;
+- bounded 100-task search: 3,974 characters, down 89.6 percent;
+- create-if-absent receipt: 169 characters;
+- comment-and-close receipt: 373 characters, down 84.4 percent;
+- compact identity/401/403 errors: 157 through 198 characters.
+
+The tool-schema gate reports 24,880 characters for `core`, 47,674 for `qa`,
+51,375 for `developer`, 55,505 for `full`, and 88,725 for `compatibility`.
+The default profile is therefore 72 percent smaller than the explicit
+compatibility surface.
 
 ## Migration Learnings
 

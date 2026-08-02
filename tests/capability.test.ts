@@ -179,36 +179,33 @@ describe('V2 OpenAPI Capability Gate', () => {
 });
 
 describe('README npm installation', () => {
-  it('uses only the npm latest installation for public install and update instructions', () => {
+  it('uses one generic npm-latest install/update prompt and refreshes one packaged skill', () => {
     const readme = fs.readFileSync(path.join(process.cwd(), 'README.md'), 'utf8');
-    const installPrompt = readme.match(
-      /### Copy-Paste Agent Install Prompt[\s\S]*?```text\r?\n([\s\S]*?)\r?\n```/,
-    )?.[1];
-    const updatePrompt = readme.match(
-      /### Copy-Paste Agent Update Prompt\s+```text\r?\n([\s\S]*?)\r?\n```/,
+    const prompt = readme.match(
+      /### Copy-Paste Agent Install Or Update Prompt[\s\S]*?```text\r?\n([\s\S]*?)\r?\n```/,
     )?.[1];
     const globalInstalls = readme.match(/npm install -g vikunja-fastmcp(?:@latest)?/g) ?? [];
 
-    expect(installPrompt).toBeDefined();
-    expect(updatePrompt).toBeDefined();
-    if (!installPrompt || !updatePrompt) throw new Error('README agent prompts are missing.');
-    expect(globalInstalls.length).toBeGreaterThanOrEqual(3);
+    expect(prompt).toBeDefined();
+    if (!prompt) throw new Error('README agent prompt is missing.');
+    const normalizedPrompt = prompt.replace(/\s+/g, ' ');
+    expect(globalInstalls.length).toBeGreaterThanOrEqual(2);
     expect(globalInstalls.every((command) => command.endsWith('@latest'))).toBe(true);
     expect(readme).not.toMatch(/npm install -g (?:github:|https?:\/\/github\.com)/);
     expect(readme).not.toContain('releases/download');
-
-    for (const prompt of [installPrompt, updatePrompt]) {
-      expect(prompt).toContain('npm install -g vikunja-fastmcp@latest');
-      expect(prompt).toContain('npm list -g vikunja-fastmcp --depth=0');
-      expect(prompt).toContain('(Get-Command vikunja-mcp).Source');
-      expect(prompt).toContain('command -v vikunja-mcp');
-      expect(prompt).not.toContain('where.exe');
-      expect(prompt).toContain('command "vikunja-mcp"');
-      expect(prompt).toContain('npm root -g');
-      expect(prompt.toLowerCase()).toContain('restart');
-    }
-    expect(updatePrompt).toContain('npm view vikunja-fastmcp version');
-    expect(updatePrompt).not.toMatch(/expected latest is \d/);
+    expect(readme).toContain('(Get-Command vikunja-mcp).Source');
+    expect(readme).toContain('command -v vikunja-mcp');
+    expect(normalizedPrompt).toContain('npm install -g vikunja-fastmcp@latest');
+    expect(normalizedPrompt).toContain('npm list -g vikunja-fastmcp --depth=0');
+    expect(normalizedPrompt).not.toContain('where.exe');
+    expect(normalizedPrompt).toContain('command is `vikunja-mcp`');
+    expect(normalizedPrompt).toContain('npm root -g');
+    expect(normalizedPrompt).toContain('install it when missing');
+    expect(normalizedPrompt).toContain('refresh the existing copy in place');
+    expect(normalizedPrompt).toContain('Reuse one user-wide copy');
+    expect(normalizedPrompt).toContain('Do not create a second conflicting copy');
+    expect(normalizedPrompt.toLowerCase()).toContain('restart');
+    expect(normalizedPrompt).not.toMatch(/expected latest is \d/);
   });
 
   it('keeps normal README source lines readable', () => {
@@ -245,6 +242,11 @@ describe('packaged Vikunja skill', () => {
     expect(normalizedSkill).toContain('`expectedUpdatedAt`');
     expect(normalizedSkill).toContain('`VIKUNJA_SUBSCRIPTION_SCHEMA_BUG` means');
     expect(normalizedSkill).toContain('Task-list `perPage` must not exceed 100');
+    expect(normalizedSkill).toContain('Reads use structured-only `minimal` responses by default');
+    expect(normalizedSkill).toContain('Use `batch_get` for several known human identifiers');
+    expect(normalizedSkill).toContain('Mutation responses use structured-only `receipt` mode');
+    expect(normalizedSkill).toContain('refresh exactly one user-wide copy');
+    expect(normalizedSkill).toContain('Project migration is available only in the explicit `full`');
     expect(normalizedSkill).toContain(
       'Wrap file paths, commands, and code identifiers in inline backticks',
     );

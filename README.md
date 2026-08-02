@@ -12,6 +12,14 @@ rebuilt from scratch against Vikunja's documented `/api/v2` contract. No
 source code, runtime modules, generated output, dependencies, or compatibility
 wrappers from the original implementation remain in the current tree.
 
+## Architecture
+
+The public contract is in [`docs/V2_API_CONTRACT.md`](docs/V2_API_CONTRACT.md).
+The implementation roadmap and measured token budgets are in
+[`docs/VMCP_IMPLEMENTATION_PLAN.md`](docs/VMCP_IMPLEMENTATION_PLAN.md). The
+profile, response, ledger, and migration decisions are recorded in
+[`docs/ADR-0001-agent-efficient-mcp-contract.md`](docs/ADR-0001-agent-efficient-mcp-contract.md).
+
 ## Requirements
 
 - Node.js 24 LTS+
@@ -29,64 +37,66 @@ npm install -g vikunja-fastmcp@latest
 Restart the MCP client after installing or updating so it starts the new
 process.
 
-### Copy-Paste Agent Install Prompt
+Verify on Windows PowerShell:
 
-Paste this into any coding agent (Claude, Codex, or another MCP-capable
-client) to have it install and configure the server. Replace nothing; the
-agent asks you for the two values it needs.
-
-```text
-Install the Vikunja MCP server for this user:
-1. Run: npm install -g vikunja-fastmcp@latest
-2. Verify: npm list -g vikunja-fastmcp --depth=0
-   Windows PowerShell: (Get-Command vikunja-mcp).Source
-   macOS/Linux: command -v vikunja-mcp
-3. Ask me for VIKUNJA_URL and VIKUNJA_API_TOKEN. The token comes from
-   Vikunja Settings -> API Tokens. Never print or log it.
-4. Register a stdio MCP server named "vikunja" with command "vikunja-mcp",
-   no args, and those two environment variables. Never use a checkout or
-   dist path.
-5. Optional: use npm root -g to copy skills/vikunja-fastmcp into this
-   agent's user-wide skill directory. Otherwise add SKILL.md to its rules.
-6. Restart the MCP client, call self_check, and report the installed version,
-   executable path, and edited config file without showing secrets.
+```powershell
+npm list -g vikunja-fastmcp --depth=0
+(Get-Command vikunja-mcp).Source
 ```
 
-### Copy-Paste Agent Update Prompt
+Verify on macOS or Linux:
 
-```text
-1. Run: npm install -g vikunja-fastmcp@latest
-2. Verify: npm list -g vikunja-fastmcp --depth=0
-   Windows PowerShell: (Get-Command vikunja-mcp).Source
-   macOS/Linux: command -v vikunja-mcp
-3. Keep command "vikunja-mcp" and preserve VIKUNJA_URL and
-   VIKUNJA_API_TOKEN without printing secrets.
-4. Use npm root -g to refresh skills/vikunja-fastmcp in the agent's
-   user-wide skill directory, then restart the MCP client.
-5. Report the executable and skill paths. Confirm the installed version with
-   npm view vikunja-fastmcp version.
+```bash
+npm list -g vikunja-fastmcp --depth=0
+command -v vikunja-mcp
 ```
 
-### Optional Agent Skill
+### Copy-Paste Agent Install Or Update Prompt
+
+Paste this into any MCP-capable agent for a new installation or an update. It
+does not assume an operating system, agent brand, project, username, or fixed
+package version.
+
+```text
+Install or update the Vikunja MCP server for the current user:
+1. Run `npm install -g vikunja-fastmcp@latest`.
+2. Verify the package with `npm list -g vikunja-fastmcp --depth=0` and locate
+   `vikunja-mcp` using the operating system's command-resolution tool.
+3. Keep or create a stdio MCP server named `vikunja` whose command is
+   `vikunja-mcp` with no arguments. Never use a checkout, junction, tarball,
+   release download, or `dist` path.
+4. Preserve existing `VIKUNJA_URL` and `VIKUNJA_API_TOKEN` values without
+   printing them. Ask for missing values through a secret-safe input method.
+5. Run `npm root -g` and locate the packaged `skills/vikunja-fastmcp` folder.
+   If the client supports skills, install it when missing; otherwise refresh
+   the existing copy in place. Reuse one user-wide copy and remove no other
+   skill unless it is an exact duplicate of this packaged skill.
+6. If the client has no skill-folder support, merge `SKILL.md` into its
+   persistent agent instructions. Do not create a second conflicting copy.
+7. Restart the MCP client. Report the installed package version, resolved
+   command path, MCP config path, and active skill path without showing secrets.
+```
+
+### Packaged Agent Skill
 
 The npm package includes a neutral `vikunja-fastmcp` skill containing the
 scope, task-identity, pagination, write-safety, attachment, and error rules an
 agent needs. `self_check` with `detail: "full"` reports its installed location
 as `agentSkillPath`; the default basic check stays compact.
 
-Install it for Codex on Windows PowerShell:
+Example PowerShell copy into a client-specific user-wide skill target:
 
 ```powershell
 $source = Join-Path (npm root -g) "vikunja-fastmcp\skills\vikunja-fastmcp"
-$target = Join-Path $HOME ".codex\skills\vikunja-fastmcp"
+$target = Join-Path $HOME "<client-skill-root>\vikunja-fastmcp"
 New-Item -ItemType Directory -Force -Path (Split-Path $target) | Out-Null
 Copy-Item -LiteralPath $source -Destination $target -Recurse -Force
 ```
 
-For Claude, use `$HOME\.claude\skills\vikunja-fastmcp` as the target. For an
-agent without skill-folder support, place the contents of `SKILL.md` in that
-client's persistent agent instructions or rules file. Restart the agent after
-installing or updating the skill.
+Choose the target required by the MCP client. For a client without skill-folder
+support, place the contents of `SKILL.md` in its persistent agent instructions.
+Refresh the same target after every package update instead of accumulating
+versioned or project-local copies. Restart the client after refreshing it.
 
 ## Environment
 
@@ -104,7 +114,12 @@ Optional:
   to 100 MiB.
 - `VIKUNJA_TEMPLATE_FILE`: machine-local template JSON path. Defaults under
   the user home directory.
-- `VIKUNJA_MCP_RESPONSE_MODE`: `compact` (default), `standard`, or `full`.
+- `VIKUNJA_MCP_RESPONSE_MODE`: `minimal` (default), `receipt`, `compact`,
+  `standard`, or `full`. `minimal` and `receipt` return structured JSON only.
+- `VIKUNJA_MCP_TOOL_PROFILE`: `core` (default), `qa`, `developer`, `full`, or
+  `compatibility`. Smaller profiles reduce the schema loaded into each agent
+  session. `compatibility` alone exposes the legacy broad `vikunja_tasks`
+  router.
 - `VIKUNJA_REQUEST_TIMEOUT_MS`: ordinary request timeout. Defaults to 30000.
 - `VIKUNJA_TRANSFER_TIMEOUT_MS`: streamed and multipart inactivity timeout.
   Defaults to 60000.
@@ -116,6 +131,13 @@ Optional:
   operating system's per-user local-state directory, with a separate database
   name derived from `VIKUNJA_URL`.
 - `VIKUNJA_IDEMPOTENCY_TTL_MS`: durable receipt lifetime. Defaults to 30 days.
+- `GITHUB_TOKEN` or `GH_TOKEN`: destination credential used only by the
+  full-profile GitHub migration tool. It is never accepted as a tool argument.
+- `VIKUNJA_GITHUB_API_HOSTS`: optional comma-separated trusted GitHub Enterprise
+  hostnames. GitHub.com uses `api.github.com` without configuration. IP literals,
+  localhost, and unapproved hosts are rejected before a token is loaded.
+- `VIKUNJA_GITHUB_TIMEOUT_MS`: bounded GitHub request timeout for migration.
+  Defaults to 30000 and accepts 1000 through 120000.
 
 Never commit tokens. Rejects `/api/v1` URLs.
 API and browser URLs must use `http://` or `https://`.
@@ -162,17 +184,33 @@ as independent tracker writers.
 
 ## Tools
 
+The default `core` profile exposes small typed tools instead of the broad
+compatibility router:
+
 - `self_check` / `vikunja_auth` — compact diagnostics and current user. Use
   `detail: "full"` only for capabilities and local paths.
-- `vikunja_projects` — list / get
-- `vikunja_tasks` — CRUD, stable-key upsert, open-task lists, project summary,
-  create-if-absent, assignees, labels, status switching, relations, and
-  attachments.
+- `vikunja_projects` — project list and get.
+- `vikunja_task_read` — scoped list/search, projected get, batch get, task
+  verification, project/programme snapshots, and durable receipt lookup.
+- `vikunja_task_write` — guarded create, upsert, update, close, reopen, delete,
+  assignee, label, status, and relation mutations.
+- `vikunja_task_workflow` — evidence append, verified close, and other composed
+  evidence workflows with compact receipts.
 - `vikunja_task_attachments` — typed upload, bounded list/count, authenticated
-  download, and ownership-verified deletion. Existing attachment actions on
-  `vikunja_tasks` remain compatible.
-- `vikunja_task_comments` — paginated comment lists with a 20-item default and
-  100-item maximum.
+  download, optional local SHA-256/duplicate warnings, and ownership-verified
+  deletion.
+- `vikunja_task_comments` — bounded comment lists and deltas with `since`,
+  `countOnly`, and optional latest-comment metadata.
+
+The `qa` profile adds `vikunja_task_organize` for assignees, labels, status, and
+relations, plus labels, users, durable bulk work, reminders, import, and export.
+`developer` adds user export, templates, and webhooks. `full` adds every typed
+tool, including portable project migration. `compatibility` exposes all tools
+plus the old `vikunja_tasks` router and should be used only while moving an
+existing client to typed tools.
+
+Additional profile-dependent tools:
+
 - `vikunja_labels` — global labels (title or id)
 - `vikunja_users`
 - `vikunja_teams` — teams/members (`userId` is the Vikunja user id)
@@ -184,6 +222,8 @@ as independent tracker writers.
   or MCP-idempotent CSV migration.
 - `vikunja_export_project` — local JSON/CSV export with optional comments,
   attachments, and relations.
+- `vikunja_project_migration` — full-profile preview/run/status workflow for a
+  resumable, sanitized GitHub issue migration with destination read-back.
 - `vikunja_request_user_export` / `vikunja_download_user_export`
 - `vikunja_templates` — machine-local templates and task instantiation
 - `vikunja_webhooks` — project/user webhooks and event discovery
@@ -255,7 +295,9 @@ updates, it first reads the task back and reports success only when every
 requested field is visibly applied.
 
 See generated `MCP_API.md` for inputs. Responses contain a Markdown summary
-and one JSON envelope (`ok` or `error`). Task selectors are explicit objects:
+plus one JSON envelope in `compact`, `standard`, and `full` modes. The default
+`minimal` reads and `receipt` writes return only the JSON envelope, avoiding
+duplicate facts. Task selectors are explicit objects:
 
 ```json
 { "globalId": 451 }
@@ -267,12 +309,18 @@ and one JSON envelope (`ok` or `error`). Task selectors are explicit objects:
 rejected, which removes the old ambiguity between a global database ID and a
 human project reference. Human-facing output uses the full identifier, while
 structured receipts retain the global ID required by Vikunja URLs and API calls.
-Task lists default to 20 compact items and cap each project page at 100; use
-`countOnly` for totals and pagination for larger result sets. Compact task
-responses retain global ID, portal reference, project identity where needed,
-title, done state, priority, and the creator username when available. Request
-`responseMode: "standard"` for ordinary expanded task fields or
-`responseMode: "full"` for explicit bundled detail.
+Task lists default to 20 projected items and cap each project page at 100. Use
+`fields`, `includeUrl`, `titleMaxChars`, and `maxResponseChars` to pay only for
+needed data; use `countOnly` for totals and follow `nextCursor` when
+`incomplete` is true. Request `responseMode: "standard"` for ordinary expanded
+task fields or `responseMode: "full"` for explicit bundled detail.
+
+The full-profile migration is intentionally fail-closed. It writes a versioned,
+public-sanitized manifest, uses durable per-task receipts, verifies complete
+issue and comment content at GitHub, and closes a source task only after that
+read-back succeeds. Binary attachments are represented as metadata unless a
+future destination capability explicitly supports transfer. The GitHub token
+is read only from the process environment and is sent only to an approved host.
 
 ### Operational Limits
 

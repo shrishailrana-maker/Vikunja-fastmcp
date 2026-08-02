@@ -12,6 +12,26 @@
   tools; retain the router only in the explicit compatibility profile.
 - Add `core`, `qa`, `developer`, `full`, and `compatibility` tool profiles plus
   release-gated schema-size budgets for each profile.
+- Add precise title/description search, changed-since reads, bounded batch get,
+  task verification, programme snapshots, and durable receipt lookup.
+- Require a complete mutation envelope for typed writes, add universal dry-run,
+  compact receipts, content-keyed evidence append, and verified closure.
+- Add durable SQLite/WAL bulk row receipts, resumable status cursors, immutable
+  result hashes, retry classification, and lease-owner-checked state changes.
+- Add optional local attachment SHA-256 receipts and metadata duplicate warnings
+  without claiming server-enforced content deduplication.
+- Add bounded comment deltas with `since`, `countOnly`, latest-comment metadata,
+  truthful continuation, and scan limits.
+- Add a full-profile project migration workflow with mandatory public
+  sanitization, trusted GitHub host enforcement, versioned manifest hashes,
+  destination issue/comment read-back, durable per-task receipts, and safe
+  optional source archival.
+- Report upstream-dependent uniqueness, conditional-write, atomic-transition,
+  cross-host lease, attachment-hash, and collection-ETag capabilities in full
+  diagnostics with explicit local fallback descriptions.
+- Refresh the packaged skill and replace separate install/update instructions
+  with one generic npm `@latest` prompt that installs or reuses one user-wide
+  skill copy.
 
 ## 2.4.103 - 2026-07-31
 
@@ -279,4 +299,5 @@ First public release of the clean-room Vikunja v2 MCP server.
 ### Verification
 
 - 180 automated tests covering formatting, identity, errors, scoping, security, tasks, attachments, teams, and filters.
-- Live developer/tester acceptance against large DFF2 and DMS task sets, including 1,772-task all-project queries.
+- Live developer/tester acceptance against large neutral project fixtures, including
+  1,772-task all-project queries.

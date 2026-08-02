@@ -7,9 +7,9 @@ duplicate tool families.
 
 Local API references for agents:
 
-* [`vikunja-v2-openapi.json`](vikunja-v2-openapi.json): sanitized OpenAPI 3.1
+- [`vikunja-v2-openapi.json`](vikunja-v2-openapi.json): sanitized OpenAPI 3.1
   snapshot downloaded from the configured v2 service.
-* [`VIKUNJA_V2_API_REFERENCE.md`](VIKUNJA_V2_API_REFERENCE.md): generated method,
+- [`VIKUNJA_V2_API_REFERENCE.md`](VIKUNJA_V2_API_REFERENCE.md): generated method,
   path, operation, and schema index.
 
 The current contract targets the official Vikunja
@@ -26,11 +26,13 @@ the Vikunja service is upgraded; never substitute the old SDK or v1 docs.
    review and test.
 3. Use Node 24 `fetch` and `node:sqlite` directly. Do not add an API SDK,
    database package, or framework around them.
-4. Register one canonical task tool: `vikunja_tasks`.
+4. Register small typed task tools by default; keep `vikunja_tasks` only in the
+   explicit compatibility profile.
 5. Require an explicit project title or ID on every project-scoped call.
 6. Use server-side filtering, sorting, and pagination. Never fetch every task
    and filter it in the MCP.
-7. Return a short Markdown summary followed by one normalized JSON block.
+7. Return one normalized JSON block by default; human Markdown is opt-in through
+   expanded response modes.
 8. Preserve real HTTP status and safe server details. Never turn an identity,
    route, or permission error into an "invalid token" or JWT message.
 9. Resolve task identity once before any child operation or write.
@@ -68,32 +70,32 @@ updates use JSON Merge Patch. The MCP targets Vikunja 2.4.0 and does not carry
 older API workarounds. `PUT` is reserved for a documented full replacement or
 bulk replacement body.
 
-| Capability | Method and path | Contract |
-| --- | --- | --- |
-| Server gate | `GET /info`, live `GET /openapi.json` | Direct |
-| Current/search users | `GET /user`, `GET /users` | Direct |
-| Projects | `GET /projects`, `GET /projects/{id}` | Direct |
-| Task list | `GET /projects/{project}/tasks`, `GET /tasks` | Direct |
-| Task get/create | `GET /tasks/{projecttask}`, `POST /projects/{project}/tasks` | Direct |
-| Task update/delete | `PATCH`, `DELETE /tasks/{projecttask}` | Direct |
-| Assignees | `GET`, `POST`, bulk `PUT`, and member `DELETE` below `/tasks/{projecttask}/assignees` | Direct |
-| Task labels | `GET`, `POST`, bulk `PUT`, and label `DELETE` below `/tasks/{projecttask}/labels` | Direct |
-| Labels | `GET`/`POST /labels`; item `GET`/`PATCH`/`PUT`/`DELETE` | Direct |
-| Comments | `GET`/`POST /tasks/{task}/comments`; item `GET`/`PATCH`/`PUT`/`DELETE` | Direct |
-| Attachments | `GET`/multipart `POST /tasks/{task}/attachments`; item `GET`/`DELETE` | Direct |
-| Relations | `POST /tasks/{task}/relations`; relation `DELETE` | Direct writes |
-| Relation listing | No collection `GET` | MCP-composed from task data |
-| Teams | Team, member, and member-admin routes below `/teams` | Direct; exact nested verbs come from OpenAPI |
-| Saved filters | `POST /filters`; item `GET`/`PATCH`/`PUT`/`DELETE` | Direct |
-| Saved-filter listing | No `GET /filters` collection | Not exposed |
-| Bulk task update | `PUT /tasks/bulk` | Direct |
-| Bulk task create/delete | Existing task create/delete routes | MCP-composed, bounded, non-atomic |
-| Task reminders | Embedded `reminders` task field | MCP-composed read/update |
-| CSV import | `/migration/csv/detect`, `/preview`, `/migrate`, `/status` | Direct multipart/status routes |
-| Project export | Paginated project task list | MCP-composed local JSON/CSV file |
-| User export | `/user/export`, `/request`, `/download` | Direct; download streams to disk |
-| Webhooks | Project/user webhook routes and `/webhooks/events` | Direct |
-| Templates | No Vikunja v2 template route | Machine-local JSON store |
+| Capability              | Method and path                                                                       | Contract                                     |
+| ----------------------- | ------------------------------------------------------------------------------------- | -------------------------------------------- |
+| Server gate             | `GET /info`, live `GET /openapi.json`                                                 | Direct                                       |
+| Current/search users    | `GET /user`, `GET /users`                                                             | Direct                                       |
+| Projects                | `GET /projects`, `GET /projects/{id}`                                                 | Direct                                       |
+| Task list               | `GET /projects/{project}/tasks`, `GET /tasks`                                         | Direct                                       |
+| Task get/create         | `GET /tasks/{projecttask}`, `POST /projects/{project}/tasks`                          | Direct                                       |
+| Task update/delete      | `PATCH`, `DELETE /tasks/{projecttask}`                                                | Direct                                       |
+| Assignees               | `GET`, `POST`, bulk `PUT`, and member `DELETE` below `/tasks/{projecttask}/assignees` | Direct                                       |
+| Task labels             | `GET`, `POST`, bulk `PUT`, and label `DELETE` below `/tasks/{projecttask}/labels`     | Direct                                       |
+| Labels                  | `GET`/`POST /labels`; item `GET`/`PATCH`/`PUT`/`DELETE`                               | Direct                                       |
+| Comments                | `GET`/`POST /tasks/{task}/comments`; item `GET`/`PATCH`/`PUT`/`DELETE`                | Direct                                       |
+| Attachments             | `GET`/multipart `POST /tasks/{task}/attachments`; item `GET`/`DELETE`                 | Direct                                       |
+| Relations               | `POST /tasks/{task}/relations`; relation `DELETE`                                     | Direct writes                                |
+| Relation listing        | No collection `GET`                                                                   | MCP-composed from task data                  |
+| Teams                   | Team, member, and member-admin routes below `/teams`                                  | Direct; exact nested verbs come from OpenAPI |
+| Saved filters           | `POST /filters`; item `GET`/`PATCH`/`PUT`/`DELETE`                                    | Direct                                       |
+| Saved-filter listing    | No `GET /filters` collection                                                          | Not exposed                                  |
+| Bulk task update        | `PUT /tasks/bulk`                                                                     | Direct                                       |
+| Bulk task create/delete | Existing task create/delete routes                                                    | MCP-composed, bounded, non-atomic            |
+| Task reminders          | Embedded `reminders` task field                                                       | MCP-composed read/update                     |
+| CSV import              | `/migration/csv/detect`, `/preview`, `/migrate`, `/status`                            | Direct multipart/status routes               |
+| Project export          | Paginated project task list                                                           | MCP-composed local JSON/CSV file             |
+| User export             | `/user/export`, `/request`, `/download`                                               | Direct; download streams to disk             |
+| Webhooks                | Project/user webhook routes and `/webhooks/events`                                    | Direct                                       |
+| Templates               | No Vikunja v2 template route                                                          | Machine-local JSON store                     |
 
 OpenAPI parameter names vary by route family. `{projecttask}` and `{task}` both
 receive the resolved global numeric task ID; they are not different identity
@@ -116,52 +118,54 @@ Agents inspect the saved OpenAPI and generated reference before adding an HTTP
 call. The live capability gate still revalidates them because the installed
 server may be newer than the committed snapshot.
 
-## Minimal Tool Surface
+## Typed Tool Surface And Profiles
 
-| Tool | Operations |
-| --- | --- |
-| `vikunja_auth` | `status`, `self-check` |
-| `vikunja_projects` | `list`, `get` |
-| `vikunja_tasks` | `create`, `create_if_absent`, `get`, `list`, `summary`, `update`, `delete`, `close`, `reopen`, `close_with_evidence`, `assign`, `unassign`, `list-assignees`, `apply-label`, `remove-label`, `list-labels`, `set_status`, `relate`, `unrelate`, `list-relations`, `attach`, `list-attachments`, `download-attachment`, `delete-attachment` |
-| `vikunja_task_attachments` | `attach`, `list`, `download`, `delete` |
-| `vikunja_task_comments` | `create`, `list`, `get`, `update`, `delete`; list defaults to page 1 with 20 comments and caps `perPage` at 100 |
-| `vikunja_labels` | `list`, `get`, `create`, `update`, `delete` |
-| `vikunja_users` | `current`, `search` |
-| `vikunja_teams` | `list`, `get`, `create`, `update`, `delete`, `add-member`, `remove-member`, `set-member-admin` |
-| `vikunja_filters` | `create`, `get`, `update`, `delete` |
-| `vikunja_task_bulk` | `update`, `create`, `delete`, `assign`, `unassign`, `status` |
-| `vikunja_task_reminders` | `list`, `add`, `remove` |
-| `vikunja_batch_import` | `detect`, `preview`, `import`, `status` |
-| `vikunja_export_project` | one project export to JSON or CSV |
-| `vikunja_request_user_export` | request native user export |
-| `vikunja_download_user_export` | `status`, `download` |
-| `vikunja_templates` | `create`, `list`, `get`, `delete`, `instantiate` |
-| `vikunja_webhooks` | `events`, `list`, `create`, `update`, `delete` |
+The default `core` profile exposes small typed schemas:
 
-The surface keeps teams, saved filters, and duplicate/blocking relations
-because the owner explicitly requested them. Project mutation and direct
-project-member administration are omitted from the first rebuild; access can
-be managed in Vikunja or through teams. There is no `vikunja_task_crud` or
-other task wrapper.
+| Tool                          | Purpose                                                                     |
+| ----------------------------- | --------------------------------------------------------------------------- |
+| `self_check` / `vikunja_auth` | Compact diagnostics and current identity                                    |
+| `vikunja_projects`            | Project list and get                                                        |
+| `vikunja_task_read`           | List/search, projection, batch get, verification, snapshots, receipt lookup |
+| `vikunja_task_write`          | Guarded CRUD, assignment, labels, status, and relations                     |
+| `vikunja_task_workflow`       | Evidence and verified-close workflows                                       |
+| `vikunja_task_comments`       | CRUD plus bounded page/delta/count reads                                    |
+| `vikunja_task_attachments`    | Upload, bounded list, download, and ownership-safe delete                   |
+
+Profiles add only the tools needed by the client:
+
+| Profile         | Additional surface                                                            |
+| --------------- | ----------------------------------------------------------------------------- |
+| `core`          | The seven typed tools above                                                   |
+| `qa`            | Task organization, labels, users, durable bulk, reminders, import, and export |
+| `developer`     | QA plus user export, templates, and webhooks                                  |
+| `full`          | Every typed tool, including teams, filters, and project migration             |
+| `compatibility` | Every tool plus the broad legacy `vikunja_tasks` router                       |
+
+The broad router is not registered by default. This reduces the schema loaded
+into every agent session while preserving an explicit migration path for old
+clients. `vikunja_filters` intentionally has no list action because Vikunja v2
+has no collection route. Project mutation and direct project-member
+administration remain outside this MCP.
 
 ### Operational Limits
 
 The limits are part of the public MCP contract rather than hidden truncation:
 
-* task pages default to 20 and are capped at 100 items per project page;
-* bulk update accepts at most 100 explicit task selectors;
-* composed bulk create accepts at most 100 tasks and is non-atomic;
-* composed bulk delete accepts at most 100 explicit task selectors, is non-atomic, and
+- task pages default to 20 and are capped at 100 items per project page;
+- bulk update accepts at most 100 explicit task selectors;
+- composed bulk create accepts at most 100 tasks and is non-atomic;
+- composed bulk delete accepts at most 100 explicit task selectors, is non-atomic, and
   requires `confirm: true`;
-* CSV import and file upload/download use `VIKUNJA_MAX_ATTACHMENT_BYTES`, 100
+- CSV import and file upload/download use `VIKUNJA_MAX_ATTACHMENT_BYTES`, 100
   MiB by default; native migration uses Vikunja's row limits, while MCP
   idempotent import is capped at 1,000 rows;
-* ordinary API calls time out after 30 seconds by default through
+- ordinary API calls time out after 30 seconds by default through
   `VIKUNJA_REQUEST_TIMEOUT_MS`; streamed and multipart transfers use the
   60-second `VIKUNJA_TRANSFER_TIMEOUT_MS` default.
 
 Paging exists because compact data can still overwhelm an agent when hundreds
-of items are serialized. A live 955-task DMS response was about 1 MB before
+of items are serialized. A live 955-task project response was about 1 MB before
 bounding. Compact JSON plus bounded pages keeps normal calls small while
 `total`, `hasMore`, and `nextPage` preserve complete traversal. Callers use
 `countOnly: true` when they need only a total.
@@ -176,26 +180,25 @@ packaged `MCP_API.md` during the build.
 
 `MCP_API.md` documents, for every public tool:
 
-* tool name and purpose;
-* every operation/subcommand;
-* required and optional inputs, defaults, and limits;
-* project-scope and task-identity rules;
-* normalized success and error examples;
-* attachment upload/download examples;
-* whether an operation performs one HTTP call or an MCP-composed workflow.
+- tool name and purpose;
+- every operation/subcommand;
+- required and optional inputs, defaults, and limits;
+- project-scope and task-identity rules;
+- normalized success and error examples;
+- attachment upload/download examples;
+- whether an operation performs one HTTP call or an MCP-composed workflow.
 
 The generated document is committed and shipped in the npm package so it is
 available on GitHub and after installation. CI regenerates it and fails when
 the committed copy differs, preventing tool schemas and documentation from
 drifting apart.
 
-`self-check` returns `apiContractVersion`, the package version, build path,
-normalized API URL, authentication state, supported tool names, supported
-subcommands, the local path to the packaged API document, the attachment
-download root, and a compact list of visible projects as `{ id, title,
-archived }`. It never returns a token or Authorization header. The project
-list lets any new chat window orient itself with one call; it is information,
-not an inferred scope for later calls.
+Basic `self-check` returns connection/authentication state, current username,
+package/API contract versions, project count, and attachment-root writability.
+It never returns a token or Authorization header. Explicit `detail: "full"`
+adds paths, visible projects, registered capabilities, and server-dependent
+capability/fallback notes. Routine sessions do not call full diagnostics as a
+warm-up.
 
 ## Project Scope
 
@@ -262,8 +265,8 @@ a local representation boundary, not a Vikunja endpoint.
 
 Vikunja has two useful task identities:
 
-* `id`: globally unique database ID used by API writes and `/tasks/{id}` URLs.
-* `index` / `identifier`: project-local portal reference shown in the web UI.
+- `id`: globally unique database ID used by API writes and `/tasks/{id}` URLs.
+- `index` / `identifier`: project-local portal reference shown in the web UI.
   A project with an empty short identifier displays only `#305`, and that same
   portal number can exist in every project.
 
@@ -318,10 +321,16 @@ write after the comparison.
 
 ## Agent-Ready Responses
 
-Every response is text with exactly two parts:
+The default read mode is structured-only `minimal`; the default write mode is
+structured-only `receipt`. Each contains one fenced `json` block and does not
+repeat the same facts as Markdown. Explicit `compact`, `standard`, and `full`
+modes add a short human summary before the same machine envelope.
 
-1. A short Markdown summary or compact table.
-2. One fenced `json` block containing the machine contract.
+List and get operations support field projection, opt-in URLs, bounded title
+length, and a response-character budget. Descriptions, comments, attachments,
+relations, expanded labels/users, and URLs are omitted unless requested.
+Paginated responses report their item count, total count, continuation cursor,
+and whether output is incomplete exactly once.
 
 Success:
 
@@ -347,10 +356,10 @@ Failure:
 
 Errors retain their real meaning:
 
-* `401`: token or API URL problem.
-* `403`: permission or project-access problem.
-* `404`: missing task, unresolved portal reference, or missing route.
-* `409`: requested write conflicts with the observed task state.
+- `401`: token or API URL problem.
+- `403`: permission or project-access problem.
+- `404`: missing task, unresolved portal reference, or missing route.
+- `409`: requested write conflicts with the observed task state.
 
 Token-like values and authorization headers are redacted before formatting or
 logging.
@@ -382,13 +391,13 @@ results and write echoes identify their project without another lookup.
 
 Markdown is the MCP boundary for task descriptions and comments:
 
-* On read, Vikunja's stored HTML is converted to Markdown. Headings,
+- On read, Vikunja's stored HTML is converted to Markdown. Headings,
   bold/italic text, links, inline code, code blocks, and ordered/unordered lists
   are preserved, and HTML entities are decoded.
-* On write, agents send Markdown. The MCP converts it to the safe HTML subset
+- On write, agents send Markdown. The MCP converts it to the safe HTML subset
   expected by Vikunja before create, update, or comment operations. Agents do
   not send or receive HTML.
-* Conversion covers `p`, `strong`, `em`, `ul`, `ol`, `li`, `a`, `code`, `pre`,
+- Conversion covers `p`, `strong`, `em`, `ul`, `ol`, `li`, `a`, `code`, `pre`,
   `br`, and `h1` through `h3`. Exotic human-authored HTML is converted
   best-effort on read while the original stored HTML remains untouched.
 
@@ -403,33 +412,34 @@ that responsibility becomes independently substantial. This is a justified
 cohesion split, not a return to nested architecture. No runtime dependency is
 added. Empty dates and Vikunja's `0001-01-01T00:00:00Z` sentinel become `null`.
 
-`vikunja_tasks get` is compact by default and returns only safe task identity,
-project identity, title, done state, and priority. `responseMode: "standard"`
-returns the normalized task without comment or attachment calls. An explicit
+`vikunja_task_read get` is `minimal` by default and returns only the requested
+projection, with bounded identity, title, and state fields when no projection
+is supplied. It performs no comment or attachment call unless requested.
+`responseMode: "standard"` returns the ordinary normalized task, while explicit
 `responseMode: "full"` returns the consolidated detail bundle:
 
-* the normalized task, including its assignees and labels from task fields or
+- the normalized task, including its assignees and labels from task fields or
   supported v2 `expand` values;
-* attachment metadata, using a supported task expansion when available or the
+- attachment metadata, using a supported task expansion when available or the
   real attachment-list route otherwise;
-* the latest five normalized comments by default, fetched from the separate
+- the latest five normalized comments by default, fetched from the separate
   v2 comments route.
 
 Comment and attachment folding are MCP-composed when they require separate v2
 calls. `commentLimit: 0` omits comments; a higher bounded value is explicit.
 The comments tool remains the path for older pages or complete comment history.
-Its `list` operation is server-paginated once, defaults to 20 comments per
-page, accepts `page` and `perPage`, caps `perPage` at 100, and returns normalized
-continuation metadata instead of an unbounded comment collection.
+Its `list` operation defaults to 20 comments, caps `perPage` at 100, and adds
+bounded `since`, `countOnly`, `includeLatest`, and `maxScanPages` controls with
+truthful continuation metadata.
 This lets an agent answer task state, ownership, labels, reviewed evidence, and
 available logs with one MCP call without claiming that Vikunja provides one
 combined HTTP route.
 
-Lists default to compact items containing global ID, portal reference, title,
-done state, priority, and the creator username when available; project identity
-is hoisted to the enclosing result group instead of repeated on every task.
-`responseMode: "standard"` preserves the full creator identity, labels, and
-direct links, while explicit `full` includes the complete normalized task.
+Lists default to a minimal projected shape and accept explicit `fields`,
+`includeUrl`, `titleMaxChars`, and `maxResponseChars`. Project identity is
+hoisted to the enclosing group instead of repeated on every task.
+`responseMode: "standard"` preserves ordinary task detail and direct links,
+while explicit `full` includes the complete normalized task.
 Pagination is normalized to `page`, `perPage`,
 `total`, `totalPages`, `hasMore`, and `nextPage`. There is no hidden ten-item
 truncation and no raw `$schema` or `per_page` wrapper. To prevent oversized
@@ -445,24 +455,24 @@ generated v2 contract. All paths pass supported `filter`, `sort_by`, `order_by`,
 `q`, `page`, `per_page`, and `expand` parameters to Vikunja rather than
 reimplementing them locally.
 
-* Open tasks are the default; `done` can be supplied explicitly.
-* `priority: 0` means unset priority. Other priorities are exact matches.
-* Project, done, priority, labels, title search, and an explicit filter compose
+- Open tasks are the default; `done` can be supplied explicitly.
+- `priority: 0` means unset priority. Other priorities are exact matches.
+- Project, done, priority, labels, title search, and an explicit filter compose
   with AND semantics.
-* `title` search is the default. `exactTitle`, `fullText`, and portal-reference
+- `title` search is the default. `exactTitle`, `fullText`, and portal-reference
   modes are explicit so a word buried in a description does not become an
   accidental match.
-* `page` and `perPage` are applied once by Vikunja. Default `perPage` is 20;
+- `page` and `perPage` are applied once by Vikunja. Default `perPage` is 20;
   requests above 100 are capped to 100 without hiding the remaining total.
-* Every list states displayed count, total, and exact continuation metadata.
-* Explicit `projects: [...]` and deliberate `allProjects: true` results are
+- Every list states displayed count, total, and exact continuation metadata.
+- Explicit `projects: [...]` and deliberate `allProjects: true` results are
   grouped by project and expose independent `pagination` blocks. Continuation
   requests name the project and next page.
-* `countOnly: true` returns the v2 collection `total` and omits task items. A
+- `countOnly: true` returns the v2 collection `total` and omits task items. A
   single-project response contains one total; subset and all-project responses
   contain one total per project. The MCP may request the smallest valid page
   needed to obtain `total`, but it does not infer a count by scanning tasks.
-* `summary` is a single-project MCP-composed aggregate over paged task data. It
+- `summary` is a single-project MCP-composed aggregate over paged task data. It
   returns counts by done state, priority, all labels, and labels matching the
   configured status prefix, but no task bodies.
 
@@ -524,23 +534,25 @@ These are MCP workflows, not new Vikunja endpoints.
 Testers can attach logs, screenshots, and test evidence when posting or
 updating a bug:
 
-* `create` and `create_if_absent` accept an optional `attachments` array of
+- `create` and `create_if_absent` accept an optional `attachments` array of
   local file paths. The MCP creates the task, uploads each file, reads the
   attachment metadata back, and returns the task plus per-file results in one
   tool response. A partial upload is reported honestly and never causes a
   retry to create a second task.
-* `attach` adds one or more files to an existing task from local `filePath`
+- `attach` adds one or more files to an existing task from local `filePath`
   values, or from base64 plus explicit filenames, and returns attachment
-  metadata.
-* `list-attachments` returns attachment IDs, names, sizes, and URLs without
+  metadata. Optional `computeSha256` records a local upload hash;
+  `warnOnDuplicate` compares available name/size/hash metadata without claiming
+  server-enforced deduplication.
+- `list-attachments` returns attachment IDs, names, sizes, and URLs without
   file bytes. `page`, `perPage`, `countOnly`, and `filenamePrefix` provide a
   bounded response. Existing calls without those options retain the simple
   attachment-array response.
-* `download-attachment` downloads through the authenticated MCP connection to
+- `download-attachment` downloads through the authenticated MCP connection to
   an explicit local `destinationPath` or, when omitted, a safe directory under
   the operating-system temporary folder. It returns the local path, filename,
   media type, size, checksum, and source metadata.
-* `delete-attachment` and the typed attachment tool's `delete` action require
+- `delete-attachment` and the typed attachment tool's `delete` action require
   `taskSelector`, explicit `projectSelector`, `attachmentId`, `confirm:true`,
   `actor`, and `idempotencyKey`. The MCP resolves the task, reads every
   attachment page, verifies the attachment belongs to that task, and only then
@@ -607,6 +619,38 @@ concise structured messages on `stderr` for the parent MCP client to capture;
 the server does not create an unexplained local log file. If file logging is
 added later, it must require an explicit configured path documented by
 `self-check`.
+
+## Portable Project Migration
+
+The full tool profile exposes a GitHub issue migration with `preview`, `run`,
+and paginated `status` actions. It is MCP-composed and uses the existing
+versioned project export as its source.
+
+Each operation writes a schema-versioned manifest inside the configured
+attachment/export sandbox. Mandatory public sanitization removes credentials,
+private network URLs, and local paths before the public manifest or destination
+payload is written. The raw source export is always deleted in a `finally`
+path. Saved manifests carry an operation fingerprint and content hash and are
+rejected when the destination, schema, payload, or file contents differ.
+
+The GitHub credential is read only from `GITHUB_TOKEN` or `GH_TOKEN`. It is
+sent to `api.github.com` or an exact GitHub Enterprise hostname listed in
+`VIKUNJA_GITHUB_API_HOSTS`; IP literals, localhost, unsafe URL components, and
+unapproved hosts fail before a request. Requests have a bounded timeout.
+
+Task issues and comments contain deterministic human-reference/content-hash
+markers. After creating or reusing a destination issue, the MCP reads back the
+complete title/body and every expected comment body/marker. A source task may
+be closed only after all of those comparisons succeed. Durable row receipts
+are saved only while the process still owns its renewable local lease. The
+workflow stops immediately after lease loss and never claims cross-host
+atomicity.
+
+Descriptions, priorities, labels, assignees, relation references, attachment
+metadata, source comment authors, and source timestamps are preserved where
+the destination supports them. Binary attachment transfer remains capability
+gated and is reported as unsupported rather than silently omitted. Source
+closure evidence says "Migrated, not implemented."
 
 ## Required Workflows
 

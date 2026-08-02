@@ -20,6 +20,14 @@ The goal is not to preserve old abstractions. The goal is a fast, inspectable
 tracker client that handles the tester and developer workflows in
 `V2_API_CONTRACT.md` without an implementation maze.
 
+The first release used one broad task router. Measured `tools/list` and
+response cost later justified a narrower public surface: `core`, `qa`,
+`developer`, and `full` profiles now register typed read/write/workflow tools.
+The QA profile adds a focused task-organization tool, while the broad router
+remains only in the explicit `compatibility` profile. This is one task
+implementation exposed through smaller contracts, not a return to duplicate
+task logic.
+
 The public API is not maintained as separate handwritten knowledge. Runtime
 Zod schemas drive MCP `tools/list` and generate one packaged `MCP_API.md` with
 inputs, defaults, examples, scope rules, and response contracts. CI rejects a
@@ -30,17 +38,17 @@ stale generated document.
 The old server grew to more than one hundred TypeScript files around ordinary
 HTTP calls. Real sessions exposed the cost:
 
-* portal task numbers and database IDs were confused, creating wrong-target
+- portal task numbers and database IDs were confused, creating wrong-target
   risk;
-* identity and route failures were sometimes reported as invalid-token or JWT
+- identity and route failures were sometimes reported as invalid-token or JWT
   problems;
-* unscoped and client-side queries scanned too much data;
-* duplicate task tools returned different answers;
-* list responses consumed thousands of tokens and hid truncation;
-* writes did not consistently echo the task they changed;
-* attachment readback and download were awkward;
-* security behavior was removed once without regression tests;
-* finding a bug in the layered implementation took longer than the underlying
+- unscoped and client-side queries scanned too much data;
+- duplicate task tools returned different answers;
+- list responses consumed thousands of tokens and hid truncation;
+- writes did not consistently echo the task they changed;
+- attachment readback and download were awkward;
+- security behavior was removed once without regression tests;
+- finding a bug in the layered implementation took longer than the underlying
   API operation justified.
 
 MCP itself is not the problem. A persistent stdio process is appropriate for
@@ -66,13 +74,13 @@ src/
 
 This is a starting shape, not a numeric file limit. The governing rules are:
 
-* merge tiny pass-through modules that add navigation without ownership;
-* split a large file when it contains independently testable responsibilities,
+- merge tiny pass-through modules that add navigation without ownership;
+- split a large file when it contains independently testable responsibilities,
   unrelated change reasons, or cannot be reviewed comfortably in one pass;
-* prefer a focused extra file over a thousand-line `tasks.ts` or `format.ts`;
-* keep schemas and handlers table-driven where that remains clearer than many
+- prefer a focused extra file over a thousand-line `tasks.ts` or `format.ts`;
+- keep schemas and handlers table-driven where that remains clearer than many
   nearly identical functions;
-* any new file or directory must name the responsibility it owns and the
+- any new file or directory must name the responsibility it owns and the
   duplication or complexity it removes.
 
 About 400 lines is a review trigger, not an automatic split or hard maximum.
@@ -123,32 +131,39 @@ attachment encoding library.
 
 The first release includes only features tied to demonstrated workflows:
 
-* v2 connection status and token-free self-check;
-* project list/get and required project scoping;
-* safe concurrent use across projects by requiring title/ID scope on every
+- v2 connection status and token-free self-check;
+- project list/get and required project scoping;
+- safe concurrent use across projects by requiring title/ID scope on every
   project-scoped call, plus explicit grouped project subsets and deliberate
   grouped `allProjects` reads;
-* one canonical task tool with create/get/list/update/delete/close/reopen;
-* portal/global task identity resolution and write target echo;
-* exact-title duplicate prevention and close-with-evidence;
-* compact server-filtered lists with honest pagination, exact priority, and a
+- typed task read, write, and workflow tools, with the broad router only in an
+  explicit compatibility profile;
+- portal/global task identity resolution and write target echo;
+- exact-title duplicate prevention and close-with-evidence;
+- compact server-filtered lists with honest pagination, exact priority, and a
   count-only mode that emits no task items;
-* an explicit 100-item per-project page ceiling so large trackers remain safe
+- an explicit 100-item per-project page ceiling so large trackers remain safe
   for agent context, with totals and continuation metadata preserved;
-* consolidated task get with labels, assignees, attachment metadata, and a
+- consolidated task get with labels, assignees, attachment metadata, and a
   bounded latest-comment view;
-* comments, labels, assignments, duplicate/blocking relations;
-* users needed for assignment;
-* teams and saved-filter direct CRUD retained by owner request;
-* attachment upload during bug creation, metadata verification, and streamed
+- comments, labels, assignments, duplicate/blocking relations;
+- users needed for assignment;
+- teams and saved-filter direct CRUD retained by owner request;
+- attachment upload during bug creation, metadata verification, and streamed
   local download for automatic agent parsing.
-* compatibility tools for native bulk update, task reminders, CSV migration,
+- compatibility tools for native bulk update, task reminders, CSV migration,
   user export, and webhooks;
-* mutation-scope policy with a warn-to-require compatibility transition,
+- mutation-scope policy with a warn-to-require compatibility transition,
   actor-attributed writes, compact project summaries, mutually exclusive
   status-label switching, and bounded idempotent CSV import;
-* bounded non-atomic bulk create/delete, composed project JSON/CSV export, and
+- bounded non-atomic bulk create/delete, composed project JSON/CSV export, and
   machine-local task templates without restoring the legacy service tower.
+- structured-only minimal reads and mutation receipts, field projection,
+  response/schema budgets, precise search, delta reads, batch get, task-state
+  verification, and programme snapshots;
+- durable SQLite/WAL bulk row receipts with lease-owner-checked resume;
+- optional local attachment hashes, bounded comment deltas, and a full-profile
+  resumable GitHub migration with public sanitization and destination read-back.
 
 Bulk update/create/delete are capped at 100 tasks per call. Composed create and
 delete are non-atomic, delete requires explicit confirmation, and CSV/file
@@ -218,31 +233,31 @@ must survive operating-system temporary-file cleanup.
 
 ## Safety Requirements
 
-* Never infer project scope from process configuration. Require an exact
+- Never infer project scope from process configuration. Require an exact
   project title or numeric ID on task creation, search, listing, and portal
   references.
-* Allow cross-project reads only through explicit read-only `projects: [...]`
+- Allow cross-project reads only through explicit read-only `projects: [...]`
   or deliberate read-only `allProjects`; keep pagination grouped per project.
-* Accept only explicit `{globalId}`, `{identifier}`, or `{projectIndex}` task
+- Accept only explicit `{globalId}`, `{identifier}`, or `{projectIndex}` task
   selectors, then resolve once and use the global ID for child operations.
-* Read and echo project, title, portal reference, and global ID on every write.
-* Warn or reject global-ID mutations without explicit project scope according
+- Read and echo project, title, portal reference, and global ID on every write.
+- Warn or reject global-ID mutations without explicit project scope according
   to `VIKUNJA_MUTATION_SCOPE_MODE`; always reject a supplied project mismatch.
-* Keep actor attribution additive and idempotent, and never echo submitted
+- Keep actor attribution additive and idempotent, and never echo submitted
   evidence in compact write receipts.
-* Replace configured status labels in one bulk request while preserving every
+- Replace configured status labels in one bulk request while preserving every
   unrelated label; never create the target label unless explicitly requested.
-* Persist idempotency and import receipts in a bounded-lifetime SQLite/WAL
+- Persist idempotency and import receipts in a bounded-lifetime SQLite/WAL
   ledger scoped to the configured server URL; ledger loss degrades only to
   duplicate risk, never deletion.
-* Preserve 401, 403, 404, 405, and 409 meanings and safe server details.
-* Redact credentials before logs or responses are constructed.
-* Require payload-bound durable idempotency for create, comment, attachment,
+- Preserve 401, 403, 404, 405, and 409 meanings and safe server details.
+- Redact credentials before logs or responses are constructed.
+- Require payload-bound durable idempotency for create, comment, attachment,
   evidence-close, import, and mutating bulk retries.
-* Use an isolated operating-system temporary directory when no download
+- Use an isolated operating-system temporary directory when no download
   destination is supplied, and never overwrite an existing file without
   explicit permission.
-* Keep attachment bytes out of MCP responses and enforce upload/download size
+- Keep attachment bytes out of MCP responses and enforce upload/download size
   limits before consuming the full body.
 
 ## Removal Plan
@@ -335,34 +350,34 @@ excluded from public package output unless the owner requests otherwise.
 
 The rebuild is ready for owner review only when:
 
-* runtime source remains small and mostly flat, with no trivial pass-through
+- runtime source remains small and mostly flat, with no trivial pass-through
   maze and no oversized multi-responsibility files;
-* there is exactly one task implementation;
-* no old source is present, imported, copied, wrapped, or runnable;
-* all required workflows pass against mocked v2 responses;
-* approved live smoke tests pass against the native Vikunja service;
-* the checked capability matrix records every required method, path,
+- there is exactly one task implementation;
+- no old source is present, imported, copied, wrapped, or runnable;
+- all required workflows pass against mocked v2 responses;
+- approved live smoke tests pass against the native Vikunja service;
+- the checked capability matrix records every required method, path,
   request-body schema, enum, expected status class, and composed-operation
   dependency; no required row remains guessed or open, and `self-check` names
   any missing route plus each affected operation;
-* security, identity, attachment, and error regression tests pass;
-* list output is compact and mechanically parseable;
-* count-only output contains totals and no task items;
-* consolidated get returns bounded comments and attachment metadata without
+- security, identity, attachment, and error regression tests pass;
+- list output is compact and mechanically parseable;
+- count-only output contains totals and no task items;
+- consolidated get returns bounded comments and attachment metadata without
   hiding that extra HTTP calls are MCP-composed;
-* the resolution cache contains identity mappings only and passes TTL and
+- the resolution cache contains identity mappings only and passes TTL and
   invalidation tests;
-* Markdown writes allow only the documented safe subset and fail closed on
+- Markdown writes allow only the documented safe subset and fail closed on
   unsafe HTML, attributes, or URL schemes;
-* compound-operation responses do not claim distributed uniqueness or
+- compound-operation responses do not claim distributed uniqueness or
   server-side optimistic locking;
-* attachment download writes to disk without exposing credentials or binary;
-* `tools/list`, `MCP_API.md`, and `self-check` report the same API contract;
-* `self-check` reports the resolved temporary download directory;
-* install/build is atomic and cannot destroy the active runtime on failure;
-* the parent commit and existing public release provide rollback history while
+- attachment download writes to disk without exposing credentials or binary;
+- `tools/list`, `MCP_API.md`, and `self-check` report the same API contract;
+- `self-check` reports the resolved temporary download directory;
+- install/build is atomic and cannot destroy the active runtime on failure;
+- the parent commit and existing public release provide rollback history while
   old source remains absent from the current tree;
-* no private URL, token, local path, or customer/project identity enters the
+- no private URL, token, local path, or customer/project identity enters the
   public repository.
 
 No commit, push, tag, release, or runtime junction update is part of this

@@ -16,6 +16,13 @@ requests or legacy tracker scripts while the MCP is available.
 2. For normal work, choose the intended project explicitly on the requested
    operation instead of loading diagnostic inventories first.
 3. Never print or store API tokens in chat, commands, logs, task content, or repositories.
+4. After installing or updating the npm package, reuse and refresh exactly one
+   user-wide copy of this packaged skill. Install it when missing; do not leave
+   stale project-local or versioned duplicates that can override it.
+5. Use the default `core` tool profile for ordinary work. Select `qa`,
+   `developer`, or `full` only when the task needs those additional tools. Use
+   `compatibility` only while migrating a client that still calls the broad
+   `vikunja_tasks` router.
 
 ## Scope And Identity
 
@@ -75,14 +82,20 @@ requests or legacy tracker scripts while the MCP is available.
 - Use `assignee: "username"` for assignee lists. Vikunja list filters require
   usernames; numeric user IDs are only for operations that explicitly accept IDs.
 - Prefer `countOnly: true` when only a total is needed.
-- Use `vikunja_tasks` `summary` for one-project counts by done state, priority,
+- Use `vikunja_task_read` `summary` for one-project counts by done state, priority,
   labels, and configured status labels without listing task bodies.
-- Task list, get, and list-relations responses are compact by default. Request
-  `standard` or `full` only when the omitted fields are required for the
-  current operation.
+- Reads use structured-only `minimal` responses by default. Request only the
+  needed `fields`; leave URLs, descriptions, comments, attachments, relations,
+  and expanded user/label objects out unless the current operation needs them.
+  Use `standard` or `full` only for deliberately expanded detail.
+- Use `batch_get` for several known human identifiers, `verify_task_state` for
+  one bounded status/evidence check, and `programme_snapshot` for project
+  aggregates. Use `changedSince` for delta reads instead of re-listing an
+  unchanged project.
 - Task-list `perPage` must not exceed 100. Paginate larger results and follow
-  each project's independent `nextPage` value.
-- Comment lists default to 20 items; request only the `page` and `perPage` needed.
+  `nextCursor` whenever `incomplete` is true.
+- Comment lists default to 20 items. Use `since`, `countOnly`, and
+  `includeLatest` to avoid loading old comment bodies.
 - Keep searches scoped. Avoid `allProjects` when a project subset is known.
 
 ## Writes
@@ -94,6 +107,9 @@ requests or legacy tracker scripts while the MCP is available.
 - Prefer `create_if_absent` for duplicate-sensitive creation, while remembering
   it is best-effort rather than a distributed lock.
 - Add verification evidence before closing work. Use `close_with_evidence` when appropriate.
+- Use `append_evidence_if_changed` with a stable evidence key when repeated
+  builds may produce the same proof. Use `close_if_verified` when closure must
+  depend on a structured verification receipt.
 - Pass `actor` on create, every comment mutation, close, import, and every
   mutating bulk call. These operations reject missing attribution.
 - Treat structured `actor` as the only attribution source. Do not also write
@@ -122,6 +138,10 @@ requests or legacy tracker scripts while the MCP is available.
 - Treat composed bulk operations as bounded and non-atomic. Their durable
   SQLite receipts survive local MCP restarts and prevent concurrent same-key
   writes on one machine, but they are not a distributed lock between machines.
+- Bulk mutations return counts by default. Read item receipts through the
+  operation `status` cursor only when a failed or skipped row must be examined.
+- Mutation responses use structured-only `receipt` mode by default. Do not ask
+  for `standard` or `full` merely to restate submitted text.
 - Use one writer per task when several agents are active.
 
 ## Attachments And Errors
@@ -130,6 +150,9 @@ requests or legacy tracker scripts while the MCP is available.
   sandboxed path. Do not put bearer tokens in download URLs.
 - Prefer the typed `vikunja_task_attachments` tool. Bound large lists with
   `page` and `perPage`, or use `countOnly`/`filenamePrefix`.
+- Request local `computeSha256` only when a content receipt is needed. Treat
+  `warnOnDuplicate` as a warning based on available metadata/local hashes, not
+  as server-enforced deduplication.
 - Delete an attachment only with its task, explicit project scope,
   `confirm:true`, `actor`, and a stable `idempotencyKey`. The MCP verifies the
   attachment belongs to that task before deleting it.
@@ -144,3 +167,17 @@ requests or legacy tracker scripts while the MCP is available.
   silently unsubscribe the user.
 - When exact tool contracts are needed, call `self_check` with `detail: "full"`
   once and read `MCP_API.md` from its `apiDocumentPath`.
+
+## Portable Migration
+
+- Project migration is available only in the explicit `full` profile. Preview
+  first, then run with one stable idempotency key and inspect paginated status
+  receipts before archiving source tasks.
+- Public sanitization is mandatory. The GitHub token comes only from the MCP
+  process environment and must never be placed in tool arguments or task text.
+- A source task closes only after the destination issue and every migrated
+  comment read back exactly. A migration comment means migrated, not
+  implemented.
+- Binary attachments remain source metadata unless the reported destination
+  capability says otherwise. Download important files separately before
+  retiring the source tracker.
