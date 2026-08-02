@@ -115,6 +115,134 @@ describe('bulk task composition', () => {
     expect(request.mock.calls.filter(([method]) => method === 'POST')).toHaveLength(writes);
   });
 
+  it('composes a bulk-created task with a durable first comment', async () => {
+    const request = jest.fn(async (method: string, requestPath: string, options?: any) => {
+      if (method === 'GET' && requestPath === '/projects/101') {
+        return { id: 101, title: 'Alpha' };
+      }
+      if (method === 'POST' && requestPath === '/projects/101/tasks') {
+        return {
+          id: 9050,
+          index: 50,
+          identifier: 'ALPHA-50',
+          title: options.body.title,
+          project_id: 101,
+        };
+      }
+      if (method === 'GET' && requestPath === '/tasks/9050') {
+        return {
+          id: 9050,
+          index: 50,
+          identifier: 'ALPHA-50',
+          title: 'First',
+          project_id: 101,
+        };
+      }
+      if (method === 'POST' && requestPath === '/tasks/9050/comments') {
+        return {
+          id: 7050,
+          comment: '<p>Initial evidence</p>',
+          author: { id: 1, username: 'codex' },
+          created: '2026-08-02T10:00:00Z',
+        };
+      }
+      throw new Error(`Unexpected ${method} ${requestPath}`);
+    });
+    const client = {
+      request,
+      getConfig: () => ({
+        vikunjaWebUrl: 'https://vikunja.example.com/',
+        vikunjaToken: 'test-token',
+      }),
+    } as any;
+    const tasks = [{ title: 'First', firstComment: 'Initial evidence' }];
+
+    const first = await bulkCreateTasks(client, { id: 101 }, tasks, 'bulk-composite', 'Codex');
+    const writesAfterFirst = request.mock.calls.filter(([method]) => method === 'POST').length;
+    const status = getBulkOperationStatus(first.operationId);
+    const second = await bulkCreateTasks(client, { id: 101 }, tasks, 'bulk-composite', 'Codex');
+
+    expect(status.receipts[0]).toMatchObject({
+      state: 'changed',
+      firstComment: { status: 'created', id: 7050 },
+    });
+    expect(second).toMatchObject({ operationId: first.operationId, skipped: 1 });
+    expect(request.mock.calls.filter(([method]) => method === 'POST')).toHaveLength(
+      writesAfterFirst,
+    );
+  });
+
+  it('reports a created task and preserves a non-retryable composition failure', async () => {
+    const request = jest.fn(async (method: string, requestPath: string, options?: any) => {
+      if (method === 'GET' && requestPath === '/projects/101') {
+        return { id: 101, title: 'Alpha' };
+      }
+      if (method === 'POST' && requestPath === '/projects/101/tasks') {
+        return {
+          id: 9051,
+          index: 51,
+          identifier: 'ALPHA-51',
+          title: options.body.title,
+          project_id: 101,
+        };
+      }
+      if (method === 'GET' && requestPath === '/tasks/9051') {
+        return {
+          id: 9051,
+          index: 51,
+          identifier: 'ALPHA-51',
+          title: 'First',
+          project_id: 101,
+          related_tasks: {},
+        };
+      }
+      if (method === 'GET' && requestPath === '/tasks/9052') {
+        return {
+          id: 9052,
+          index: 52,
+          identifier: 'ALPHA-52',
+          title: 'Second',
+          project_id: 101,
+        };
+      }
+      if (method === 'POST' && requestPath === '/tasks/9051/relations') {
+        throw new VikunjaError({
+          status: 422,
+          code: 'VALIDATION_ERROR',
+          method,
+          path: requestPath,
+          message: 'Relation rejected',
+          fieldErrors: [],
+        });
+      }
+      throw new Error(`Unexpected ${method} ${requestPath}`);
+    });
+    const client = {
+      request,
+      getConfig: () => ({
+        vikunjaWebUrl: 'https://vikunja.example.com/',
+        vikunjaToken: 'test-token',
+      }),
+    } as any;
+    const tasks = [
+      {
+        title: 'First',
+        relations: [{ relationKind: 'related', otherTaskSelector: { globalId: 9052 } }],
+      },
+    ];
+
+    const result = await bulkCreateTasks(client, { id: 101 }, tasks, 'bulk-partial', 'Codex');
+    const status = getBulkOperationStatus(result.operationId);
+
+    expect(result).toMatchObject({ created: 1, changed: 0, failed: 1 });
+    expect(status.receipts[0]).toMatchObject({
+      state: 'failed',
+      retryable: false,
+      finalIdentity: { id: 9051, portalRef: 'ALPHA-51' },
+      relations: [{ status: 'failed', relationKind: 'related' }],
+    });
+  });
+
   it('does not persist response-only skip metadata without owning the bulk lease', async () => {
     let releaseSecondRow!: () => void;
     const secondRowReleased = new Promise<void>((resolve) => {

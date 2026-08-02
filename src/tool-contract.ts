@@ -42,20 +42,28 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
       action: 'create',
       required: [...mutationEnvelope, 'fields.title'],
       optional: ['fields', 'attachments', 'firstComment', 'relations', 'dryRun', 'responseMode'],
-      execution: 'Direct POST; MCP-composed when attachments are supplied',
+      execution:
+        'Direct POST; MCP-composed when attachments, a first comment, or relations are supplied',
       note: 'For 3 or more tasks use vikunja_task_bulk create instead of repeated create calls.',
     },
     {
       action: 'create_if_absent',
       required: [...mutationEnvelope, 'fields.title'],
-      optional: ['fields', 'attachments', 'dryRun', 'responseMode'],
+      optional: ['fields', 'attachments', 'firstComment', 'relations', 'dryRun', 'responseMode'],
       execution: 'MCP-composed exact-title search then optional create/attach',
       note: 'Best-effort duplicate prevention, not a distributed lock.',
     },
     {
       action: 'upsert',
       required: [...mutationEnvelope, 'fields.title', 'externalKey'],
-      optional: ['fields', 'expectedUpdatedAt', 'dryRun', 'responseMode'],
+      optional: [
+        'fields',
+        'expectedUpdatedAt',
+        'firstComment',
+        'relations',
+        'dryRun',
+        'responseMode',
+      ],
       execution: 'MCP-composed description-key lookup followed by create or conditional update',
       note: 'Requires server-side description filtering. Updating a matched title/description also requires expectedUpdatedAt.',
     },
@@ -463,9 +471,9 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     {
       action: 'create',
       required: ['projectSelector', 'tasks', 'actor', 'idempotencyKey'],
-      optional: ['dryRun'],
+      optional: ['tasks[].externalKey', 'tasks[].firstComment', 'tasks[].relations', 'dryRun'],
       execution: 'MCP-composed bounded task creates with durable row receipts',
-      note: 'Each row may provide externalKey and expectedUpdatedAt. Repeating the same request resumes failed rows and skips recorded successes.',
+      note: 'Each row may provide externalKey, expectedUpdatedAt, firstComment, and relations. Repeating the same request resumes failed rows and skips recorded successes.',
     },
     {
       action: 'delete',
@@ -579,7 +587,7 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
         'overwrite (default false)',
       ],
       execution: 'MCP-composed paginated export to sandboxed JSON or CSV',
-      note: 'Creator is always included; comments, attachments, and relations are fetched only when their include flags are true. Rich exports fail clearly when configured task or per-task detail limits are exceeded.',
+      note: 'Creator is always included; comments, attachments, and relations are fetched only when their include flags are true. The receipt reports task count, API request count, elapsed time, and incomplete=false; bounded truncation fails explicitly.',
     },
   ],
   vikunja_project_migration: [
@@ -603,6 +611,12 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
       required: ['operationId'],
       optional: ['cursor', 'perPage', 'countOnly'],
       execution: 'Paginated durable local migration receipts',
+    },
+    {
+      action: 'cancel',
+      required: ['operationId', 'actor'],
+      execution:
+        'Durable cancellation request checked before the next destination write and before source archival',
     },
   ],
   vikunja_request_user_export: [

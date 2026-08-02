@@ -64,6 +64,7 @@ import {
   closeIfVerified,
   closeWithStructuredEvidence,
   transitionWithEvidence,
+  composeTaskCreation,
 } from './tasks.js';
 import {
   createComment,
@@ -135,6 +136,7 @@ import {
 import { instantiateTemplate, TemplateStore } from './templates.js';
 import {
   getProjectMigrationStatus,
+  cancelProjectMigration,
   previewProjectMigration,
   runProjectMigration,
 } from './migration.js';
@@ -601,121 +603,6 @@ async function runTaskMutation(
   }
 }
 
-async function composeCreatedTask(
-  client: VikunjaApiClient,
-  args: Record<string, any>,
-  created: any,
-) {
-  if (!args.firstComment && !args.relations?.length) return created;
-  if (args.dryRun === true) {
-    return {
-      ...created,
-      planned: {
-        firstComment: Boolean(args.firstComment),
-        relations: args.relations?.length ?? 0,
-      },
-      composedCalls: [],
-    };
-  }
-  const composedCalls: string[] = [];
-  let partial = false;
-  let firstComment: any;
-  if (args.firstComment) {
-    composedCalls.push(`POST /tasks/${created.target.id}/comments`);
-    try {
-      const comment = await createComment(
-        client,
-        { globalId: created.target.id },
-        args.firstComment,
-        undefined,
-        `${args.idempotencyKey}:first-comment`,
-        args.actor,
-      );
-      firstComment = { status: 'created', id: comment.id, created: comment.created };
-    } catch (error) {
-      partial = true;
-      const contextual = error as any;
-      contextual.operationId ??= durableOperationKey(
-        'comment-create',
-        `${args.idempotencyKey}:first-comment`,
-        {
-          taskSelector: { globalId: created.target.id },
-          projectSelector: undefined,
-          comment: args.firstComment,
-          actor: args.actor,
-        },
-      );
-      contextual.identity ??= {
-        project: created.target.project,
-        task: created.target,
-      };
-      firstComment = {
-        status: 'failed',
-        error: toErrorEnvelope(contextual, client.getConfig().vikunjaToken).error,
-      };
-    }
-  }
-  const relations = [];
-  for (const [index, relation] of (args.relations ?? []).entries()) {
-    composedCalls.push(`POST /tasks/${created.target.id}/relations`);
-    try {
-      const receipt = await runDurableOperation(
-        'task-create-relation',
-        `${args.idempotencyKey}:${index}`,
-        {
-          taskId: created.target.id,
-          otherTaskSelector: relation.otherTaskSelector,
-          relationKind: relation.relationKind,
-        },
-        () =>
-          relateTask(
-            client,
-            { globalId: created.target.id },
-            relation.otherTaskSelector,
-            relation.relationKind,
-            args.projectSelector,
-          ),
-      );
-      relations.push({
-        status: 'created',
-        relationKind: relation.relationKind,
-        otherTask: receipt.otherTask,
-        action: receipt.action,
-      });
-    } catch (error) {
-      partial = true;
-      const contextual = error as any;
-      contextual.operationId ??= durableOperationKey(
-        'task-create-relation',
-        `${args.idempotencyKey}:${index}`,
-        {
-          taskId: created.target.id,
-          otherTaskSelector: relation.otherTaskSelector,
-          relationKind: relation.relationKind,
-        },
-      );
-      contextual.identity ??= {
-        project: created.target.project,
-        task: created.target,
-        otherTask: relation.otherTaskSelector,
-      };
-      relations.push({
-        status: 'failed',
-        relationKind: relation.relationKind,
-        otherTaskSelector: relation.otherTaskSelector,
-        error: toErrorEnvelope(contextual, client.getConfig().vikunjaToken).error,
-      });
-    }
-  }
-  return {
-    ...created,
-    firstComment,
-    relations,
-    composedCalls,
-    outcome: partial ? 'partial' : 'completed',
-  };
-}
-
 function hasDefinedValue(value: Record<string, unknown> | undefined): boolean {
   return !!value && Object.values(value).some((field) => field !== undefined);
 }
@@ -1127,6 +1014,8 @@ export const TOOLS: McpToolDefinition[] = [
               projectSelector: args.projectSelector,
               fields,
               attachments: args.attachments,
+              firstComment: args.firstComment,
+              relations: args.relations,
               actor: args.actor,
             },
             async () => {
@@ -1142,7 +1031,7 @@ export const TOOLS: McpToolDefinition[] = [
                 )),
                 actor: args.actor,
               };
-              return composeCreatedTask(client, args, created);
+              return composeTaskCreation(client, created, args);
             },
           );
         }
@@ -1164,20 +1053,25 @@ export const TOOLS: McpToolDefinition[] = [
               projectSelector: args.projectSelector,
               fields,
               attachments: args.attachments,
+              firstComment: args.firstComment,
+              relations: args.relations,
               actor: args.actor,
             },
-            async () => ({
-              ...(await createIfAbsent(
-                client,
-                args.projectSelector,
-                fields,
-                args.idempotencyKey,
-                args.attachments,
-                args.actor,
-                args.dryRun ?? false,
-              )),
-              actor: args.actor,
-            }),
+            async () => {
+              const created = {
+                ...(await createIfAbsent(
+                  client,
+                  args.projectSelector,
+                  fields,
+                  args.idempotencyKey,
+                  args.attachments,
+                  args.actor,
+                  args.dryRun ?? false,
+                )),
+                actor: args.actor,
+              };
+              return composeTaskCreation(client, created, args);
+            },
           );
         }
         case 'upsert':
@@ -1191,9 +1085,11 @@ export const TOOLS: McpToolDefinition[] = [
               fields: args.fields,
               externalKey: args.externalKey,
               expectedUpdatedAt: args.expectedUpdatedAt,
+              firstComment: args.firstComment,
+              relations: args.relations,
             },
-            (dryRun) =>
-              upsertTask(
+            async (dryRun) => {
+              const created = await upsertTask(
                 client,
                 args.projectSelector,
                 {
@@ -1207,7 +1103,9 @@ export const TOOLS: McpToolDefinition[] = [
                 args.expectedUpdatedAt,
                 args.actor,
                 dryRun,
-              ),
+              );
+              return composeTaskCreation(client, created, { ...args, dryRun });
+            },
           );
         case 'get':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
@@ -2063,6 +1961,18 @@ export const TOOLS: McpToolDefinition[] = [
             dueDate: z.string().nullable().optional(),
             externalKey: z.string().regex(EXTERNAL_KEY_PATTERN).optional(),
             expectedUpdatedAt: z.string().optional(),
+            firstComment: z.string().trim().min(1).optional(),
+            relations: z
+              .array(
+                z
+                  .object({
+                    otherTaskSelector: taskSelectorSchema,
+                    relationKind: z.string().trim().min(1),
+                  })
+                  .strict(),
+              )
+              .max(20)
+              .optional(),
           }),
         )
         .min(1)
@@ -2346,9 +2256,9 @@ export const TOOLS: McpToolDefinition[] = [
   {
     name: 'vikunja_project_migration',
     description:
-      'Preview, run, resume, or inspect a durable Vikunja-to-GitHub project migration. Available only in the full tool profile.',
+      'Preview, run, cancel, resume, or inspect a durable Vikunja-to-GitHub project migration. Available only in the full tool profile.',
     inputSchema: z.object({
-      action: z.enum(['preview', 'run', 'status']),
+      action: z.enum(['preview', 'run', 'status', 'cancel']),
       projectSelector: z
         .object({
           id: z.number().int().positive().optional(),
@@ -2382,6 +2292,13 @@ export const TOOLS: McpToolDefinition[] = [
           args.cursor,
           args.perPage,
           args.countOnly,
+        );
+      }
+      if (args.action === 'cancel') {
+        if (!args.operationId) throw badRequest('operationId is required for migration cancel.');
+        return cancelProjectMigration(
+          args.operationId,
+          requireActor(args.actor, 'project migration cancellation'),
         );
       }
       if (!args.projectSelector) throw badRequest('projectSelector is required.');

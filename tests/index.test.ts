@@ -321,6 +321,14 @@ describe('MCP Server Registration and Dispatching tests', () => {
       expect.arrayContaining(['taskSelectors', 'actor', 'idempotencyKey']),
     );
     expect(bulkAssignBranch.properties).not.toHaveProperty('taskIds');
+    const bulkCreateBranch = bulkTool.inputSchema.oneOf.find(
+      (branch: any) => branch.properties.action.const === 'create',
+    );
+    const bulkTasksSchema = bulkCreateBranch.properties.tasks.items
+      ? bulkCreateBranch.properties.tasks
+      : bulkTool.inputSchema.$defs.tasks;
+    expect(bulkTasksSchema.items.properties).toHaveProperty('firstComment');
+    expect(bulkTasksSchema.items.properties).toHaveProperty('relations');
 
     const exportTool = response.tools.find((t: any) => t.name === 'vikunja_export_project');
     expect(exportTool.inputSchema.properties).toHaveProperty('includeAttachments');
@@ -594,6 +602,78 @@ describe('MCP Server Registration and Dispatching tests', () => {
     expect(writesAfterFirst).toBe(3);
     expect(request.mock.calls.filter(([method]) => method === 'POST')).toHaveLength(3);
   });
+
+  it.each(['create_if_absent', 'upsert'] as const)(
+    'composes %s with the requested first comment',
+    async (action) => {
+      const taskTool = TOOLS.find((tool) => tool.name === 'vikunja_tasks')!;
+      const request = jest.fn(async (method: string, apiPath: string) => {
+        if (method === 'GET' && apiPath === '/projects/101') {
+          return { id: 101, title: 'Alpha' };
+        }
+        if (method === 'GET' && apiPath.startsWith('/projects/101/tasks?filter=')) {
+          return { items: [], page: 1, per_page: 5, total: 0, total_pages: 0 };
+        }
+        if (method === 'POST' && apiPath === '/projects/101/tasks') {
+          return {
+            id: action === 'upsert' ? 9021 : 9020,
+            index: action === 'upsert' ? 321 : 320,
+            identifier: action === 'upsert' ? 'ALPHA-321' : 'ALPHA-320',
+            title: 'Composite parity',
+            project_id: 101,
+          };
+        }
+        if (method === 'GET' && /^\/tasks\/902[01]$/.test(apiPath)) {
+          return {
+            id: action === 'upsert' ? 9021 : 9020,
+            index: action === 'upsert' ? 321 : 320,
+            identifier: action === 'upsert' ? 'ALPHA-321' : 'ALPHA-320',
+            title: 'Composite parity',
+            project_id: 101,
+          };
+        }
+        if (method === 'POST' && /^\/tasks\/902[01]\/comments$/.test(apiPath)) {
+          return {
+            id: 7020,
+            comment: '<p>Initial evidence</p>',
+            author: { id: 1, username: 'codex' },
+            created: '2026-08-02T10:00:00Z',
+          };
+        }
+        throw new Error(`Unexpected request: ${method} ${apiPath}`);
+      });
+      const client = {
+        request,
+        getConfig: () => ({
+          vikunjaWebUrl: 'https://vikunja.example.com/',
+          vikunjaToken: 'tk_test',
+        }),
+      } as any;
+
+      const result = await taskTool.handler(
+        {
+          action,
+          projectSelector: { id: 101 },
+          fields: { title: 'Composite parity' },
+          ...(action === 'upsert' ? { externalKey: 'composite-parity' } : {}),
+          firstComment: 'Initial evidence',
+          actor: 'Codex',
+          idempotencyKey: `composite-${action}`,
+        },
+        client,
+      );
+
+      expect(result).toMatchObject({
+        firstComment: { status: 'created', id: 7020 },
+        outcome: 'completed',
+      });
+      expect(
+        request.mock.calls.filter(
+          ([method, apiPath]) => method === 'POST' && String(apiPath).endsWith('/comments'),
+        ),
+      ).toHaveLength(1);
+    },
+  );
 
   it('does not replay a composed relation with an ambiguous remote outcome', async () => {
     const taskTool = TOOLS.find((tool) => tool.name === 'vikunja_tasks')!;

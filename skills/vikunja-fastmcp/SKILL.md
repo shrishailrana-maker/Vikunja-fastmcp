@@ -103,6 +103,9 @@ requests or legacy tracker scripts while the MCP is available.
 
 - Prefer `vikunja_task_bulk` `create` (or `upsert` with `externalKey`) when
   filing 3 or more tasks.
+- Add `firstComment` and `relations` directly to create, create-if-absent,
+  upsert, or a bulk-create row instead of making separate follow-up calls.
+  Inspect the durable row receipt when a composed sub-operation is partial.
 - Use `upsert` with a stable `externalKey`, such as file plus line plus
   detector, so reruns update the existing finding instead of duplicating it.
 - Prefer `create_if_absent` for duplicate-sensitive creation, while remembering
@@ -183,8 +186,10 @@ requests or legacy tracker scripts while the MCP is available.
 ## Portable Migration
 
 - Project migration is available only in the explicit `full` profile. Preview
-  first, then run with one stable idempotency key and inspect paginated status
-  receipts before archiving source tasks.
+  first and review its API-call estimate, then run with one stable idempotency
+  key and inspect paginated status receipts before archiving source tasks. Use
+  `cancel` with the operation ID and actor to stop before the next destination
+  write or source archival.
 - Public sanitization is mandatory. The GitHub token comes only from the MCP
   process environment and must never be placed in tool arguments or task text.
 - A source task closes only after the destination issue and every migrated

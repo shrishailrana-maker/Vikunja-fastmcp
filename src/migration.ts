@@ -349,6 +349,9 @@ function migrationSummary(state: any) {
     archived: receipts.filter((receipt: any) => receipt.sourceArchived === true).length,
     manifestFile: state.manifestFile,
     binaryAttachmentsTransferred: false,
+    ...(state.cancelledAt
+      ? { cancelledAt: state.cancelledAt, cancelledBy: state.cancelledBy }
+      : {}),
   };
 }
 
@@ -373,6 +376,44 @@ function migrationInProgress(operationId: string): VikunjaError {
     fieldErrors: [],
     operationId,
   });
+}
+
+function migrationCancellationKey(operationId: string): string {
+  return `project-migration-cancel:${operationId}`;
+}
+
+export function cancelProjectMigration(operationId: string, actor: string) {
+  const state = idempotency.get(`project-migration-state:${operationId}`);
+  if (!state) {
+    throw new VikunjaError({
+      status: 404,
+      code: 'MIGRATION_OPERATION_NOT_FOUND',
+      method: 'TOOLS_CALL',
+      path: 'vikunja_project_migration.cancel',
+      message: `No project migration operation was found for "${operationId}".`,
+      fieldErrors: [],
+    });
+  }
+  if (state.status !== 'running') {
+    return {
+      ...migrationSummary(state),
+      cancellationRequested: false,
+      message: `Migration is already ${state.status}.`,
+    };
+  }
+  const request = {
+    requested: true,
+    actor,
+    requestedAt: new Date().toISOString(),
+  };
+  idempotency.set(migrationCancellationKey(operationId), request);
+  return {
+    operationId,
+    status: 'cancellation_requested',
+    cancellationRequested: true,
+    actor,
+    requestedAt: request.requestedAt,
+  };
 }
 
 export async function assertMigrationSourceUnchanged(
@@ -436,10 +477,19 @@ export async function previewProjectMigration(
     options,
     operationFingerprint,
   );
+  const commentCount = manifest.tasks.reduce(
+    (count, task) => count + Number(task.commentCount ?? 0),
+    0,
+  );
+  const tasksWithComments = manifest.tasks.filter(
+    (task) => Number(task.commentCount ?? 0) > 0,
+  ).length;
+  const destinationMinimum = manifest.tasks.length * 3 + tasksWithComments * 2 + commentCount;
+  const sourceArchiveMinimum = options.archiveSource ? manifest.tasks.length * 4 : 0;
   return {
     status: 'preview',
     taskCount: manifest.tasks.length,
-    commentCount: manifest.tasks.reduce((count, task) => count + Number(task.commentCount ?? 0), 0),
+    commentCount,
     attachmentCount: manifest.tasks.reduce(
       (count, task) => count + Number(task.attachmentCount ?? 0),
       0,
@@ -451,6 +501,11 @@ export async function previewProjectMigration(
     sanitizationCount: manifest.sanitizationCount,
     manifestFile: manifestFileName,
     binaryAttachmentTransferSupported: false,
+    estimatedApiCalls: {
+      destinationMinimum,
+      sourceArchiveMinimum,
+      totalMinimum: destinationMinimum + sourceArchiveMinimum,
+    },
   };
 }
 
@@ -467,6 +522,7 @@ export async function runProjectMigration(
   });
   const operationId = operationFileId(operationKey);
   const stateKey = `project-migration-state:${operationId}`;
+  const cancellationKey = migrationCancellationKey(operationId);
   const operationFingerprint = migrationOperationFingerprint(options);
   const leased = idempotency.acquireLease(
     stateKey,
@@ -498,6 +554,15 @@ export async function runProjectMigration(
       throw migrationLeaseLost();
     }
   };
+  const stopIfCancelled = () => {
+    const cancellation = idempotency.get(cancellationKey);
+    if (cancellation?.requested !== true) return false;
+    state.status = 'cancelled';
+    state.cancelledAt = new Date().toISOString();
+    state.cancelledBy = cancellation.actor;
+    saveState();
+    return true;
+  };
   const heartbeat = setInterval(
     () => {
       try {
@@ -524,10 +589,12 @@ export async function runProjectMigration(
     state.manifestHash = manifestHash;
     state.operationFingerprint = operationFingerprint;
     saveState();
+    if (stopIfCancelled()) return migrationSummary(state);
     const destination = new GitHubIssueDestination(options.destination, renewLease);
 
     for (const task of manifest.tasks) {
       renewLease();
+      if (stopIfCancelled()) return migrationSummary(state);
       const existingReceipt = state.receipts.find(
         (receipt: any) => receipt.sourceTaskId === task.id,
       );
@@ -565,6 +632,7 @@ export async function runProjectMigration(
         renewLease();
         let sourceArchived = false;
         if (options.archiveSource) {
+          if (stopIfCancelled()) return migrationSummary(state);
           const expectedUpdatedAt = await assertMigrationSourceUnchanged(client, task);
           renewLease();
           const close = await closeWithEvidence(

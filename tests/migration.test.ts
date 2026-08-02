@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  cancelProjectMigration,
   getProjectMigrationStatus,
   assertMigrationSourceUnchanged,
   previewProjectMigration,
@@ -213,6 +214,11 @@ describe('portable project migration', () => {
       attachmentCount: 1,
       relationCount: 1,
       binaryAttachmentTransferSupported: false,
+      estimatedApiCalls: expect.objectContaining({
+        destinationMinimum: expect.any(Number),
+        sourceArchiveMinimum: expect.any(Number),
+        totalMinimum: expect.any(Number),
+      }),
     });
     expect(manifest).toMatchObject({
       schemaVersion: 1,
@@ -384,6 +390,26 @@ describe('portable project migration', () => {
       totalCount: 3,
       nextCursor: null,
       incomplete: false,
+    });
+  });
+
+  it('records a durable cancellation request for a running migration', () => {
+    idempotency.set('project-migration-state:cancel-me', {
+      operationId: 'cancel-me',
+      status: 'running',
+      requested: 3,
+      receipts: [],
+    });
+
+    expect(cancelProjectMigration('cancel-me', 'Codex')).toMatchObject({
+      operationId: 'cancel-me',
+      status: 'cancellation_requested',
+      cancellationRequested: true,
+      actor: 'Codex',
+    });
+    expect(idempotency.get('project-migration-cancel:cancel-me')).toMatchObject({
+      requested: true,
+      actor: 'Codex',
     });
   });
 

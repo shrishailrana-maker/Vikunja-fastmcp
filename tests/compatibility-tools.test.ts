@@ -452,6 +452,12 @@ describe('restored compatibility capabilities', () => {
         } as Response);
 
       const result = await exportProject(exportClient, { id: 2 }, 'json', 'alpha.json', true);
+      expect(result).toMatchObject({
+        taskCount: 1,
+        apiRequestCount: 3,
+        incomplete: false,
+      });
+      expect(result.elapsedMs).toEqual(expect.any(Number));
       const exported = JSON.parse(await fs.readFile(result.path, 'utf8'));
 
       expect(exported.tasks[0].creator).toEqual({ id: 7, username: 'example-tester' });

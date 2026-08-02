@@ -500,6 +500,13 @@ Count-only success example:
 `create_if_absent` performs an exact-title search in one project and creates
 only when no match exists.
 
+`create`, `create_if_absent`, and stable-key `upsert` accept an optional first
+comment and up to 20 relations. Bulk create accepts the same values per row.
+Each sub-operation has a durable key derived from the parent idempotency key;
+the receipt names successful and failed sub-operations without repeating the
+task body. A created task remains truthfully reported when a later comment or
+relation is partial.
+
 This is best-effort duplicate prevention, not a distributed uniqueness lock.
 Two machines can still search before either creates, so Vikunja may receive two
 tasks. The durable local ledger protects same-machine retries and parallel
@@ -617,6 +624,8 @@ to 1,000 tasks. Exports that include comments, attachments, or relations also
 default to 1,000 tasks and 100 items per requested collection per task. A caller
 may choose lower `taskLimit` and `detailLimit` values; exceeding either limit
 fails explicitly rather than silently truncating an audit artifact.
+The successful receipt reports `taskCount`, the actual Vikunja
+`apiRequestCount`, `elapsedMs`, and `incomplete:false`.
 
 ### Tester-To-Developer Log Workflow
 
@@ -645,8 +654,11 @@ added later, it must require an explicit configured path documented by
 ## Portable Project Migration
 
 The full tool profile exposes a GitHub issue migration with `preview`, `run`,
-and paginated `status` actions. It is MCP-composed and uses the existing
-versioned project export as its source.
+paginated `status`, and durable `cancel` actions. Preview reports task,
+comment, attachment, relation, and estimated API-call counts. Cancellation is
+checked before the next destination write and immediately before source
+archival. The workflow is MCP-composed and uses the existing versioned project
+export as its source.
 
 Each operation writes a schema-versioned manifest inside the configured
 attachment/export sandbox. Mandatory public sanitization removes credentials,

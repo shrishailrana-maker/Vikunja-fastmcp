@@ -30,6 +30,7 @@ import {
   fetchAllCollectionItems,
 } from './format.js';
 import {
+  durableOperationKey,
   lookupDurableOperationReceipt,
   payloadFingerprint,
   runDurableOperation,
@@ -132,6 +133,134 @@ export interface WriteEcho {
 export interface UpsertEcho extends WriteEcho {
   externalKey: string;
   actor?: string;
+}
+
+export interface TaskCreationRelationInput {
+  otherTaskSelector: TaskSelectorInput;
+  relationKind: string;
+}
+
+export interface TaskCreationCompositionOptions {
+  firstComment?: string;
+  relations?: TaskCreationRelationInput[];
+  idempotencyKey?: string;
+  actor?: string;
+  projectSelector?: { id?: number; title?: string };
+  dryRun?: boolean;
+}
+
+export async function composeTaskCreation(
+  client: VikunjaApiClient,
+  created: any,
+  options: TaskCreationCompositionOptions,
+) {
+  if (!options.firstComment && !options.relations?.length) return created;
+  if (options.dryRun === true) {
+    return {
+      ...created,
+      planned: {
+        firstComment: Boolean(options.firstComment),
+        relations: options.relations?.length ?? 0,
+      },
+      composedCalls: [],
+    };
+  }
+  if (!options.idempotencyKey) {
+    throw new VikunjaError({
+      status: 400,
+      code: 'IDEMPOTENCY_KEY_REQUIRED',
+      method: 'TOOLS_CALL',
+      path: 'idempotencyKey',
+      message: 'idempotencyKey is required for a composite task creation.',
+      fieldErrors: [],
+    });
+  }
+
+  const composedCalls: string[] = [];
+  let partial = false;
+  let firstComment: any;
+  if (options.firstComment) {
+    composedCalls.push(`POST /tasks/${created.target.id}/comments`);
+    const commentKey = `${options.idempotencyKey}:first-comment`;
+    try {
+      const comment = await createComment(
+        client,
+        { globalId: created.target.id },
+        options.firstComment,
+        options.projectSelector,
+        commentKey,
+        options.actor,
+      );
+      firstComment = { status: 'created', id: comment.id, created: comment.created };
+    } catch (error) {
+      partial = true;
+      const contextual = error as any;
+      contextual.operationId ??= durableOperationKey('comment-create', commentKey, {
+        taskSelector: { globalId: created.target.id },
+        projectSelector: options.projectSelector,
+        comment: options.firstComment,
+        actor: options.actor,
+      });
+      contextual.identity ??= { project: created.target.project, task: created.target };
+      firstComment = {
+        status: 'failed',
+        error: toErrorEnvelope(contextual, client.getConfig().vikunjaToken).error,
+      };
+    }
+  }
+
+  const relations = [];
+  for (const [index, relation] of (options.relations ?? []).entries()) {
+    composedCalls.push(`POST /tasks/${created.target.id}/relations`);
+    // Keep the original create-composition key and payload shape so receipts
+    // written by earlier releases remain reusable after an upgrade.
+    const relationKey = `${options.idempotencyKey}:${index}`;
+    const payload = {
+      taskId: created.target.id,
+      otherTaskSelector: relation.otherTaskSelector,
+      relationKind: relation.relationKind,
+    };
+    try {
+      const receipt = await runDurableOperation('task-create-relation', relationKey, payload, () =>
+        relateTask(
+          client,
+          { globalId: created.target.id },
+          relation.otherTaskSelector,
+          relation.relationKind,
+          options.projectSelector,
+        ),
+      );
+      relations.push({
+        status: 'created',
+        relationKind: relation.relationKind,
+        otherTask: receipt.otherTask,
+        action: receipt.action,
+      });
+    } catch (error) {
+      partial = true;
+      const contextual = error as any;
+      contextual.operationId ??= durableOperationKey('task-create-relation', relationKey, payload);
+      contextual.identity ??= {
+        project: created.target.project,
+        task: created.target,
+        otherTask: relation.otherTaskSelector,
+      };
+      relations.push({
+        status: 'failed',
+        relationKind: relation.relationKind,
+        otherTaskSelector: relation.otherTaskSelector,
+        error: toErrorEnvelope(contextual, client.getConfig().vikunjaToken).error,
+      });
+    }
+  }
+
+  return {
+    ...created,
+    firstComment,
+    relations,
+    composedCalls,
+    outcome: partial ? 'partial' : 'completed',
+  };
 }
 
 export const EXTERNAL_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9:_\-./#]{0,119}$/;

@@ -196,7 +196,9 @@ compatibility router:
 - `vikunja_projects` — project list and get.
 - `vikunja_task_read` — scoped list/search, projected get, batch get, task
   verification, project/programme snapshots, and durable receipt lookup.
-- `vikunja_task_write` — guarded create, upsert, update, and delete operations.
+- `vikunja_task_write` — guarded create, create-if-absent, upsert, update, and
+  delete operations. Create variants can add a first comment and relations in
+  the same durable operation.
 - `vikunja_task_workflow` — close, reopen, evidence append, verified close, and
   other composed evidence workflows with compact receipts.
 - `vikunja_task_attachments` — typed upload, bounded list/count, authenticated
@@ -219,14 +221,16 @@ Additional profile-dependent tools:
 - `vikunja_teams` — teams/members (`userId` is the Vikunja user id)
 - `vikunja_filters` — create/get/update/delete (**no list**; API has no collection GET)
 - `vikunja_task_bulk` — resumable create/upsert, update, delete, assign, and
-  unassign operations with durable per-row receipts, dry-run, and status lookup.
+  unassign operations with durable per-row receipts, dry-run, status lookup,
+  and optional first-comment/relation composition on each create row.
 - `vikunja_task_reminders` — list/add/remove task reminders
 - `vikunja_batch_import` — detect, preview, import, and status for native-fast
   or MCP-idempotent CSV migration.
 - `vikunja_export_project` — local JSON/CSV export with optional comments,
-  attachments, and relations.
-- `vikunja_project_migration` — full-profile preview/run/status workflow for a
-  resumable, sanitized GitHub issue migration with destination read-back.
+  attachments, and relations. Its receipt reports task count, actual API
+  requests, elapsed time, and completion state.
+- `vikunja_project_migration` — full-profile preview/run/status/cancel workflow
+  for a resumable, sanitized GitHub issue migration with destination read-back.
 - `vikunja_request_user_export` / `vikunja_download_user_export`
 - `vikunja_templates` — machine-local templates and task instantiation
 - `vikunja_webhooks` — project/user webhooks and event discovery
@@ -249,7 +253,8 @@ where the operating system supports POSIX permissions.
 Use `upsert` with a stable `externalKey` when a detector or repeated agent run
 must update the same finding instead of creating duplicates. For three or more
 tasks, prefer `vikunja_task_bulk create`; each row can carry its own
-`externalKey`, and every mutating batch requires an `idempotencyKey`. Bulk
+`externalKey`, first comment, and relations, and every mutating batch requires
+an `idempotencyKey`. Bulk
 assign/unassign accept `dryRun: true` and report changed, already-correct, and
 failed counts. Re-run the same payload and key to resume failed rows, or use
 the bulk `status` action with its returned `operationId`.
@@ -264,7 +269,8 @@ Project exports fetch comments, attachments, or relations only when the
 matching include flag is enabled. Basic and rich exports default to at most
 1,000 tasks, with 100 comments, attachments, or relations per task. Use
 `taskLimit` and `detailLimit` to choose smaller bounds. Existing files are never
-replaced unless `overwrite: true` is explicit.
+replaced unless `overwrite: true` is explicit. The receipt includes actual API
+request count, elapsed milliseconds, and explicit completion state.
 
 Create, comment-create/update/delete, close, evidence-close, import, and
 mutating bulk operations require `actor` attribution. `summary` returns project
@@ -329,7 +335,9 @@ needed data; use `countOnly` for totals and follow `nextCursor` when
 `incomplete` is true. Request `responseMode: "standard"` for ordinary expanded
 task fields or `responseMode: "full"` for explicit bundled detail.
 
-The full-profile migration is intentionally fail-closed. It writes a versioned,
+The full-profile migration is intentionally fail-closed. Preview reports
+estimated API calls. `cancel` records a durable stop request checked before the
+next destination write and before source archival. The workflow writes a versioned,
 public-sanitized manifest, uses durable per-task receipts, verifies complete
 issue and comment content at GitHub, and closes a source task only after that
 read-back succeeds. Binary attachments are represented as metadata unless a

@@ -5,6 +5,7 @@ import { resolveTaskInput as resolveTask, type TaskSelectorInput } from './ident
 import {
   createTask,
   closeWithEvidence,
+  composeTaskCreation,
   deleteTask,
   applyLabel,
   patchTaskFields,
@@ -13,6 +14,7 @@ import {
   setTaskStatus,
   updateTask,
   upsertTask,
+  type TaskCreationRelationInput,
 } from './tasks.js';
 import { markdownToHtml } from './markdown.js';
 import { idempotency, payloadFingerprint } from './idempotency.js';
@@ -29,6 +31,8 @@ export interface BulkCreateTaskFields extends BulkTaskFields {
   title: string;
   externalKey?: string;
   expectedUpdatedAt?: string;
+  firstComment?: string;
+  relations?: TaskCreationRelationInput[];
 }
 
 export interface BulkCreateResult {
@@ -140,6 +144,7 @@ function bulkSummary(state: any) {
     status: state.status,
     requested: state.requested,
     selected: state.requested,
+    ...(Array.isArray(state.created) ? { created: state.created.length } : {}),
     changed: count('changed'),
     unchanged: count('unchanged'),
     skipped: count('skipped'),
@@ -448,7 +453,7 @@ export async function bulkCreateTasks(
     const receipts = [];
     for (const [index, task] of tasks.entries()) {
       try {
-        const echo = task.externalKey
+        const created = task.externalKey
           ? await upsertTask(
               client,
               project,
@@ -459,10 +464,19 @@ export async function bulkCreateTasks(
               true,
             )
           : await createTask(client, project, task, undefined, undefined, actor, true);
+        const echo = await composeTaskCreation(client, created, {
+          firstComment: task.firstComment,
+          relations: task.relations,
+          idempotencyKey: idempotencyKey ? `${idempotencyKey}:row:${index + 1}` : undefined,
+          actor,
+          projectSelector: project,
+          dryRun: true,
+        });
         receipts.push(
           bulkRowReceipt(index + 1, echo.action === 'unchanged' ? 'unchanged' : 'changed', {
             action: echo.action,
             finalIdentity: echo.target,
+            planned: echo.planned,
           }),
         );
       } catch (error: any) {
@@ -506,9 +520,20 @@ export async function bulkCreateTasks(
       result.receipts = result.receipts.filter((receipt: any) => receipt.row !== index + 1);
     }
     try {
-      const echo = task.externalKey
+      const rowKey =
+        idempotencyKey && (task.firstComment || task.relations?.length)
+          ? `${idempotencyKey}:row:${index + 1}`
+          : undefined;
+      const createdEcho = task.externalKey
         ? await upsertTask(client, project, task, task.externalKey, task.expectedUpdatedAt, actor)
-        : await createTask(client, project, task, undefined, undefined, actor);
+        : await createTask(client, project, task, rowKey, undefined, actor);
+      const echo = await composeTaskCreation(client, createdEcho, {
+        firstComment: task.firstComment,
+        relations: task.relations,
+        idempotencyKey: rowKey,
+        actor,
+        projectSelector: project,
+      });
       const created = {
         id: echo.target.id,
         portalRef: echo.target.identifier || `#${echo.target.index}`,
@@ -517,11 +542,46 @@ export async function bulkCreateTasks(
       if (!result.created.some((item: any) => item.id === created.id)) {
         result.created.push(created);
       }
+      if (echo.outcome === 'partial') {
+        const composedErrors = [
+          echo.firstComment?.error,
+          ...(echo.relations ?? []).map((relation: any) => relation.error),
+        ].filter(Boolean);
+        const failure = {
+          row: index + 1,
+          title: task.title,
+          error:
+            'Task was created, but one or more requested comment or relation operations failed.',
+          retryable: composedErrors.some((error: any) => error.retryable !== false),
+        };
+        result.failed.push(failure);
+        result.receipts?.push(
+          bulkRowReceipt(
+            index + 1,
+            'failed',
+            {
+              ...failure,
+              action: echo.action,
+              finalIdentity: created,
+              firstComment: echo.firstComment,
+              relations: echo.relations,
+            },
+            previous,
+          ),
+        );
+        saveBulkOperation(operation, result);
+        continue;
+      }
       result.receipts?.push(
         bulkRowReceipt(
           index + 1,
           echo.action === 'exists' || echo.action === 'unchanged' ? 'unchanged' : 'changed',
-          { action: echo.action, finalIdentity: created },
+          {
+            action: echo.action,
+            finalIdentity: created,
+            firstComment: echo.firstComment,
+            relations: echo.relations,
+          },
           previous,
         ),
       );

@@ -309,13 +309,22 @@ export async function exportProject(
   limits: { taskLimit?: number; detailLimit?: number } = {},
   overwrite = false,
 ) {
-  const project = await resolveProject(client, selector);
+  const startedAt = Date.now();
+  let apiRequestCount = 0;
+  const measuredClient = {
+    request: (...args: Parameters<VikunjaApiClient['request']>) => {
+      apiRequestCount += 1;
+      return client.request(...args);
+    },
+    getConfig: () => client.getConfig(),
+  } as VikunjaApiClient;
+  const project = await resolveProject(measuredClient, selector);
   const rich = includeComments || includeAttachments || includeRelations;
   const taskLimit =
     limits.taskLimit ?? (rich ? DEFAULT_RICH_EXPORT_TASK_LIMIT : DEFAULT_EXPORT_TASK_LIMIT);
   const detailLimit = limits.detailLimit ?? DEFAULT_EXPORT_DETAIL_LIMIT;
   const raw = await fetchBoundedCollection<any>(
-    client,
+    measuredClient,
     `/projects/${project.id}/tasks`,
     taskLimit,
     'EXPORT_TASK_LIMIT_EXCEEDED',
@@ -345,7 +354,7 @@ export async function exportProject(
         tasks.slice(offset, offset + 5).map(async (task) => {
           if (includeComments) {
             const comments = await fetchBoundedCollection<any>(
-              client,
+              measuredClient,
               `/tasks/${task.id}/comments`,
               detailLimit,
               'EXPORT_DETAIL_LIMIT_EXCEEDED',
@@ -363,7 +372,7 @@ export async function exportProject(
           }
           if (includeAttachments) {
             const attachments = await fetchBoundedCollection<any>(
-              client,
+              measuredClient,
               `/tasks/${task.id}/attachments`,
               detailLimit,
               'EXPORT_DETAIL_LIMIT_EXCEEDED',
@@ -377,7 +386,7 @@ export async function exportProject(
             task.attachmentCount = task.attachments.length;
           }
           if (includeRelations) {
-            const detail = await client.request<any>('GET', `/tasks/${task.id}`);
+            const detail = await measuredClient.request<any>('GET', `/tasks/${task.id}`);
             const relatedTasks = detail.related_tasks ?? {};
             task.relations = Object.entries(relatedTasks).flatMap(([kind, related]) =>
               Array.isArray(related)
@@ -406,7 +415,7 @@ export async function exportProject(
     }
   }
   const fileName = destinationPath || `project-${project.id}-tasks.${format}`;
-  const exportRoot = client.getConfig().attachmentDownloadRoot;
+  const exportRoot = measuredClient.getConfig().attachmentDownloadRoot;
   const destination = resolveSafePath(exportRoot, fileName);
   if (format === 'json') {
     await writeExportFile(
@@ -458,5 +467,13 @@ export async function exportProject(
     ];
     await writeExportFile(exportRoot, destination, `${lines.join('\n')}\n`, overwrite);
   }
-  return { project, format, path: destination, taskCount: tasks.length };
+  return {
+    project,
+    format,
+    path: destination,
+    taskCount: tasks.length,
+    apiRequestCount,
+    elapsedMs: Date.now() - startedAt,
+    incomplete: false,
+  };
 }

@@ -114,9 +114,9 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 
 | Action | Required | Optional | Execution |
 | --- | --- | --- | --- |
-| `create` | projectSelector, actor, idempotencyKey, fields.title | fields, attachments, firstComment, relations, dryRun, responseMode | Direct POST; MCP-composed when attachments are supplied. For 3 or more tasks use vikunja_task_bulk create instead of repeated create calls. |
-| `create_if_absent` | projectSelector, actor, idempotencyKey, fields.title | fields, attachments, dryRun, responseMode | MCP-composed exact-title search then optional create/attach. Best-effort duplicate prevention, not a distributed lock. |
-| `upsert` | projectSelector, actor, idempotencyKey, fields.title, externalKey | fields, expectedUpdatedAt, dryRun, responseMode | MCP-composed description-key lookup followed by create or conditional update. Requires server-side description filtering. Updating a matched title/description also requires expectedUpdatedAt. |
+| `create` | projectSelector, actor, idempotencyKey, fields.title | fields, attachments, firstComment, relations, dryRun, responseMode | Direct POST; MCP-composed when attachments, a first comment, or relations are supplied. For 3 or more tasks use vikunja_task_bulk create instead of repeated create calls. |
+| `create_if_absent` | projectSelector, actor, idempotencyKey, fields.title | fields, attachments, firstComment, relations, dryRun, responseMode | MCP-composed exact-title search then optional create/attach. Best-effort duplicate prevention, not a distributed lock. |
+| `upsert` | projectSelector, actor, idempotencyKey, fields.title, externalKey | fields, expectedUpdatedAt, firstComment, relations, dryRun, responseMode | MCP-composed description-key lookup followed by create or conditional update. Requires server-side description filtering. Updating a matched title/description also requires expectedUpdatedAt. |
 | `get` | taskSelector | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), commentLimit (full mode only; default 5, max 100), attachmentLimit (full mode only; default 20, max 100), fields (projected task fields in minimal mode), includeUrl (default false), titleMaxChars, maxResponseChars, responseMode (minimal default; receipt/compact/standard/full explicit) | Direct compact/standard GET; full mode composes comments and attachments. taskSelector is exactly one of {globalId}, {identifier}, or {projectIndex}; bare numbers and strings are rejected. |
 | `list` | none | exactly one of projectSelector, projects, allProjects, page (default 1), perPage (default 20; requests above 100 are safely capped to 100), done, allStates, priority (0-5), label, assignee (exact username; numeric user IDs are not valid Vikunja list filters), titleContains (server-side title-only match), descriptionContains (requires server-side description filtering), changedSince (ISO timestamp), actor (matches stored "(by actor)" attribution; requires server-side description filtering), q, search (free-text alias for q), searchIn (all default, title, or description), filter, countOnly, fields (projected task fields), includeUrl (default false), titleMaxChars, maxResponseChars (default 4000 in minimal mode), cursor, responseMode (minimal default; receipt/compact/standard/full explicit) | Direct per project; grouped subsets/allProjects are MCP-composed. Defaults to done=false unless done or allStates is supplied. |
 | `summary` | projectSelector | none | MCP-composed paginated counts by state, priority, and label |
@@ -308,7 +308,7 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 | Action | Required | Optional | Execution |
 | --- | --- | --- | --- |
 | `update` | projectSelector, taskSelectors, fields, actor, idempotencyKey | dryRun | MCP-composed per-task updates with durable row receipts. Bulk title/description replacement is rejected; use individual optimistic updates. |
-| `create` | projectSelector, tasks, actor, idempotencyKey | dryRun | MCP-composed bounded task creates with durable row receipts. Each row may provide externalKey and expectedUpdatedAt. Repeating the same request resumes failed rows and skips recorded successes. |
+| `create` | projectSelector, tasks, actor, idempotencyKey | tasks[].externalKey, tasks[].firstComment, tasks[].relations, dryRun | MCP-composed bounded task creates with durable row receipts. Each row may provide externalKey, expectedUpdatedAt, firstComment, and relations. Repeating the same request resumes failed rows and skips recorded successes. |
 | `delete` | projectSelector, taskSelectors, confirm, actor, idempotencyKey | dryRun | MCP-composed verified task deletes with durable row receipts |
 | `assign` | projectSelector, taskSelectors, userSelector, actor, idempotencyKey | dryRun | Resolve user once, verify each task scope, then compose bounded assignee writes |
 | `unassign` | projectSelector, taskSelectors, userSelector, actor, idempotencyKey | dryRun | Resolve user once, verify each task scope, then compose bounded assignee deletes |
@@ -374,12 +374,12 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 
 | Action | Required | Optional | Execution |
 | --- | --- | --- | --- |
-| `export` | projectSelector | format, destinationPath, includeComments, includeAttachments, includeRelations, taskLimit (default 1000), detailLimit (default 100 per task), overwrite (default false) | MCP-composed paginated export to sandboxed JSON or CSV. Creator is always included; comments, attachments, and relations are fetched only when their include flags are true. Rich exports fail clearly when configured task or per-task detail limits are exceeded. |
+| `export` | projectSelector | format, destinationPath, includeComments, includeAttachments, includeRelations, taskLimit (default 1000), detailLimit (default 100 per task), overwrite (default false) | MCP-composed paginated export to sandboxed JSON or CSV. Creator is always included; comments, attachments, and relations are fetched only when their include flags are true. The receipt reports task count, API request count, elapsed time, and incomplete=false; bounded truncation fails explicitly. |
 
 ### `vikunja_project_migration`
-* **Description**: Preview, run, resume, or inspect a durable Vikunja-to-GitHub project migration. Available only in the full tool profile.
+* **Description**: Preview, run, cancel, resume, or inspect a durable Vikunja-to-GitHub project migration. Available only in the full tool profile.
 * **Parameters**:
-  * `action`: enum ["preview", "run", "status"] (required)
+  * `action`: enum ["preview", "run", "status", "cancel"] (required)
   * `projectSelector`: object (optional)
   * `destination`: object (optional)
   * `actor`: string (optional); min 1, max 80
@@ -400,6 +400,7 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 | `preview` | projectSelector, destination, actor, idempotencyKey | publicSanitize (default true), taskLimit, detailLimit | Versioned sanitized manifest written under the configured local sandbox. No GitHub write occurs; binary attachment transfer is reported unsupported. |
 | `run` | projectSelector, destination, actor, idempotencyKey | archiveSource, publicSanitize (default true), taskLimit, detailLimit | Durable per-task GitHub create/reuse, comment copy, read-back, optional source close. GITHUB_TOKEN or GH_TOKEN is read from the process environment and never accepted as a tool argument. |
 | `status` | operationId | cursor, perPage, countOnly | Paginated durable local migration receipts |
+| `cancel` | operationId, actor | none | Durable cancellation request checked before the next destination write and before source archival |
 
 ### `vikunja_request_user_export`
 * **Description**: Request a native Vikunja user-data export. Password input is never returned.
@@ -546,9 +547,9 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 
 | Action | Required | Optional | Execution |
 | --- | --- | --- | --- |
-| `create` | projectSelector, actor, idempotencyKey, fields.title | fields, attachments, firstComment, relations, dryRun, responseMode | Direct POST; MCP-composed when attachments are supplied. For 3 or more tasks use vikunja_task_bulk create instead of repeated create calls. |
-| `create_if_absent` | projectSelector, actor, idempotencyKey, fields.title | fields, attachments, dryRun, responseMode | MCP-composed exact-title search then optional create/attach. Best-effort duplicate prevention, not a distributed lock. |
-| `upsert` | projectSelector, actor, idempotencyKey, fields.title, externalKey | fields, expectedUpdatedAt, dryRun, responseMode | MCP-composed description-key lookup followed by create or conditional update. Requires server-side description filtering. Updating a matched title/description also requires expectedUpdatedAt. |
+| `create` | projectSelector, actor, idempotencyKey, fields.title | fields, attachments, firstComment, relations, dryRun, responseMode | Direct POST; MCP-composed when attachments, a first comment, or relations are supplied. For 3 or more tasks use vikunja_task_bulk create instead of repeated create calls. |
+| `create_if_absent` | projectSelector, actor, idempotencyKey, fields.title | fields, attachments, firstComment, relations, dryRun, responseMode | MCP-composed exact-title search then optional create/attach. Best-effort duplicate prevention, not a distributed lock. |
+| `upsert` | projectSelector, actor, idempotencyKey, fields.title, externalKey | fields, expectedUpdatedAt, firstComment, relations, dryRun, responseMode | MCP-composed description-key lookup followed by create or conditional update. Requires server-side description filtering. Updating a matched title/description also requires expectedUpdatedAt. |
 | `update` | taskSelector, fields, projectSelector, actor, idempotencyKey | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), expectedUpdatedAt, fields.appendDescription (mutually exclusive with fields.description), dryRun, responseMode | Identity/read preflight followed by RFC 6902 PATCH. Replacing title or description requires expectedUpdatedAt. |
 | `delete` | taskSelector, projectSelector, actor, idempotencyKey | dryRun, responseMode | Identity preflight then DELETE /tasks/{id} |
 
