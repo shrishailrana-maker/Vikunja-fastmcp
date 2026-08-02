@@ -1,7 +1,17 @@
 # Changelog
 
-## Unreleased
+## 2.4.104 - 2026-08-02
 
+- Apply optional first comments and relations during `create`,
+  `create_if_absent`, `upsert`, and per-row bulk create with durable
+  sub-operation receipts and explicit partial outcomes.
+- Make project-export receipts observable with task count, actual Vikunja API
+  request count, elapsed milliseconds, and an explicit completion flag.
+- Add migration API-call estimates and a durable `cancel` action that is
+  checked before the next destination write and immediately before source
+  archival.
+- Refresh the typed runtime schemas, generated `MCP_API.md`, README, packaged
+  skill, v2 contract, and implementation plan for the completed API surface.
 - Freeze the former Python fallback as the non-executable
   `fallback/vikunja-cli.py.txt` historical reference. It is no longer tested,
   supported, or included with its old test and dependency files in npm packs.
