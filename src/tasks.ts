@@ -29,7 +29,7 @@ import {
   toItemArray,
   fetchAllCollectionItems,
 } from './format.js';
-import { runDurableOperation } from './idempotency.js';
+import { lookupDurableOperationReceipt, runDurableOperation } from './idempotency.js';
 import { createComment } from './comments.js';
 import { attachFiles, AttachmentInfo } from './attachments.js';
 import { withActorAttribution } from './mutation-policy.js';
@@ -164,7 +164,9 @@ export interface ListTasksOptions {
   label?: string | number;
   /** Vikunja task filters require an assignee username, not a numeric user ID. */
   assignee?: string;
+  titleContains?: string;
   descriptionContains?: string;
+  changedSince?: string;
   actor?: string;
   q?: string;
   countOnly?: boolean;
@@ -175,6 +177,10 @@ export interface ListTasksOptions {
   titleMaxChars?: number;
   maxResponseChars?: number;
   cursor?: string;
+  /** Internal stable delta boundary decoded from cursor. */
+  afterUpdated?: string;
+  /** Internal stable delta tie-breaker decoded from cursor. */
+  afterId?: number;
 }
 
 export function escapeFilterString(val: string): string {
@@ -203,6 +209,9 @@ export function buildFilterString(options: ListTasksOptions): string {
   if (options.assignee !== undefined) {
     parts.push(`assignees in ${escapeFilterString(options.assignee)}`);
   }
+  if (options.titleContains !== undefined) {
+    parts.push(`title like ${escapeFilterString(`%${options.titleContains}%`)}`);
+  }
   if (options.descriptionContains !== undefined) {
     parts.push(`description like ${escapeFilterString(`%${options.descriptionContains}%`)}`);
   }
@@ -211,6 +220,14 @@ export function buildFilterString(options: ListTasksOptions): string {
     // ")" inside quoted strings (live-verified 2026-07-23), so match the
     // attribution text "by <actor>" without the surrounding parens.
     parts.push(`description like ${escapeFilterString(`%by ${options.actor}%`)}`);
+  }
+  if (options.changedSince !== undefined) {
+    parts.push(`updated >= ${escapeFilterString(options.changedSince)}`);
+  }
+  if (options.afterUpdated !== undefined && options.afterId !== undefined) {
+    parts.push(
+      `(updated > ${escapeFilterString(options.afterUpdated)} || (updated = ${escapeFilterString(options.afterUpdated)} && id > ${options.afterId}))`,
+    );
   }
   if (options.filter) {
     parts.push(`(${options.filter})`);
@@ -312,8 +329,10 @@ function selectedResponseMode(
 
 interface ListCursor {
   projectId: number;
-  page: number;
-  offset: number;
+  page?: number;
+  offset?: number;
+  updated?: string;
+  id?: number;
 }
 
 function encodeListCursor(cursor: ListCursor): string {
@@ -327,10 +346,13 @@ function decodeListCursor(value: string | undefined): ListCursor | undefined {
     if (
       !Number.isInteger(parsed.projectId) ||
       parsed.projectId <= 0 ||
-      !Number.isInteger(parsed.page) ||
-      parsed.page <= 0 ||
-      !Number.isInteger(parsed.offset) ||
-      parsed.offset < 0
+      !(
+        (Number.isInteger(parsed.page) && parsed.page! > 0 && Number.isInteger(parsed.offset) && parsed.offset! >= 0) ||
+        (typeof parsed.updated === 'string' &&
+          Number.isFinite(Date.parse(parsed.updated)) &&
+          Number.isInteger(parsed.id) &&
+          parsed.id! > 0)
+      )
     ) {
       throw new Error('invalid cursor values');
     }
@@ -388,15 +410,28 @@ function projectTask(
 function boundedMinimalList(
   project: ProjectRef,
   tasks: Record<string, unknown>[],
+  rawTasks: any[],
   pagination: ReturnType<typeof normalizePagination>,
   startOffset: number,
   maxResponseChars: number,
+  stableDelta: boolean,
 ): Record<string, unknown> {
   const envelopeOverhead = '```json\n{"ok":true,"data":}\n```'.length;
   const selected: Record<string, unknown>[] = [];
   const remaining = tasks.slice(startOffset);
   const makeCursor = (consumed: number): string | null => {
     const nextOffset = startOffset + consumed;
+    if (stableDelta && consumed > 0) {
+      const last = rawTasks[nextOffset - 1];
+      if (nextOffset < tasks.length || pagination.hasMore) {
+        return encodeListCursor({
+          projectId: project.id,
+          updated: String(last.updated),
+          id: Number(last.id),
+        });
+      }
+      return null;
+    }
     if (nextOffset < tasks.length) {
       return encodeListCursor({ projectId: project.id, page: pagination.page, offset: nextOffset });
     }
@@ -429,27 +464,36 @@ async function listProjectTasksInternal(
   project: ProjectRef,
   options: ListTasksOptions,
 ): Promise<any> {
-  const queryParams: Record<string, string> = {
-    page: String(options.page || 1),
-    // For a count-only request we only need the total from the pagination
-    // metadata, so fetch the smallest possible page instead of 20 task bodies.
-    per_page: String(options.countOnly ? 1 : Math.min(options.perPage || 20, MAX_AGENT_PAGE_SIZE)),
-  };
+  const queryParams = new URLSearchParams();
+  queryParams.set('page', String(options.page || 1));
+  // For a count-only request we only need the total from the pagination
+  // metadata, so fetch the smallest possible page instead of 20 task bodies.
+  queryParams.set(
+    'per_page',
+    String(options.countOnly ? 1 : Math.min(options.perPage || 20, MAX_AGENT_PAGE_SIZE)),
+  );
 
   if (options.q) {
-    queryParams.q = options.q;
+    queryParams.set('q', options.q);
   }
 
   const filterStr = buildFilterString(options);
   if (filterStr) {
-    queryParams.filter = filterStr;
+    queryParams.set('filter', filterStr);
+  }
+
+  if (options.changedSince) {
+    queryParams.append('sort_by', 'updated');
+    queryParams.append('sort_by', 'id');
+    queryParams.append('order_by', 'asc');
+    queryParams.append('order_by', 'asc');
   }
 
   // NOTE: do not add `expand`. Labels and assignees are always embedded in each
   // task; the v2 `expand` param only accepts subtasks/buckets/reactions/etc., so
   // `expand=labels,assignees` is rejected with HTTP 422.
 
-  const queryString = new URLSearchParams(queryParams).toString();
+  const queryString = queryParams.toString();
   const path = `/projects/${project.id}/tasks?${queryString}`;
 
   return client.request<any>('GET', path);
@@ -533,7 +577,16 @@ export async function listTasks(client: VikunjaApiClient, options: ListTasksOpti
         fieldErrors: [],
       });
     }
-    const projectOptions = cursor ? { ...effectiveOptions, page: cursor.page } : effectiveOptions;
+    const projectOptions = cursor
+      ? cursor.updated
+        ? {
+            ...effectiveOptions,
+            page: 1,
+            afterUpdated: cursor.updated,
+            afterId: cursor.id,
+          }
+        : { ...effectiveOptions, page: cursor.page }
+      : effectiveOptions;
     const rawRes = await listProjectTasksInternal(client, proj, projectOptions);
     const pagination = normalizePagination(rawRes);
 
@@ -556,9 +609,11 @@ export async function listTasks(client: VikunjaApiClient, options: ListTasksOpti
           boundedMinimalList(
             proj,
             projected,
+            rawTasks,
             pagination,
-            cursor?.offset ?? 0,
+            cursor?.updated ? 0 : (cursor?.offset ?? 0),
             options.maxResponseChars ?? DEFAULT_MINIMAL_RESPONSE_CHARS,
+            Boolean(options.changedSince || cursor?.updated),
           ),
         );
         continue;
@@ -646,6 +701,258 @@ export async function projectSummary(
       item.label.toLowerCase().startsWith(statusPrefix.toLowerCase()),
     ),
     byLabel,
+  };
+}
+
+export interface ProgrammeSnapshotOptions {
+  staleDays?: number;
+  changedSince?: string;
+  changedLimit?: number;
+  cursor?: string;
+  preset?: 'programme' | 'mpf';
+  now?: Date;
+}
+
+export async function programmeSnapshot(
+  client: VikunjaApiClient,
+  projectSelector: { id?: number; title?: string },
+  options: ProgrammeSnapshotOptions = {},
+) {
+  const project = await resolveProject(client, projectSelector);
+  const tasks = await fetchAllCollectionItems<any>(
+    (requestPath) => client.request('GET', requestPath),
+    `/projects/${project.id}/tasks`,
+  );
+  const statusPrefix = client.getConfig().statusLabelPrefix ?? 'status:';
+  const byPriority: Record<string, number> = {};
+  const byAssignee: Record<string, number> = {};
+  const byStatusLabel: Record<string, number> = {};
+  const byPhaseLabel: Record<string, number> = {};
+  const staleBefore =
+    (options.now ?? new Date()).getTime() - Math.max(1, options.staleDays ?? 14) * 86_400_000;
+  let done = 0;
+  let blocked = 0;
+  let stale = 0;
+  let unassignedOpen = 0;
+  let missingStatus = 0;
+  let multipleStatus = 0;
+
+  for (const task of tasks) {
+    const isDone = Boolean(task.done);
+    if (isDone) done += 1;
+    const priority = String(Number.isInteger(task.priority) ? task.priority : 0);
+    byPriority[priority] = (byPriority[priority] ?? 0) + 1;
+    for (const assignee of Array.isArray(task.assignees) ? task.assignees : []) {
+      if (assignee?.username) {
+        byAssignee[assignee.username] = (byAssignee[assignee.username] ?? 0) + 1;
+      }
+    }
+    const assignees = Array.isArray(task.assignees) ? task.assignees : [];
+    if (!isDone && assignees.length === 0) unassignedOpen += 1;
+    const labels = Array.isArray(task.labels) ? task.labels : [];
+    const statusLabels = labels.filter((label: any) =>
+      String(label?.title ?? '').toLowerCase().startsWith(statusPrefix.toLowerCase()),
+    );
+    if (!isDone && statusLabels.length === 0) missingStatus += 1;
+    if (!isDone && statusLabels.length > 1) multipleStatus += 1;
+    for (const label of labels) {
+      const title = String(label?.title ?? '');
+      if (title.toLowerCase().startsWith(statusPrefix.toLowerCase())) {
+        byStatusLabel[title] = (byStatusLabel[title] ?? 0) + 1;
+      }
+      if (title.toLowerCase().startsWith('phase:')) {
+        byPhaseLabel[title] = (byPhaseLabel[title] ?? 0) + 1;
+      }
+    }
+    const relations = task.related_tasks && typeof task.related_tasks === 'object'
+      ? Object.entries(task.related_tasks)
+      : [];
+    if (
+      relations.some(
+        ([kind, values]) => kind.toLowerCase().includes('blocked') && Array.isArray(values) && values.length > 0,
+      )
+    ) {
+      blocked += 1;
+    }
+    const updatedMs = Date.parse(String(task.updated ?? ''));
+    if (!isDone && Number.isFinite(updatedMs) && updatedMs < staleBefore) stale += 1;
+  }
+
+  const cursor = decodeListCursor(options.cursor);
+  if (cursor && cursor.projectId !== project.id) {
+    throw new VikunjaError({
+      status: 400,
+      code: 'CURSOR_SCOPE_MISMATCH',
+      method: 'GET',
+      path: `/projects/${project.id}/tasks`,
+      message: 'The programme snapshot cursor belongs to a different project.',
+      fieldErrors: [],
+    });
+  }
+  const allChanged = options.changedSince
+    ? tasks
+        .filter((task) => String(task.updated ?? '') >= options.changedSince!)
+        .sort((left, right) =>
+          String(left.updated ?? '').localeCompare(String(right.updated ?? '')) || left.id - right.id,
+        )
+    : [];
+  const remainingChanged = cursor?.updated
+    ? allChanged.filter((task) => {
+        const updated = String(task.updated ?? '');
+        return updated > cursor.updated! || (updated === cursor.updated && task.id > cursor.id!);
+      })
+    : allChanged;
+  const changedLimit = Math.min(Math.max(options.changedLimit ?? 20, 1), 100);
+  const changedPage = remainingChanged.slice(0, changedLimit);
+  const lastChanged = changedPage.at(-1);
+  const nextCursor =
+    lastChanged && remainingChanged.length > changedPage.length
+      ? encodeListCursor({
+          projectId: project.id,
+          updated: String(lastChanged.updated),
+          id: Number(lastChanged.id),
+        })
+      : null;
+  const changedTasks = changedPage.map((task) => ({
+    identifier: task.identifier || `#${task.index}`,
+    title: task.title,
+    done: Boolean(task.done),
+  }));
+
+  return {
+    project,
+    total: tasks.length,
+    open: tasks.length - done,
+    done,
+    blocked,
+    stale,
+    byPriority,
+    byStatusLabel,
+    byAssignee,
+    changedSince: options.changedSince ?? null,
+    changedCount: allChanged.length,
+    changedTasks,
+    returnedCount: changedTasks.length,
+    totalCount: allChanged.length,
+    nextCursor,
+    incomplete: nextCursor !== null,
+    ...(options.preset === 'mpf'
+      ? {
+          reconciliation: {
+            unassignedOpen,
+            missingStatus,
+            multipleStatus,
+            byPhaseLabel,
+          },
+        }
+      : {}),
+  };
+}
+
+export async function batchGetTasks(
+  client: VikunjaApiClient,
+  identifiers: string[],
+  options: TaskProjectionOptions = {},
+) {
+  const tasks: Record<string, unknown>[] = [];
+  const failed: { identifier: string; error: string }[] = [];
+  for (const identifier of identifiers) {
+    try {
+      const result = await getTask(client, { identifier }, undefined, 0, 'minimal', options);
+      tasks.push(result.task);
+    } catch (error: any) {
+      failed.push({ identifier, error: String(error?.message ?? error) });
+    }
+  }
+  return {
+    requested: identifiers.length,
+    returnedCount: tasks.length,
+    tasks,
+    failed,
+    incomplete: failed.length > 0,
+  };
+}
+
+export async function verifyTaskState(
+  client: VikunjaApiClient,
+  taskSelector: TaskSelectorInput,
+  projectSelector?: { id?: number; title?: string },
+) {
+  const taskRef = await resolveTask(client, taskSelector, undefined, { includeRawTask: true });
+  if (projectSelector?.id !== undefined && projectSelector.id !== taskRef.project.id) {
+    throw new VikunjaError({
+      status: 400,
+      code: 'PROJECT_MISMATCH',
+      method: 'GET',
+      path: `/tasks/${taskRef.id}`,
+      message: `Task ${taskRef.identifier || `#${taskRef.index}`} belongs to project ID ${taskRef.project.id}, not project ID ${projectSelector.id}.`,
+      fieldErrors: [],
+    });
+  }
+  if (
+    projectSelector?.title !== undefined &&
+    projectSelector.title.toLowerCase() !== taskRef.project.title.toLowerCase()
+  ) {
+    throw new VikunjaError({
+      status: 400,
+      code: 'PROJECT_MISMATCH',
+      method: 'GET',
+      path: `/tasks/${taskRef.id}`,
+      message: `Task ${taskRef.identifier || `#${taskRef.index}`} belongs to project "${taskRef.project.title}", not "${projectSelector.title}".`,
+      fieldErrors: [],
+    });
+  }
+  const rawTask = taskRef.rawTask ?? {};
+  const commentsRaw = await client.request<any>(
+    'GET',
+    `/tasks/${taskRef.id}/comments?page=1&per_page=5&order_by=desc`,
+  );
+  const attachmentRaw = await client.request<any>(
+    'GET',
+    `/tasks/${taskRef.id}/attachments?page=1&per_page=100`,
+  );
+  const comments = toItemArray<any>(commentsRaw);
+  const attachments = toItemArray<any>(attachmentRaw).map((attachment) => ({
+    id: attachment.id,
+    fileName: attachment.file?.name ?? attachment.file_name ?? 'unknown',
+  }));
+  const relations = Object.entries(rawTask.related_tasks ?? {}).flatMap(([kind, values]) =>
+    Array.isArray(values)
+      ? values.map((task: any) => ({
+          kind,
+          identifier: task.identifier || `#${task.index}`,
+          title: task.title,
+        }))
+      : [],
+  );
+  const latest = comments
+    .map((comment) => ({
+      ...comment,
+      markdown: htmlToMarkdown(String(comment.comment ?? '')),
+    }))
+    .sort((left, right) => String(right.created ?? '').localeCompare(String(left.created ?? '')))[0];
+  const verdictMatch = latest?.markdown.match(/\b(PASS|FAIL)\b/i);
+
+  return {
+    identifier: taskRef.identifier || `#${taskRef.index}`,
+    project: taskRef.project,
+    title: taskRef.title,
+    done: Boolean(rawTask.done),
+    labels: taskRef.labels.map((label) => label.title),
+    assignees: taskRef.assignees.map((assignee) => assignee.username),
+    attachmentCount: Number(attachmentRaw.total ?? attachments.length),
+    attachments,
+    relationCount: relations.length,
+    relations,
+    commentCount: Number(commentsRaw.total ?? comments.length),
+    latestCommentAt: latest?.created ?? null,
+    latestVerification: verdictMatch
+      ? {
+          id: latest.id,
+          verdict: verdictMatch[1].toUpperCase(),
+          actor: latest.author?.username ?? null,
+        }
+      : null,
   };
 }
 
@@ -828,6 +1135,77 @@ function stableKeyMarker(externalKey: string): string {
     });
   }
   return `[vfm-key:${externalKey}]`;
+}
+
+export async function lookupTaskByExternalKey(
+  client: VikunjaApiClient,
+  projectSelector: { id?: number; title?: string },
+  externalKey: string,
+) {
+  const marker = stableKeyMarker(externalKey);
+  const project = await resolveProject(client, projectSelector);
+  const filter = `description like ${escapeFilterString(`%${marker}%`)}`;
+  const path = `/projects/${project.id}/tasks?filter=${encodeURIComponent(filter)}&per_page=5`;
+  const candidates = toItemArray<any>(await client.request<any>('GET', path)).filter((candidate) =>
+    String(candidate.description ?? '').includes(marker),
+  );
+  if (candidates.length > 1) {
+    throw new VikunjaError({
+      status: 409,
+      code: 'EXTERNAL_KEY_AMBIGUOUS',
+      method: 'GET',
+      path,
+      message: `External key "${externalKey}" matched multiple task IDs: ${candidates
+        .map((candidate) => candidate.id)
+        .join(', ')}.`,
+      fieldErrors: [],
+    });
+  }
+  const task = candidates[0];
+  return {
+    externalKey,
+    task: task
+      ? {
+          id: task.id,
+          portalRef: task.identifier || `#${task.index}`,
+          title: task.title,
+        }
+      : null,
+  };
+}
+
+export async function taskDedupe(
+  client: VikunjaApiClient,
+  projectSelector: { id?: number; title?: string },
+  title: string,
+) {
+  const project = await resolveProject(client, projectSelector);
+  const trimmed = title.trim();
+  const query = isFilterSafeTitle(trimmed)
+    ? `filter=${encodeURIComponent(`title like ${escapeFilterString(`%${trimmed}%`)}`)}`
+    : `q=${encodeURIComponent(trimmed)}`;
+  const path = `/projects/${project.id}/tasks?${query}&page=1&per_page=100`;
+  const raw = await client.request<any>('GET', path);
+  const pagination = normalizePagination(raw);
+  const candidates = toItemArray<any>(raw).map((task) => ({
+    id: task.id,
+    portalRef: task.identifier || `#${task.index}`,
+    title: task.title,
+    exact: String(task.title ?? '').trim().toLowerCase() === trimmed.toLowerCase(),
+  }));
+  return {
+    project,
+    title: trimmed,
+    candidates,
+    exactCount: candidates.filter((candidate) => candidate.exact).length,
+    totalCount: pagination.total,
+    incomplete: pagination.hasMore,
+    advisory: true,
+  };
+}
+
+export function lookupTaskReceipt(operation: string, idempotencyKey: string) {
+  return lookupDurableOperationReceipt(operation, idempotencyKey);
 }
 
 function stripTrailingMarker(description: string, marker: string): string {

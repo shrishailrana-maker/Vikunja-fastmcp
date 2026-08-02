@@ -54,6 +54,12 @@ import {
   projectSummary,
   setTaskStatus,
   TASK_READ_FIELDS,
+  batchGetTasks,
+  verifyTaskState,
+  programmeSnapshot,
+  taskDedupe,
+  lookupTaskByExternalKey,
+  lookupTaskReceipt,
 } from './tasks.js';
 import {
   createComment,
@@ -492,6 +498,12 @@ export const TOOLS: McpToolDefinition[] = [
         'get',
         'list',
         'summary',
+        'batch_get',
+        'verify_task_state',
+        'programme_snapshot',
+        'task_dedupe',
+        'lookup_external_key',
+        'receipt_lookup',
         'update',
         'delete',
         'close',
@@ -544,6 +556,8 @@ export const TOOLS: McpToolDefinition[] = [
           'Exact assignee username for task lists; Vikunja filters do not accept user IDs.',
         ),
       descriptionContains: z.string().optional(),
+      titleContains: z.string().optional(),
+      changedSince: z.string().datetime().optional(),
       q: z
         .string()
         .optional()
@@ -552,6 +566,7 @@ export const TOOLS: McpToolDefinition[] = [
         .string()
         .optional()
         .describe('Free-text task search alias for q; no filter DSL lookup is needed.'),
+      searchIn: z.enum(['all', 'title', 'description']).optional(),
       countOnly: z.boolean().optional(),
       filter: z.string().optional(),
       responseMode: z.enum(['minimal', 'receipt', 'compact', 'standard', 'full']).optional(),
@@ -572,6 +587,21 @@ export const TOOLS: McpToolDefinition[] = [
       titleMaxChars: z.number().int().min(8).max(500).optional(),
       maxResponseChars: z.number().int().min(500).max(100_000).optional(),
       cursor: z.string().min(1).optional(),
+      identifiers: z.array(z.string().trim().regex(/^.+-\d+$/)).min(1).max(100).optional(),
+      staleDays: z.number().int().min(1).max(3650).optional(),
+      changedLimit: z.number().int().min(1).max(100).optional(),
+      preset: z.enum(['programme', 'mpf']).optional(),
+      title: z.string().trim().min(1).optional(),
+      operation: z
+        .enum([
+          'task-create',
+          'task-create-absent',
+          'close-with-evidence',
+          'comment-create',
+          'attachment-upload',
+          'attachment-delete',
+        ])
+        .optional(),
       expectedUpdatedAt: z.string().optional(),
       evidenceComment: z.string().trim().min(1).optional(),
       actor: actorSchema,
@@ -604,6 +634,10 @@ export const TOOLS: McpToolDefinition[] = [
           if (args.q !== undefined && args.search !== undefined && args.q !== args.search) {
             throw badRequest('q and search must match when both are supplied.');
           }
+          if (args.searchIn && args.searchIn !== 'all' && args.q === undefined && args.search === undefined) {
+            throw badRequest('q or search is required when searchIn is title or description.');
+          }
+          const searchText = args.q ?? args.search;
           return listTasks(client, {
             project: args.projectSelector,
             projects: args.projects,
@@ -615,9 +649,12 @@ export const TOOLS: McpToolDefinition[] = [
             priority: args.priority,
             label: args.label,
             assignee: args.assignee,
-            descriptionContains: args.descriptionContains,
+            descriptionContains:
+              args.searchIn === 'description' ? searchText : args.descriptionContains,
+            titleContains: args.searchIn === 'title' ? searchText : args.titleContains,
+            changedSince: args.changedSince,
             actor: args.actor,
-            q: args.q ?? args.search,
+            q: args.searchIn && args.searchIn !== 'all' ? undefined : searchText,
             countOnly: args.countOnly,
             filter: args.filter,
             responseMode: args.responseMode,
@@ -630,6 +667,41 @@ export const TOOLS: McpToolDefinition[] = [
         case 'summary':
           if (!args.projectSelector) throw badRequest('projectSelector is required for summary.');
           return projectSummary(client, args.projectSelector);
+        case 'batch_get':
+          if (!args.identifiers) throw badRequest('identifiers is required for batch_get.');
+          return batchGetTasks(client, args.identifiers, {
+            fields: Array.isArray(args.fields) ? args.fields : undefined,
+            includeUrl: args.includeUrl,
+            titleMaxChars: args.titleMaxChars,
+          });
+        case 'verify_task_state':
+          if (!args.taskSelector) throw badRequest('taskSelector is required.');
+          return verifyTaskState(client, args.taskSelector, args.projectSelector);
+        case 'programme_snapshot':
+          if (!args.projectSelector) {
+            throw badRequest('projectSelector is required for programme_snapshot.');
+          }
+          return programmeSnapshot(client, args.projectSelector, {
+            staleDays: args.staleDays,
+            changedSince: args.changedSince,
+            changedLimit: args.changedLimit,
+            cursor: args.cursor,
+            preset: args.preset,
+          });
+        case 'task_dedupe':
+          if (!args.projectSelector) throw badRequest('projectSelector is required for task_dedupe.');
+          if (!args.title) throw badRequest('title is required for task_dedupe.');
+          return taskDedupe(client, args.projectSelector, args.title);
+        case 'lookup_external_key':
+          if (!args.projectSelector) {
+            throw badRequest('projectSelector is required for lookup_external_key.');
+          }
+          if (!args.externalKey) throw badRequest('externalKey is required.');
+          return lookupTaskByExternalKey(client, args.projectSelector, args.externalKey);
+        case 'receipt_lookup':
+          if (!args.operation) throw badRequest('operation is required for receipt_lookup.');
+          if (!args.idempotencyKey) throw badRequest('idempotencyKey is required.');
+          return lookupTaskReceipt(args.operation, args.idempotencyKey);
         case 'create':
           requireActor(args.actor, 'task creation');
           requireIdempotencyKey(args.idempotencyKey, 'task creation');

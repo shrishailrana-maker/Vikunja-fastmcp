@@ -126,6 +126,10 @@ describe('MCP Server Registration and Dispatching tests', () => {
       type: 'string',
       description: expect.stringContaining('alias for q'),
     });
+    expect(listBranch.properties.searchIn).toMatchObject({
+      type: 'string',
+      enum: ['all', 'title', 'description'],
+    });
     expect(listBranch.properties.fields.anyOf).toEqual(
       expect.arrayContaining([expect.objectContaining({ type: 'array' })]),
     );
@@ -266,6 +270,16 @@ describe('MCP Server Registration and Dispatching tests', () => {
     );
 
     const readTool = core.tools.find((tool: any) => tool.name === 'vikunja_task_read');
+    expect(readTool.inputSchema.oneOf.map((branch: any) => branch.properties.action.const)).toEqual(
+      expect.arrayContaining([
+        'batch_get',
+        'verify_task_state',
+        'programme_snapshot',
+        'task_dedupe',
+        'lookup_external_key',
+        'receipt_lookup',
+      ]),
+    );
     const listBranch = readTool.inputSchema.oneOf.find(
       (branch: any) => branch.properties.action.const === 'list',
     );

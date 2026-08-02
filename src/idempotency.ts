@@ -53,12 +53,16 @@ function canonicalize(value: unknown): unknown {
   return value;
 }
 
+function callerKeyHash(callerKey: string): string {
+  return createHash('sha256').update(callerKey).digest('hex').slice(0, 16);
+}
+
 export function durableOperationKey(
   namespace: string,
   callerKey: string,
   payload: unknown,
 ): string {
-  const callerHash = createHash('sha256').update(callerKey).digest('hex').slice(0, 16);
+  const callerHash = callerKeyHash(callerKey);
   const payloadHash = payloadFingerprint(payload);
   return `${namespace}:${callerHash}:${payloadHash}`;
 }
@@ -363,6 +367,10 @@ export class IdempotencyCache {
   }
 
   list(prefix: string): any[] {
+    return this.entries(prefix).map((entry) => entry.value);
+  }
+
+  entries(prefix: string): { key: string; value: any; updatedAt: number }[] {
     const rows = this.database
       .prepare(
         `SELECT key, result_json, updated_at
@@ -374,12 +382,12 @@ export class IdempotencyCache {
         `${prefix.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%`,
       ) as unknown as (StoredRow & { key: string })[];
     const now = Date.now();
-    const active: any[] = [];
+    const active: { key: string; value: any; updatedAt: number }[] = [];
     for (const row of rows) {
       if (now - row.updated_at >= this.ttlMs) {
         this.delete(row.key);
       } else {
-        active.push(JSON.parse(row.result_json));
+        active.push({ key: row.key, value: JSON.parse(row.result_json), updatedAt: row.updated_at });
       }
     }
     return active;
@@ -425,3 +433,15 @@ export class IdempotencyCache {
 }
 
 export const idempotency = new IdempotencyCache();
+
+export function lookupDurableOperationReceipt(namespace: string, callerKey: string) {
+  const prefix = `${namespace}:${callerKeyHash(callerKey)}:`;
+  const entry = idempotency.entries(prefix)[0];
+  if (!entry) return null;
+  return {
+    operation: namespace,
+    status: entry.value?.status ?? 'completed',
+    result: entry.value?.result ?? entry.value,
+    updatedAt: new Date(entry.updatedAt).toISOString(),
+  };
+}

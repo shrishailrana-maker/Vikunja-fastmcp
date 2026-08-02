@@ -6,6 +6,7 @@ import {
   claimDurableOperation,
   idempotency,
   IdempotencyCache,
+  lookupDurableOperationReceipt,
   runDurableOperation,
 } from '../src/idempotency.js';
 
@@ -136,5 +137,20 @@ describe('durable idempotency ledger', () => {
       runDurableOperation('task-create', 'parallel-key', { title: 'A' }, write),
     ).resolves.toEqual({ id: 7001, action: 'created' });
     expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it('looks up a completed receipt by its caller idempotency key', async () => {
+    idempotency.clear();
+    await runDurableOperation('task-create', 'human-retry-key', { title: 'A' }, async () => ({
+      action: 'created',
+      target: { portalRef: 'ALPHA-5' },
+    }));
+
+    expect(lookupDurableOperationReceipt('task-create', 'human-retry-key')).toMatchObject({
+      operation: 'task-create',
+      status: 'completed',
+      result: { action: 'created', target: { portalRef: 'ALPHA-5' } },
+      updatedAt: expect.any(String),
+    });
   });
 });

@@ -22,6 +22,7 @@ import {
   closeWithEvidence,
 } from '../src/tasks.js';
 import { idempotency } from '../src/idempotency.js';
+import { cache } from '../src/identity.js';
 
 describe('Tasks List and Scoping tests', () => {
   const config = {
@@ -38,6 +39,7 @@ describe('Tasks List and Scoping tests', () => {
     client = new VikunjaApiClient(config);
     mockFetch = jest.spyOn(global, 'fetch');
     idempotency.clear();
+    cache.clearProjects();
   });
 
   afterEach(() => {
@@ -82,6 +84,16 @@ describe('Tasks List and Scoping tests', () => {
         assignee: 'sudhir',
       });
       expect(filter).toBe("done = false && assignees in 'sudhir'");
+    });
+
+    it('builds precise title and changed-since filters without broad q search', () => {
+      expect(
+        buildFilterString({
+          titleContains: 'release gate',
+          changedSince: '2026-07-01T00:00:00Z',
+          allStates: true,
+        }),
+      ).toBe("title like '%release gate%' && updated >= '2026-07-01T00:00:00Z'");
     });
 
     it('should escape quotes in assignee usernames', () => {
@@ -373,6 +385,116 @@ describe('Tasks List and Scoping tests', () => {
       expect(result.projects[0].pagination.hasMore).toBe(true);
       expect(result.projects[1].project.title).toBe('Beta');
       expect(result.projects[1].pagination.hasMore).toBe(false);
+    });
+
+    it('uses stable updated/id ordering for changed-since reads', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: 101, title: 'Alpha' }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              items: [],
+              page: 1,
+              per_page: 20,
+              total: 0,
+              total_pages: 0,
+            }),
+        } as Response);
+
+      await listTasks(client, {
+        project: { id: 101 },
+        changedSince: '2026-07-01T00:00:00Z',
+      });
+
+      const url = String(mockFetch.mock.calls[1][0]);
+      expect(url).toContain('sort_by=updated');
+      expect(url).toContain('sort_by=id');
+      expect(url).toContain('order_by=asc');
+      expect(decodeURIComponent(url).replaceAll('+', ' ')).toContain(
+        "updated >= '2026-07-01T00:00:00Z'",
+      );
+    });
+
+    it('resumes changed-since reads after the exact updated/id boundary', async () => {
+      const updated = '2026-07-23T10:00:00Z';
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: 101, title: 'Alpha' }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              items: [
+                {
+                  id: 10,
+                  index: 1,
+                  identifier: 'ALPHA-1',
+                  title: `First ${'x'.repeat(120)}`,
+                  updated,
+                },
+                {
+                  id: 11,
+                  index: 2,
+                  identifier: 'ALPHA-2',
+                  title: `Second ${'y'.repeat(120)}`,
+                  updated,
+                },
+              ],
+              page: 1,
+              per_page: 20,
+              total: 2,
+              total_pages: 1,
+            }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: 101, title: 'Alpha' }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              items: [],
+              page: 1,
+              per_page: 20,
+              total: 0,
+              total_pages: 0,
+            }),
+        } as Response);
+
+      const first = await listTasks(client, {
+        project: { id: 101 },
+        changedSince: '2026-07-01T00:00:00Z',
+        fields: ['portalRef', 'title'],
+        maxResponseChars: 420,
+      });
+      expect(first.returnedCount).toBe(1);
+      expect(first.nextCursor).toEqual(expect.any(String));
+
+      await listTasks(client, {
+        project: { id: 101 },
+        changedSince: '2026-07-01T00:00:00Z',
+        fields: ['portalRef', 'title'],
+        maxResponseChars: 420,
+        cursor: first.nextCursor,
+      });
+
+      const resumeUrl = decodeURIComponent(String(mockFetch.mock.calls[3][0])).replaceAll('+', ' ');
+      expect(resumeUrl).toContain(
+        `(updated > '${updated}' || (updated = '${updated}' && id > 10))`,
+      );
     });
 
     it('should support countOnly mode and return totals with zero items', async () => {

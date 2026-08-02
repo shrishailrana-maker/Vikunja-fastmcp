@@ -83,10 +83,13 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
         'priority (0-5)',
         'label',
         'assignee (exact username; numeric user IDs are not valid Vikunja list filters)',
+        'titleContains (server-side title-only match)',
         'descriptionContains (requires server-side description filtering)',
+        'changedSince (ISO timestamp)',
         'actor (matches stored "(by actor)" attribution; requires server-side description filtering)',
         'q',
         'search (free-text alias for q)',
+        'searchIn (all default, title, or description)',
         'filter',
         'countOnly',
         'fields (projected task fields)',
@@ -103,6 +106,43 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
       action: 'summary',
       required: ['projectSelector'],
       execution: 'MCP-composed paginated counts by state, priority, and label',
+    },
+    {
+      action: 'batch_get',
+      required: ['identifiers'],
+      optional: ['fields', 'includeUrl', 'titleMaxChars', 'responseMode'],
+      execution: 'MCP-composed bounded identity resolution and projected task reads',
+    },
+    {
+      action: 'verify_task_state',
+      required: ['taskSelector'],
+      optional: [...taskSelector, 'responseMode'],
+      execution: 'MCP-composed task, latest comments, attachments, and relation metadata',
+    },
+    {
+      action: 'programme_snapshot',
+      required: ['projectSelector'],
+      optional: ['staleDays', 'changedSince', 'changedLimit', 'cursor', 'preset', 'responseMode'],
+      execution:
+        'MCP-composed bounded programme aggregates and cursor-paged changed-task summary; preset=mpf adds reconciliation counts',
+    },
+    {
+      action: 'task_dedupe',
+      required: ['projectSelector', 'title'],
+      optional: ['responseMode'],
+      execution: 'Advisory server-side title candidate search',
+    },
+    {
+      action: 'lookup_external_key',
+      required: ['projectSelector', 'externalKey'],
+      optional: ['responseMode'],
+      execution: 'Direct server-side stable-marker lookup; never scans the whole project',
+    },
+    {
+      action: 'receipt_lookup',
+      required: ['operation', 'idempotencyKey'],
+      optional: ['responseMode'],
+      execution: 'Machine-local durable idempotency receipt lookup',
     },
     {
       action: 'update',
@@ -531,7 +571,17 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
 const taskActions = (actions: string[]) =>
   TOOL_OPERATION_DOCS.vikunja_tasks.filter((operation) => actions.includes(operation.action));
 
-TOOL_OPERATION_DOCS.vikunja_task_read = taskActions(['get', 'list', 'summary']);
+TOOL_OPERATION_DOCS.vikunja_task_read = taskActions([
+  'get',
+  'list',
+  'summary',
+  'batch_get',
+  'verify_task_state',
+  'programme_snapshot',
+  'task_dedupe',
+  'lookup_external_key',
+  'receipt_lookup',
+]);
 TOOL_OPERATION_DOCS.vikunja_task_write = taskActions([
   'create',
   'create_if_absent',
