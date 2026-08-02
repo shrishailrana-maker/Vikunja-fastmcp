@@ -360,11 +360,18 @@ function importLedgerKey(idempotencyKey: string): string {
   return `csv-import-ledger:${keyHash}`;
 }
 
-function ledgerFor(idempotencyKey: string): Record<string, number> {
+interface ImportLedgerEntry {
+  taskId: number;
+  labelsApplied: boolean;
+}
+
+type ImportLedger = Record<string, number | ImportLedgerEntry>;
+
+function ledgerFor(idempotencyKey: string): ImportLedger {
   return idempotency.get(importLedgerKey(idempotencyKey)) ?? {};
 }
 
-function saveLedger(idempotencyKey: string, ledger: Record<string, number>): void {
+function saveLedger(idempotencyKey: string, ledger: ImportLedger): void {
   idempotency.set(importLedgerKey(idempotencyKey), ledger);
 }
 
@@ -413,6 +420,7 @@ export async function importCsvIdempotently(
   const ledger = ledgerFor(idempotencyKey);
   let created = 0;
   let skipped = 0;
+  let resumed = 0;
   const failures: { row: number; message: string }[] = [];
   const warnings: { row: number; taskId: number; message: string }[] = [];
 
@@ -420,38 +428,60 @@ export async function importCsvIdempotently(
     try {
       const project = rowProject(row, projectSelector);
       const hash = rowHash(project, row);
-      if (ledger[hash] !== undefined) {
+      const existing = ledger[hash];
+      if (
+        (typeof existing === 'number' && row.labels.length === 0) ||
+        (typeof existing !== 'number' && existing?.labelsApplied === true)
+      ) {
         skipped += 1;
         continue;
       }
-      const result = await createTask(
-        client,
-        project,
-        {
-          title: row.title,
-          description: row.description,
-          done: row.done,
-          priority: row.priority,
-          dueDate: row.dueDate,
-        },
-        `csv:${idempotencyKey}:${hash}`,
-        undefined,
-        actor,
-      );
-      ledger[hash] = result.target.id;
-      saveLedger(idempotencyKey, ledger);
-      created += 1;
+      let taskId: number;
+      if (typeof existing === 'number') {
+        // Legacy ledgers did not record whether labels succeeded. Re-applying
+        // labels is safe and repairs old rows that were previously skipped.
+        taskId = existing;
+        resumed += 1;
+      } else if (existing) {
+        taskId = existing.taskId;
+        resumed += 1;
+      } else {
+        const result = await createTask(
+          client,
+          project,
+          {
+            title: row.title,
+            description: row.description,
+            done: row.done,
+            priority: row.priority,
+            dueDate: row.dueDate,
+          },
+          `csv:${idempotencyKey}:${hash}`,
+          undefined,
+          actor,
+        );
+        taskId = result.target.id;
+        ledger[hash] = { taskId, labelsApplied: row.labels.length === 0 };
+        saveLedger(idempotencyKey, ledger);
+        created += 1;
+      }
+      let labelsApplied = true;
       for (const label of row.labels) {
         try {
-          await applyLabel(client, { globalId: result.target.id }, label, project);
+          await applyLabel(client, { globalId: taskId }, label, project);
         } catch (error) {
+          labelsApplied = false;
           warnings.push({
             row: row.rowNumber,
-            taskId: result.target.id,
+            taskId,
             message:
               error instanceof Error ? error.message.slice(0, 300) : 'Label application failed.',
           });
         }
+      }
+      if (labelsApplied) {
+        ledger[hash] = { taskId, labelsApplied: true };
+        saveLedger(idempotencyKey, ledger);
       }
     } catch (error) {
       failures.push({
@@ -466,6 +496,7 @@ export async function importCsvIdempotently(
     idempotent: true,
     total: rows.length,
     created,
+    resumed,
     skipped,
     failed: failures.length,
     failures,
@@ -478,7 +509,7 @@ export function clearIdempotentImportLedger(): void {
 }
 
 export function getIdempotentImportStatus(idempotencyKey: string) {
-  const ledger = idempotency.get(importLedgerKey(idempotencyKey)) as Record<string, number> | null;
+  const ledger = idempotency.get(importLedgerKey(idempotencyKey)) as ImportLedger | null;
   return {
     mode: 'idempotent' as const,
     idempotent: true,

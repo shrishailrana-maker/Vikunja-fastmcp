@@ -668,6 +668,60 @@ describe('Attachment Upload, Verification and Download tests', () => {
       );
     });
 
+    it('rejects one idempotency key reused with a different attachment manifest', async () => {
+      mockFetch.mockResolvedValueOnce(okTask);
+      mockFetch.mockResolvedValueOnce(uploadOk(3001, 'a.txt'));
+      const firstFiles = [
+        { filename: 'a.txt', base64Content: Buffer.from('a').toString('base64') },
+      ];
+      await attachFiles(client, 9005, firstFiles, undefined, 'fixed-batch');
+      const writes = mockFetch.mock.calls.filter((call: any) => call[1]?.method === 'POST').length;
+
+      mockFetch.mockResolvedValueOnce(okTask);
+      await expect(
+        attachFiles(
+          client,
+          9005,
+          [
+            ...firstFiles,
+            { filename: 'b.txt', base64Content: Buffer.from('b').toString('base64') },
+          ],
+          undefined,
+          'fixed-batch',
+        ),
+      ).rejects.toMatchObject({ status: 409, code: 'IDEMPOTENCY_KEY_REUSED' });
+      expect(mockFetch.mock.calls.filter((call: any) => call[1]?.method === 'POST')).toHaveLength(
+        writes,
+      );
+    });
+
+    it('keeps malformed base64 as one file failure in an idempotent batch', async () => {
+      mockFetch.mockResolvedValueOnce(okTask);
+      mockFetch.mockResolvedValueOnce(uploadOk(3002, 'good.txt'));
+
+      const result = await attachFiles(
+        client,
+        9005,
+        [
+          { filename: 'bad.bin', base64Content: '%%%not-base64%%%' },
+          { filename: 'good.txt', base64Content: Buffer.from('good').toString('base64') },
+        ],
+        undefined,
+        'mixed-base64',
+      );
+
+      expect(result.failed).toEqual([
+        expect.objectContaining({
+          file: 'bad.bin',
+          error: expect.stringContaining('valid base64'),
+        }),
+      ]);
+      expect(result.uploaded).toEqual([expect.objectContaining({ id: 3002 })]);
+      expect(mockFetch.mock.calls.filter((call: any) => call[1]?.method === 'POST')).toHaveLength(
+        1,
+      );
+    });
+
     it('reports a missing local file as a per-file validation failure', async () => {
       mockFetch.mockResolvedValueOnce(okTask);
       const result = await attachFiles(client, 9005, [
@@ -736,6 +790,17 @@ describe('Attachment Upload, Verification and Download tests', () => {
       await expect(
         attachFiles(smallClient, 9005, [
           { filename: 'big.bin', base64Content: Buffer.from('abcdef').toString('base64') },
+        ]),
+      ).rejects.toMatchObject({ status: 413, code: 'ATTACHMENT_BATCH_TOO_LARGE' });
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('rejects a whitespace-padded base64 envelope before normalizing it', async () => {
+      const smallClient = new VikunjaApiClient({ ...config, maxAttachmentBytes: 3 });
+
+      await expect(
+        attachFiles(smallClient, 9005, [
+          { filename: 'padded.bin', base64Content: `${' '.repeat(4096)}YQ==` },
         ]),
       ).rejects.toMatchObject({ status: 413, code: 'ATTACHMENT_BATCH_TOO_LARGE' });
       expect(mockFetch).not.toHaveBeenCalled();

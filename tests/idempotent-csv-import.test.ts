@@ -11,6 +11,7 @@ import {
   importCsvIdempotently,
   previewIdempotentCsvImport,
 } from '../src/csv-import.js';
+import { cache } from '../src/identity.js';
 
 const TEST_TOKEN = `tk_${'a'.repeat(40)}`;
 
@@ -40,6 +41,8 @@ describe('idempotent CSV import', () => {
 
   beforeEach(async () => {
     clearIdempotentImportLedger();
+    cache.clearProjects();
+    cache.clearLabels();
     client = new VikunjaApiClient(config);
     mockFetch = jest.spyOn(global, 'fetch');
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'vikunja-idempotent-csv-'));
@@ -193,6 +196,74 @@ describe('idempotent CSV import', () => {
     });
 
     expect(rerun).toMatchObject({ created: 1, skipped: 0 });
+  });
+
+  it('retries failed label application without creating the task again', async () => {
+    await fs.writeFile(csvPath, 'title,label\nExample,bug\n');
+    const labelConfig = {
+      ...importConfig,
+      mapping: [
+        { column_index: 0, attribute: 'title' },
+        { column_index: 1, attribute: 'labels' },
+      ],
+    };
+    let creates = 0;
+    let labelWrites = 0;
+    const request = jest.fn(async (method: string, requestPath: string) => {
+      if (method === 'GET' && requestPath === '/projects/7') {
+        return { id: 7, title: 'Alpha' };
+      }
+      if (method === 'POST' && requestPath === '/projects/7/tasks') {
+        creates += 1;
+        return { id: 101, index: 1, identifier: 'ALPHA-1', title: 'Example', project_id: 7 };
+      }
+      if (method === 'GET' && requestPath === '/tasks/101') {
+        return {
+          id: 101,
+          index: 1,
+          identifier: 'ALPHA-1',
+          title: 'Example',
+          project_id: 7,
+          project: { title: 'Alpha' },
+          labels: [],
+          assignees: [],
+        };
+      }
+      if (method === 'GET' && requestPath.startsWith('/labels')) {
+        return {
+          items: [{ id: 55, title: 'bug' }],
+          page: 1,
+          per_page: 1000,
+          total: 1,
+          total_pages: 1,
+        };
+      }
+      if (method === 'POST' && requestPath === '/tasks/101/labels') {
+        labelWrites += 1;
+        if (labelWrites === 1) throw new Error('temporary label failure');
+        return {};
+      }
+      throw new Error(`Unexpected ${method} ${requestPath}`);
+    });
+    const importClient = {
+      request,
+      getConfig: () => ({
+        ...config,
+        attachmentSourceRoots: [root],
+      }),
+    } as any;
+
+    const first = await importCsvIdempotently(importClient, csvPath, labelConfig, 'labels-retry', {
+      id: 7,
+    });
+    const second = await importCsvIdempotently(importClient, csvPath, labelConfig, 'labels-retry', {
+      id: 7,
+    });
+
+    expect(first).toMatchObject({ created: 1, warnings: [expect.objectContaining({ row: 2 })] });
+    expect(second).toMatchObject({ created: 0, resumed: 1, skipped: 0, warnings: [] });
+    expect(creates).toBe(1);
+    expect(labelWrites).toBe(2);
   });
 
   it.each([

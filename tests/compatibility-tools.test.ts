@@ -193,6 +193,7 @@ describe('restored compatibility capabilities', () => {
     'http://hooks.example.com/a',
     'https://127.0.0.1/a',
     'https://10.0.0.5/a',
+    'https://[::ffff:7f00:1]/a',
     'https://user:password@hooks.example.com/a',
     'not a url',
   ])('rejects unsafe webhook target %s before any request', async (targetUrl) => {
@@ -299,8 +300,9 @@ describe('restored compatibility capabilities', () => {
                 id: 10,
                 index: 1,
                 identifier: 'ALPHA-1',
-                title: '=HYPERLINK("https://example.invalid")',
+                title: ' =HYPERLINK("https://example.invalid")',
                 description: '+SUM(1,1)',
+                updated: '2026-08-01T12:34:56Z',
                 project_id: 2,
               },
             ],
@@ -314,8 +316,10 @@ describe('restored compatibility capabilities', () => {
     try {
       await exportProject(localClient, { id: 2 }, 'csv', 'tasks.csv');
       const csv = await fs.readFile(path.join(root, 'tasks.csv'), 'utf8');
-      expect(csv).toContain('"\'=HYPERLINK(""https://example.invalid"")"');
+      expect(csv).toContain('"\' =HYPERLINK(""https://example.invalid"")"');
       expect(csv).toContain('"\'+SUM(1,1)"');
+      expect(csv.split('\n')[0]).toContain('updated');
+      expect(csv).toContain('2026-08-01T12:34:56Z');
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

@@ -66,6 +66,24 @@ describe('bulk task composition', () => {
     });
   });
 
+  it('never sends a nonnumeric legacy selector as NaN to the native bulk route', async () => {
+    const request = jest.fn(async (_method: string, _path: string) => ({ tasks: [] }));
+    const client = {
+      request,
+      getConfig: () => ({
+        vikunjaWebUrl: 'https://vikunja.example.com/',
+        vikunjaToken: 'test-token',
+      }),
+    } as any;
+
+    await expect(bulkUpdateTasks(client, ['not-a-task'], { done: true })).rejects.toMatchObject({
+      status: 400,
+    });
+    expect(
+      request.mock.calls.some(([method, path]) => method === 'PUT' && path === '/tasks/bulk'),
+    ).toBe(false);
+  });
+
   it('returns a cached whole-batch result without creating again', async () => {
     const request = jest.fn(async (method: string, path: string, options?: any) => {
       if (method === 'GET' && path === '/projects/101') return { id: 101, title: 'Alpha' };

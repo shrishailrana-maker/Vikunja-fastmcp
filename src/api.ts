@@ -242,6 +242,15 @@ function wrapStreamedBody(
       stopTimer();
     }
   })();
+  Object.defineProperty(wrapped, 'cancel', {
+    configurable: true,
+    value: async (reason?: unknown) => {
+      stopTimer();
+      if (typeof original.cancel === 'function') return original.cancel(reason);
+      if (typeof original.return === 'function') return original.return(reason);
+      return undefined;
+    },
+  });
   Object.defineProperty(response, 'body', { value: wrapped, configurable: true });
   return response;
 }

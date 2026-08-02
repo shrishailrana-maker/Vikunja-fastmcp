@@ -277,7 +277,7 @@ export async function downloadUserExport(
 
 function csvCell(value: unknown) {
   let text = value === null || value === undefined ? '' : String(value);
-  if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
+  if (/^[=+\-@\t\r]/.test(text.trimStart())) text = `'${text}`;
   return `"${text.replace(/"/g, '""')}"`;
 }
 
@@ -425,6 +425,7 @@ export async function exportProject(
       'done',
       'priority',
       'dueDate',
+      'updated',
       'creatorId',
       'creatorUsername',
       'labels',

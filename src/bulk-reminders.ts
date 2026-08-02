@@ -338,7 +338,9 @@ export async function bulkUpdateTasks(
       dryRun: true,
     };
   }
-  const legacyNative = taskSelectors.every((selector) => typeof selector !== 'object');
+  const legacyNative = taskSelectors.every(
+    (selector) => typeof selector === 'number' && Number.isInteger(selector) && selector > 0,
+  );
   if (!idempotencyKey) {
     const taskIds: number[] = [];
     if (legacyNative && !project) {

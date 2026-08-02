@@ -341,7 +341,9 @@ function migrationSummary(state: any) {
     operationId: state.operationId,
     status: state.status,
     requested: state.requested,
-    migrated: receipts.filter((receipt: any) => receipt.status === 'verified').length,
+    migrated: receipts.filter(
+      (receipt: any) => receipt.status === 'verified' && receipt.skipped !== true,
+    ).length,
     skipped: receipts.filter((receipt: any) => receipt.skipped === true).length,
     failed: receipts.filter((receipt: any) => receipt.status === 'failed').length,
     archived: receipts.filter((receipt: any) => receipt.sourceArchived === true).length,

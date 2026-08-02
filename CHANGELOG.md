@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Freeze the former Python fallback as the non-executable
+  `fallback/vikunja-cli.py.txt` historical reference. It is no longer tested,
+  supported, or included with its old test and dependency files in npm packs.
+- Reject protocol-relative Markdown links and IPv4-mapped IPv6 webhook targets,
+  preserve stream cancellation, and make converter placeholders collision-safe.
+- Bind attachment idempotency keys to one complete batch, bound raw base64
+  envelopes before normalization, and isolate malformed files during retries.
+- Make delta cursors carry and validate their original query boundary, preserve
+  semantic no-op descriptions, and keep stable sorting on cursor-only resumes.
+- Resume failed CSV label application without recreating tasks, harden exported
+  CSV formula cells, include updated timestamps, and correct resumed migration
+  counts and legacy native-bulk selector validation.
 - Add structured-only `minimal` read and `receipt` write response modes, now the
   default, while preserving explicit compact, standard, and full compatibility.
 - Add task field projection, opt-in URLs, bounded title length, response-size

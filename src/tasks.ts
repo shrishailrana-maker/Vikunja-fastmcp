@@ -29,7 +29,11 @@ import {
   toItemArray,
   fetchAllCollectionItems,
 } from './format.js';
-import { lookupDurableOperationReceipt, runDurableOperation } from './idempotency.js';
+import {
+  lookupDurableOperationReceipt,
+  payloadFingerprint,
+  runDurableOperation,
+} from './idempotency.js';
 import { createComment } from './comments.js';
 import { attachFiles, AttachmentInfo } from './attachments.js';
 import { withActorAttribution } from './mutation-policy.js';
@@ -347,6 +351,8 @@ interface ListCursor {
   updated?: string;
   id?: number;
   scopeProjectIds?: number[];
+  changedSince?: string;
+  queryHash?: string;
 }
 
 function encodeListCursor(cursor: ListCursor): string {
@@ -376,7 +382,9 @@ function decodeListCursor(value: string | undefined): ListCursor | undefined {
       (parsed.scopeProjectIds !== undefined &&
         (!Array.isArray(parsed.scopeProjectIds) ||
           parsed.scopeProjectIds.length === 0 ||
-          parsed.scopeProjectIds.some((id) => !Number.isInteger(id) || id <= 0)))
+          parsed.scopeProjectIds.some((id) => !Number.isInteger(id) || id <= 0))) ||
+      (parsed.changedSince !== undefined && !Number.isFinite(Date.parse(parsed.changedSince))) ||
+      (parsed.queryHash !== undefined && !/^[a-f0-9]{64}$/.test(parsed.queryHash))
     ) {
       throw new Error('invalid cursor values');
     }
@@ -391,6 +399,26 @@ function decodeListCursor(value: string | undefined): ListCursor | undefined {
       fieldErrors: [],
     });
   }
+}
+
+function listQueryHash(options: ListTasksOptions, responseMode: ResponseMode): string {
+  return payloadFingerprint({
+    done: options.done,
+    allStates: options.allStates,
+    priority: options.priority,
+    label: options.label,
+    assignee: options.assignee,
+    titleContains: options.titleContains,
+    descriptionContains: options.descriptionContains,
+    actor: options.actor,
+    q: options.q,
+    filter: options.filter,
+    responseMode,
+    fields: options.fields,
+    includeUrl: options.includeUrl,
+    titleMaxChars: options.titleMaxChars,
+    maxResponseChars: options.maxResponseChars,
+  });
 }
 
 function truncateTitle(title: string, maxChars: number | undefined): string {
@@ -458,6 +486,7 @@ function boundedMinimalPages(
   groupedScope: boolean,
   totalCount: number,
   maxResponseChars: number,
+  cursorMetadata: Pick<ListCursor, 'changedSince' | 'queryHash'>,
 ): Record<string, unknown> {
   const envelopeOverhead = '```json\n{"ok":true,"data":}\n```'.length;
   if (pages.length === 0) {
@@ -486,6 +515,7 @@ function boundedMinimalPages(
       offset,
       perPage: page.pagination.perPage,
       scopeProjectIds: cursorScope,
+      ...cursorMetadata,
     });
   };
 
@@ -505,6 +535,7 @@ function boundedMinimalPages(
         updated: String(lastRaw.updated),
         id: Number(lastRaw.id),
         scopeProjectIds: cursorScope,
+        ...cursorMetadata,
       });
     }
     if (nextOffset < page.tasks.length) return makeCursor(pageIndex, nextOffset);
@@ -515,6 +546,7 @@ function boundedMinimalPages(
         offset: 0,
         perPage: page.pagination.perPage,
         scopeProjectIds: cursorScope,
+        ...cursorMetadata,
       });
     }
     const nextPage = pages[pageIndex + 1];
@@ -525,6 +557,7 @@ function boundedMinimalPages(
           offset: nextPage.startOffset,
           perPage: nextPage.pagination.perPage,
           scopeProjectIds: cursorScope,
+          ...cursorMetadata,
         })
       : null;
   };
@@ -608,6 +641,7 @@ function boundedMinimalPages(
             offset: 0,
             perPage: page.pagination.perPage,
             scopeProjectIds: cursorScope,
+            ...cursorMetadata,
           }),
       );
     }
@@ -638,7 +672,7 @@ async function listProjectTasksInternal(
     queryParams.set('filter', filterStr);
   }
 
-  if (options.changedSince) {
+  if (options.changedSince || options.afterUpdated) {
     queryParams.append('sort_by', 'updated');
     queryParams.append('sort_by', 'id');
     queryParams.append('order_by', 'asc');
@@ -659,10 +693,27 @@ export async function listTasks(client: VikunjaApiClient, options: ListTasksOpti
   const webUrl = client.getConfig().vikunjaWebUrl;
   const responseMode = selectedResponseMode(client, options.responseMode);
   const cursor = decodeListCursor(options.cursor);
-  const effectiveOptions =
+  if (
+    cursor?.changedSince &&
+    options.changedSince &&
+    cursor.changedSince !== options.changedSince
+  ) {
+    throw new VikunjaError({
+      status: 400,
+      code: 'CURSOR_QUERY_MISMATCH',
+      method: 'GET',
+      path: '/tasks',
+      message: 'The continuation cursor must be resumed with the same changedSince boundary.',
+      fieldErrors: [],
+    });
+  }
+  const effectiveChangedSince = options.changedSince ?? cursor?.changedSince;
+  const effectiveBase =
     options.label !== undefined
       ? { ...options, label: await resolveLabel(client, options.label) }
       : options;
+  const effectiveOptions = { ...effectiveBase, changedSince: effectiveChangedSince };
+  const queryHash = listQueryHash(effectiveOptions, responseMode);
   let projectsToQuery: ProjectRef[] = [];
 
   const scopeCount =
@@ -752,6 +803,16 @@ export async function listTasks(client: VikunjaApiClient, options: ListTasksOpti
       });
     }
   }
+  if (cursor?.queryHash && cursor.queryHash !== queryHash) {
+    throw new VikunjaError({
+      status: 400,
+      code: 'CURSOR_QUERY_MISMATCH',
+      method: 'GET',
+      path: '/tasks',
+      message: 'The continuation cursor belongs to a different task-list query.',
+      fieldErrors: [],
+    });
+  }
   if (
     cursor?.page !== undefined &&
     options.perPage !== undefined &&
@@ -811,7 +872,7 @@ export async function listTasks(client: VikunjaApiClient, options: ListTasksOpti
           rawTasks,
           pagination,
           startOffset: atCursor && !cursor?.updated ? (cursor?.offset ?? 0) : 0,
-          stableDelta: Boolean(options.changedSince || (atCursor && cursor?.updated)),
+          stableDelta: Boolean(effectiveChangedSince || (atCursor && cursor?.updated)),
         });
         continue;
       }
@@ -840,6 +901,7 @@ export async function listTasks(client: VikunjaApiClient, options: ListTasksOpti
       groupedScope,
       minimalTotalCount,
       options.maxResponseChars ?? DEFAULT_MINIMAL_RESPONSE_CHARS,
+      { changedSince: effectiveChangedSince, queryHash },
     );
   }
 
@@ -1012,8 +1074,23 @@ export async function programmeSnapshot(
       fieldErrors: [],
     });
   }
-  const changedSinceMs = options.changedSince ? Date.parse(options.changedSince) : undefined;
-  const allChanged = options.changedSince
+  if (
+    cursor?.changedSince &&
+    options.changedSince &&
+    cursor.changedSince !== options.changedSince
+  ) {
+    throw new VikunjaError({
+      status: 400,
+      code: 'CURSOR_QUERY_MISMATCH',
+      method: 'GET',
+      path: `/projects/${project.id}/tasks`,
+      message: 'The programme snapshot cursor must use the same changedSince boundary.',
+      fieldErrors: [],
+    });
+  }
+  const effectiveChangedSince = options.changedSince ?? cursor?.changedSince;
+  const changedSinceMs = effectiveChangedSince ? Date.parse(effectiveChangedSince) : undefined;
+  const allChanged = effectiveChangedSince
     ? tasks
         .filter((task) => {
           const updatedMs = Date.parse(String(task.updated ?? ''));
@@ -1046,6 +1123,7 @@ export async function programmeSnapshot(
           projectId: project.id,
           updated: String(lastChanged.updated),
           id: Number(lastChanged.id),
+          changedSince: effectiveChangedSince,
         })
       : null;
   const changedTasks = changedPage.map((task) => ({
@@ -1064,7 +1142,7 @@ export async function programmeSnapshot(
     byPriority,
     byStatusLabel,
     byAssignee,
-    changedSince: options.changedSince ?? null,
+    changedSince: effectiveChangedSince ?? null,
     changedCount: allChanged.length,
     changedTasks,
     returnedCount: changedTasks.length,
@@ -1871,9 +1949,11 @@ export async function updateTask(
     body.title = fields.title;
   }
   if (fields.description !== undefined) {
-    const htmlDesc = markdownToHtml(fields.description);
-    if (htmlDesc !== currentRaw.description) {
-      body.description = htmlDesc;
+    const normalizeMarkdown = (value: string) => value.replace(/\r\n/g, '\n').trim();
+    if (
+      normalizeMarkdown(fields.description) !== normalizeMarkdown(currentTask.description ?? '')
+    ) {
+      body.description = markdownToHtml(fields.description);
     }
   } else if (fields.appendDescription !== undefined) {
     const currentHtml = String(currentRaw.description ?? '');

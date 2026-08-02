@@ -178,13 +178,13 @@ node dist/index.js
 For local development only, launch `dist/index.js` over stdio with the
 environment variables above. Public installations use `vikunja-mcp`.
 
-## Emergency Python Fallback
+## Archived Python Reference
 
-The supported path is the npm-installed MCP. For a one-time emergency where
-the MCP cannot start, [`fallback/vikunja-cli.py`](fallback/vikunja-cli.py)
-provides a standalone `/api/v2` CLI with explicit setup, safety limits, and
-offline unit tests documented in [`fallback/README.md`](fallback/README.md).
-Do not run both as independent tracker writers.
+The npm-installed TypeScript MCP is the only supported implementation. The old
+Python fallback is retained as the non-executable historical reference
+[`fallback/vikunja-cli.py.txt`](fallback/vikunja-cli.py.txt). It is frozen and
+will not receive fixes, features, compatibility updates, security updates, or
+tests. See [`fallback/README.md`](fallback/README.md) for the archive policy.
 
 ## Tools
 

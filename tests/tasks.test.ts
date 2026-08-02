@@ -629,14 +629,14 @@ describe('Tasks List and Scoping tests', () => {
                   id: 10,
                   index: 1,
                   identifier: 'ALPHA-1',
-                  title: `First ${'x'.repeat(120)}`,
+                  title: `First ${'x'.repeat(220)}`,
                   updated,
                 },
                 {
                   id: 11,
                   index: 2,
                   identifier: 'ALPHA-2',
-                  title: `Second ${'y'.repeat(120)}`,
+                  title: `Second ${'y'.repeat(220)}`,
                   updated,
                 },
               ],
@@ -668,7 +668,7 @@ describe('Tasks List and Scoping tests', () => {
         project: { id: 101 },
         changedSince: '2026-07-01T00:00:00Z',
         fields: ['portalRef', 'title'],
-        maxResponseChars: 420,
+        maxResponseChars: 650,
       });
       expect(first.returnedCount).toBe(1);
       expect(first.nextCursor).toEqual(expect.any(String));
@@ -676,16 +676,18 @@ describe('Tasks List and Scoping tests', () => {
       cache.clearProjects();
       await listTasks(client, {
         project: { id: 101 },
-        changedSince: '2026-07-01T00:00:00Z',
         fields: ['portalRef', 'title'],
-        maxResponseChars: 420,
+        maxResponseChars: 650,
         cursor: first.nextCursor,
       });
 
       const resumeUrl = decodeURIComponent(String(mockFetch.mock.calls[3][0])).replaceAll('+', ' ');
+      expect(resumeUrl).toContain("updated >= '2026-07-01T00:00:00Z'");
       expect(resumeUrl).toContain(
         `(updated > '${updated}' || (updated = '${updated}' && id > 10))`,
       );
+      expect(resumeUrl).toContain('sort_by=updated');
+      expect(resumeUrl).toContain('sort_by=id');
     });
 
     it('uses the exact changed-since boundary when a full server page fits', async () => {
@@ -1685,6 +1687,27 @@ describe('Tasks List and Scoping tests', () => {
       expect(description.startsWith(rich)).toBe(true);
       expect(description).toContain('<p><strong>New</strong> evidence</p>');
       expect(description.endsWith('<p>[vfm-key:rich:1]</p>')).toBe(true);
+    });
+
+    it('does not replace semantically identical description HTML', async () => {
+      const existing = {
+        id: 9005,
+        index: 305,
+        identifier: 'ALPHA-305',
+        title: 'Equivalent description',
+        description: '<p>Line one<br>Line two</p>',
+        project_id: 101,
+        project: { title: 'Alpha' },
+      };
+      mockFetch
+        .mockResolvedValueOnce(new Response(JSON.stringify(existing)))
+        .mockResolvedValueOnce(new Response(JSON.stringify(existing)))
+        .mockResolvedValueOnce(new Response(JSON.stringify(existing)));
+
+      const result = await updateTask(client, 9005, { description: 'Line one\nLine two' });
+
+      expect(result.action).toBe('unchanged');
+      expect(mockFetch.mock.calls.some((call: any) => call[1]?.method === 'PATCH')).toBe(false);
     });
 
     it('rejects update requests that replace and append description together', async () => {

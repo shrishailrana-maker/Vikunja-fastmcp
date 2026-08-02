@@ -45,9 +45,9 @@ function unsafeWebhookHost(hostname: string): boolean {
       host.startsWith('fd') ||
       /^fe[89ab]/.test(host) ||
       /^fe[c-f]/.test(host) ||
-      host.startsWith('::ffff:127.') ||
-      host.startsWith('::ffff:10.') ||
-      host.startsWith('::ffff:192.168.')
+      // Reject every IPv4-mapped IPv6 literal. Otherwise hexadecimal forms
+      // such as ::ffff:7f00:1 bypass the dotted-address private-range checks.
+      host.startsWith('::ffff:')
     );
   }
   return false;

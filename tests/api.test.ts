@@ -269,4 +269,22 @@ describe('VikunjaApiClient tests', () => {
       code: 'REQUEST_TIMEOUT',
     });
   });
+
+  it('forwards cancellation from a wrapped streamed response to the original body', async () => {
+    const cancel = jest.fn(async () => undefined);
+    const body = {
+      async *[Symbol.asyncIterator]() {
+        yield Buffer.from('x');
+      },
+      cancel,
+    };
+    mockFetch.mockResolvedValue({ ok: true, status: 200, body } as unknown as Response);
+
+    const response = await client.request<Response>('GET', '/stream', {
+      isStreamResponse: true,
+    });
+    await (response.body as any).cancel('size limit');
+
+    expect(cancel).toHaveBeenCalledWith('size limit');
+  });
 });

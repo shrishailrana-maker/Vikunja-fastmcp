@@ -387,6 +387,20 @@ describe('portable project migration', () => {
     });
   });
 
+  it('does not count a resumed verified receipt as both migrated and skipped', () => {
+    idempotency.set('project-migration-state:resumed', {
+      operationId: 'resumed',
+      status: 'completed',
+      requested: 1,
+      receipts: [{ sourceTaskId: 1, status: 'verified', skipped: true }],
+    });
+
+    expect(getProjectMigrationStatus('resumed')).toMatchObject({
+      migrated: 0,
+      skipped: 1,
+    });
+  });
+
   it('stops before destination writes when migration lease ownership is lost', async () => {
     const fetchSpy = jest.spyOn(global, 'fetch');
     jest.spyOn(idempotency, 'renewLease').mockReturnValue(false);

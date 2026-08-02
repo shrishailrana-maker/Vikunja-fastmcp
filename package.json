@@ -10,10 +10,8 @@
   },
   "files": [
     "dist/**/*",
-    "fallback/vikunja-cli.py",
-    "fallback/test_vikunja_cli.py",
+    "fallback/vikunja-cli.py.txt",
     "fallback/README.md",
-    "fallback/requirements.txt",
     "skills/**/*",
     "README.md",
     "MCP_API.md",

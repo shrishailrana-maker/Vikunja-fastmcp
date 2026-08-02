@@ -125,6 +125,12 @@ describe('Format and Markdown tests', () => {
       expect(() => markdownToHtml(md)).toThrow('Unsafe link scheme or malformed URL');
     });
 
+    it('rejects protocol-relative links instead of treating them as local paths', () => {
+      expect(() => markdownToHtml('[external](//attacker.example/path)')).toThrow(
+        'Unsafe link scheme or malformed URL',
+      );
+    });
+
     it('should escape raw HTML tags from input', () => {
       const md = 'Hello <script>alert("hack")</script>';
       const html = markdownToHtml(md);
@@ -166,6 +172,16 @@ describe('Format and Markdown tests', () => {
       expect(roundTrip).toContain('__PRE_BLOCK_0__');
       expect(roundTrip).toContain('`real &amp; code`');
       expect(roundTrip).toContain('&lt;tag&gt; &amp;amp;');
+    });
+
+    it('does not derive inline-code placeholders from text after pre blocks are removed', () => {
+      const roundTrip = htmlToMarkdown(
+        '<pre><code>VFMCODE0X0Z</code></pre><p><code>safe</code></p>',
+      );
+
+      expect(roundTrip).toContain('VFMCODE0X0Z');
+      expect(roundTrip).toContain('`safe`');
+      expect(roundTrip).not.toContain('undefined');
     });
 
     it('decodes numeric and common named entities from Vikunja HTML', () => {

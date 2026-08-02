@@ -12,7 +12,7 @@
 import { VikunjaApiClient } from './api.js';
 import { resolveTaskInput as resolveTask, type TaskSelectorInput } from './identity.js';
 import { redactSecrets, VikunjaError } from './errors.js';
-import { idempotency, runDurableOperation } from './idempotency.js';
+import { claimDurableOperation, idempotency, runDurableOperation } from './idempotency.js';
 import { DEFAULT_MAX_ATTACHMENT_BYTES } from './config.js';
 import { fetchAllCollectionItems, normalizePagination, toItemArray } from './format.js';
 import path from 'path';
@@ -579,6 +579,25 @@ async function validateAttachmentBatch(
   return { files: safeFiles, failed };
 }
 
+function assertBase64EnvelopeLimit(client: VikunjaApiClient, files: AttachFileSpec[]): void {
+  const maxBytes = client.getConfig().maxAttachmentBytes ?? DEFAULT_MAX_ATTACHMENT_BYTES;
+  const encodedBytes = Math.ceil(maxBytes / 3) * 4;
+  // Allow ordinary wrapped base64 while bounding raw input before whitespace
+  // normalization allocates another large string.
+  const maxRawCharacters = Math.ceil(encodedBytes * 1.05) + 1024;
+  const rawCharacters = files.reduce((total, file) => total + (file.base64Content?.length ?? 0), 0);
+  if (rawCharacters > maxRawCharacters) {
+    throw new VikunjaError({
+      status: 413,
+      code: 'ATTACHMENT_BATCH_TOO_LARGE',
+      method: 'POST',
+      path: '/attachments',
+      message: `Combined base64 input exceeds the bounded envelope for the configured ${maxBytes}-byte limit.`,
+      fieldErrors: [],
+    });
+  }
+}
+
 function attachmentHashKey(taskId: number, attachmentId: number): string {
   return `attachment-sha256:${taskId}:${attachmentId}`;
 }
@@ -602,10 +621,8 @@ async function attachmentPayload(files: AttachFileSpec[]): Promise<unknown[]> {
     files.map(async (file) => {
       let contentHash: string | undefined;
       if (file.base64Content !== undefined) {
-        contentHash = crypto
-          .createHash('sha256')
-          .update(decodeBase64(file.base64Content, '/attachments'))
-          .digest('hex');
+        const normalized = file.base64Content.replace(/\s+/g, '');
+        contentHash = crypto.createHash('sha256').update(normalized).digest('hex');
       } else if (file.filePath) {
         try {
           const hash = crypto.createHash('sha256');
@@ -696,10 +713,31 @@ export async function attachFiles(
       fieldErrors: [],
     });
   }
+  assertBase64EnvelopeLimit(client, files);
   const validated = await validateAttachmentBatch(client, files);
   const safeFiles = validated.files;
 
   const task = await resolveTask(client, taskSelector, projectSelector);
+  if (idempotencyKey) {
+    claimDurableOperation('attach-batch', idempotencyKey, {
+      taskId: task.id,
+      files: files.map((file) => ({
+        filePath: file.filePath,
+        filename: file.filename,
+        mimeType: file.mimeType,
+        base64Hash:
+          file.base64Content === undefined
+            ? undefined
+            : crypto
+                .createHash('sha256')
+                .update(file.base64Content.replace(/\s+/g, ''))
+                .digest('hex'),
+      })),
+      actor: options.actor,
+      computeSha256: options.computeSha256 === true,
+      warnOnDuplicate: options.warnOnDuplicate === true,
+    });
+  }
   const filePayloads = idempotencyKey
     ? await attachmentPayload(safeFiles.map(({ spec }) => spec))
     : [];

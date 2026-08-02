@@ -44,6 +44,9 @@ export function decodeEntities(text: string): string {
 
 export function validateUrlScheme(urlStr: string): string {
   try {
+    // `//host/path` inherits the surrounding page's scheme and is therefore
+    // an external URL, not a local absolute path.
+    if (urlStr.startsWith('//')) throw new Error('protocol-relative URL');
     if (urlStr.toLowerCase().startsWith('mailto:')) {
       return urlStr;
     }
@@ -255,14 +258,15 @@ export function markdownToHtml(md: string): string {
 export function htmlToMarkdown(html: string): string {
   if (!html) return '';
 
-  let md = html;
+  const sourceHtml = html;
+  let md = sourceHtml;
   md = md.replace(/\r\n/g, '\n');
   md = md.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, '');
 
   const placeholderPrefix = (kind: string) => {
     let attempt = 0;
     let prefix = `VFM${kind}${attempt}X`;
-    while (md.includes(prefix)) {
+    while (sourceHtml.includes(prefix)) {
       attempt += 1;
       prefix = `VFM${kind}${attempt}X`;
     }
