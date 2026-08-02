@@ -385,6 +385,148 @@ describe('Tasks List and Scoping tests', () => {
       expect(result.projects[1].pagination.hasMore).toBe(false);
     });
 
+    it('enforces one minimal response budget and advances a multi-project cursor', async () => {
+      mockFetch.mockImplementation(async (input: string) => {
+        const url = String(input);
+        if (url.endsWith('/projects/101')) {
+          return new Response(JSON.stringify({ id: 101, title: 'Alpha' }), { status: 200 });
+        }
+        if (url.endsWith('/projects/102')) {
+          return new Response(JSON.stringify({ id: 102, title: 'Beta' }), { status: 200 });
+        }
+        if (url.includes('/projects/101/tasks')) {
+          return new Response(
+            JSON.stringify({
+              page: 1,
+              per_page: 20,
+              total: 3,
+              total_pages: 1,
+              items: [1, 2, 3].map((index) => ({
+                id: 9000 + index,
+                index,
+                identifier: `ALPHA-${index}`,
+                title: `Alpha task ${index} ${'x'.repeat(40)}`,
+              })),
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.includes('/projects/102/tasks')) {
+          return new Response(
+            JSON.stringify({
+              page: 1,
+              per_page: 20,
+              total: 2,
+              total_pages: 1,
+              items: [1, 2].map((index) => ({
+                id: 9100 + index,
+                index,
+                identifier: `BETA-${index}`,
+                title: `Beta task ${index} ${'y'.repeat(40)}`,
+              })),
+            }),
+            { status: 200 },
+          );
+        }
+        throw new Error(`Unexpected request ${url}`);
+      });
+
+      const options = {
+        projects: [{ id: 101 }, { id: 102 }],
+        responseMode: 'minimal' as const,
+        fields: ['portalRef', 'title'] as ('portalRef' | 'title')[],
+        maxResponseChars: 500,
+      };
+      const first = await listTasks(client, options);
+      const second = await listTasks(client, { ...options, cursor: first.nextCursor });
+      const envelopeOverhead = '```json\n{"ok":true,"data":}\n```'.length;
+
+      expect(JSON.stringify(first).length + envelopeOverhead).toBeLessThanOrEqual(500);
+      expect(first.returnedCount).toBeGreaterThan(0);
+      expect(first.nextCursor).toEqual(expect.any(String));
+      expect(second.returnedCount).toBeGreaterThan(0);
+      expect(second.nextCursor).not.toBe(first.nextCursor);
+      expect(first.projects.flatMap((project: any) => project.tasks)[0]).not.toHaveProperty(
+        'project',
+      );
+
+      await expect(
+        listTasks(client, {
+          project: { id: 101 },
+          responseMode: 'minimal',
+          cursor: first.nextCursor,
+        }),
+      ).rejects.toMatchObject({ status: 400, code: 'CURSOR_SCOPE_MISMATCH' });
+    });
+
+    it('preserves grouped output for a one-project subset selector', async () => {
+      mockFetch
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ id: 101, title: 'Alpha' }), { status: 200 }),
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              page: 1,
+              per_page: 20,
+              total: 1,
+              total_pages: 1,
+              items: [{ id: 9001, index: 1, identifier: 'ALPHA-1', title: 'Task' }],
+            }),
+            { status: 200 },
+          ),
+        );
+
+      const result = await listTasks(client, { projects: [{ id: 101 }] });
+
+      expect(result).toMatchObject({
+        projects: [
+          {
+            project: { id: 101, title: 'Alpha' },
+            tasks: [{ portalRef: 'ALPHA-1', title: 'Task' }],
+          },
+        ],
+        returnedCount: 1,
+        totalCount: 1,
+      });
+    });
+
+    it('fails clearly when one projected item cannot fit the response budget', async () => {
+      mockFetch
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ id: 101, title: 'Alpha' }), { status: 200 }),
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              page: 1,
+              per_page: 20,
+              total: 1,
+              total_pages: 1,
+              items: [
+                {
+                  id: 9001,
+                  index: 1,
+                  identifier: 'ALPHA-1',
+                  title: 'x'.repeat(1000),
+                },
+              ],
+            }),
+            { status: 200 },
+          ),
+        );
+
+      await expect(
+        listTasks(client, {
+          project: { id: 101 },
+          responseMode: 'minimal',
+          fields: ['portalRef', 'title'],
+          titleMaxChars: 500,
+          maxResponseChars: 500,
+        }),
+      ).rejects.toMatchObject({ status: 413, code: 'RESPONSE_ITEM_TOO_LARGE' });
+    });
+
     it('uses stable updated/id ordering for changed-since reads', async () => {
       mockFetch
         .mockResolvedValueOnce({
@@ -493,6 +635,53 @@ describe('Tasks List and Scoping tests', () => {
       expect(resumeUrl).toContain(
         `(updated > '${updated}' || (updated = '${updated}' && id > 10))`,
       );
+    });
+
+    it('uses the exact changed-since boundary when a full server page fits', async () => {
+      const updated = '2026-07-23T11:00:00Z';
+      mockFetch
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ id: 101, title: 'Alpha' }), { status: 200 }),
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              items: [{ id: 12, index: 3, identifier: 'ALPHA-3', title: 'Third', updated }],
+              page: 1,
+              per_page: 1,
+              total: 2,
+              total_pages: 2,
+            }),
+            { status: 200 },
+          ),
+        );
+
+      const result = await listTasks(client, {
+        project: { id: 101 },
+        changedSince: '2026-07-01T00:00:00Z',
+        perPage: 1,
+      });
+      const cursor = JSON.parse(Buffer.from(result.nextCursor, 'base64url').toString('utf8'));
+
+      expect(cursor).toMatchObject({ projectId: 101, updated, id: 12 });
+      expect(cursor).not.toHaveProperty('page');
+    });
+
+    it('returns an empty bounded result when allProjects has no visible projects', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ items: [], page: 1, per_page: 100, total: 0, total_pages: 0 }),
+          { status: 200 },
+        ),
+      );
+
+      await expect(listTasks(client, { allProjects: true })).resolves.toEqual({
+        projects: [],
+        returnedCount: 0,
+        totalCount: 0,
+        nextCursor: null,
+        incomplete: false,
+      });
     });
 
     it('should support countOnly mode and return totals with zero items', async () => {

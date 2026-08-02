@@ -32,6 +32,15 @@
 - Refresh the packaged skill and replace separate install/update instructions
   with one generic npm `@latest` prompt that installs or reuses one user-wide
   skill copy.
+- Stop durable and bulk mutations immediately after local lease ownership is
+  lost; stale workers cannot finalize or overwrite operation receipts.
+- Apply one character budget to complete minimal task-list responses, omit
+  repeated project objects from rows, and support resumable multi-project and
+  stable changed-since cursors.
+- Redact fine-grained and exact configured GitHub credentials from public
+  migration manifests, including whitespace-normalized credentials, in
+  addition to Vikunja credentials and private URLs.
+- Synchronize generated API defaults with the runtime's minimal response mode.
 
 ## 2.4.103 - 2026-07-31
 

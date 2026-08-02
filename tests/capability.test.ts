@@ -179,6 +179,20 @@ describe('V2 OpenAPI Capability Gate', () => {
 });
 
 describe('README npm installation', () => {
+  it('documents minimal task read defaults from the generated source of truth', () => {
+    const generator = fs.readFileSync(
+      path.join(process.cwd(), 'scripts', 'generate-mcp-api.ts'),
+      'utf8',
+    );
+    const apiDocument = fs.readFileSync(path.join(process.cwd(), 'MCP_API.md'), 'utf8');
+
+    expect(generator).toContain('minimal response mode');
+    expect(generator).toContain('Task get is minimal by default');
+    expect(generator).not.toContain('compact response mode');
+    expect(apiDocument).toContain('minimal response mode');
+    expect(apiDocument).toContain('Task get is minimal by default');
+  });
+
   it('uses one generic npm-latest install/update prompt and refreshes one packaged skill', () => {
     const readme = fs.readFileSync(path.join(process.cwd(), 'README.md'), 'utf8');
     const prompt = readme.match(

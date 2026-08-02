@@ -151,6 +151,45 @@ describe('bulk task composition', () => {
     await expect(running).resolves.toMatchObject({ status: 'completed', changed: 2 });
   });
 
+  it('stops before the next bulk write when lease renewal fails', async () => {
+    const request = jest.fn(async (method: string, requestPath: string, options?: any) => {
+      if (method === 'GET' && requestPath === '/projects/101') {
+        return { id: 101, title: 'Alpha' };
+      }
+      if (method === 'POST' && requestPath === '/projects/101/tasks') {
+        const index = options.body.title === 'First' ? 1 : 2;
+        return {
+          id: 9000 + index,
+          index,
+          identifier: `ALPHA-${index}`,
+          title: options.body.title,
+          project_id: 101,
+        };
+      }
+      throw new Error(`Unexpected ${method} ${requestPath}`);
+    });
+    const client = {
+      request,
+      getConfig: () => ({
+        vikunjaWebUrl: 'https://vikunja.example.com/',
+        vikunjaToken: 'test-token',
+      }),
+    } as any;
+    const renew = jest.spyOn(idempotency, 'renewLease').mockReturnValue(false);
+
+    await expect(
+      bulkCreateTasks(
+        client,
+        { id: 101 },
+        [{ title: 'First' }, { title: 'Second' }],
+        'lease-loss-batch',
+      ),
+    ).rejects.toMatchObject({ status: 409, code: 'IDEMPOTENCY_LEASE_LOST' });
+
+    expect(request.mock.calls.filter(([method]) => method === 'POST')).toHaveLength(1);
+    renew.mockRestore();
+  });
+
   it('rejects one bulk-create idempotency key reused for a different payload', async () => {
     const request = jest.fn(async (method: string, path: string, options?: any) => {
       if (method === 'GET' && path === '/projects/101') return { id: 101, title: 'Alpha' };

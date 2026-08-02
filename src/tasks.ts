@@ -333,6 +333,7 @@ interface ListCursor {
   offset?: number;
   updated?: string;
   id?: number;
+  scopeProjectIds?: number[];
 }
 
 function encodeListCursor(cursor: ListCursor): string {
@@ -355,7 +356,11 @@ function decodeListCursor(value: string | undefined): ListCursor | undefined {
           Number.isFinite(Date.parse(parsed.updated)) &&
           Number.isInteger(parsed.id) &&
           parsed.id! > 0)
-      )
+      ) ||
+      (parsed.scopeProjectIds !== undefined &&
+        (!Array.isArray(parsed.scopeProjectIds) ||
+          parsed.scopeProjectIds.length === 0 ||
+          parsed.scopeProjectIds.some((id) => !Number.isInteger(id) || id <= 0)))
     ) {
       throw new Error('invalid cursor values');
     }
@@ -384,7 +389,7 @@ function projectTask(
   options: TaskProjectionOptions,
 ): Record<string, unknown> {
   const requested = new Set<TaskReadField>(
-    options.fields ?? ['portalRef', 'title', 'project', 'done', 'priority'],
+    options.fields ?? ['portalRef', 'title', 'done', 'priority'],
   );
   const result: Record<string, unknown> = {};
   const portalRef = task.identifier || `#${task.index}`;
@@ -410,56 +415,184 @@ function projectTask(
   return result;
 }
 
-function boundedMinimalList(
-  project: ProjectRef,
-  tasks: Record<string, unknown>[],
-  rawTasks: any[],
-  pagination: ReturnType<typeof normalizePagination>,
-  startOffset: number,
+interface MinimalProjectPage {
+  project: ProjectRef;
+  tasks: Record<string, unknown>[];
+  rawTasks: any[];
+  pagination: ReturnType<typeof normalizePagination>;
+  startOffset: number;
+  stableDelta: boolean;
+}
+
+function responseItemTooLarge(project: ProjectRef): VikunjaError {
+  return new VikunjaError({
+    status: 413,
+    code: 'RESPONSE_ITEM_TOO_LARGE',
+    method: 'GET',
+    path: `/projects/${project.id}/tasks`,
+    message:
+      'One projected task cannot fit maxResponseChars. Request fewer fields or a smaller titleMaxChars value.',
+    fieldErrors: [],
+  });
+}
+
+function boundedMinimalPages(
+  pages: MinimalProjectPage[],
+  scopeProjectIds: number[],
+  groupedScope: boolean,
+  totalCount: number,
   maxResponseChars: number,
-  stableDelta: boolean,
 ): Record<string, unknown> {
   const envelopeOverhead = '```json\n{"ok":true,"data":}\n```'.length;
-  const selected: Record<string, unknown>[] = [];
-  const remaining = tasks.slice(startOffset);
-  const makeCursor = (consumed: number): string | null => {
-    const nextOffset = startOffset + consumed;
-    if (stableDelta && consumed > 0) {
-      const last = rawTasks[nextOffset - 1];
-      if (nextOffset < tasks.length || pagination.hasMore) {
-        return encodeListCursor({
-          projectId: project.id,
-          updated: String(last.updated),
-          id: Number(last.id),
-        });
-      }
-      return null;
+  if (pages.length === 0) {
+    return {
+      projects: [],
+      returnedCount: 0,
+      totalCount: 0,
+      nextCursor: null,
+      incomplete: false,
+    };
+  }
+  const cursorScope = groupedScope ? scopeProjectIds : undefined;
+  const groups: {
+    project: { id: number; title: string };
+    tasks: Record<string, unknown>[];
+    returnedCount: number;
+    totalCount: number;
+  }[] = [];
+  let returnedCount = 0;
+
+  const makeCursor = (pageIndex: number, offset: number): string => {
+    const page = pages[pageIndex];
+    return encodeListCursor({
+      projectId: page.project.id,
+      page: page.pagination.page,
+      offset,
+      scopeProjectIds: cursorScope,
+    });
+  };
+
+  const continuationAfter = (
+    pageIndex: number,
+    nextOffset: number,
+    lastRaw: any,
+  ): string | null => {
+    const page = pages[pageIndex];
+    if (
+      page.stableDelta &&
+      lastRaw &&
+      (nextOffset < page.tasks.length || page.pagination.hasMore)
+    ) {
+      return encodeListCursor({
+        projectId: page.project.id,
+        updated: String(lastRaw.updated),
+        id: Number(lastRaw.id),
+        scopeProjectIds: cursorScope,
+      });
     }
-    if (nextOffset < tasks.length) {
-      return encodeListCursor({ projectId: project.id, page: pagination.page, offset: nextOffset });
+    if (nextOffset < page.tasks.length) return makeCursor(pageIndex, nextOffset);
+    if (page.pagination.hasMore) {
+      return encodeListCursor({
+        projectId: page.project.id,
+        page: page.pagination.page + 1,
+        offset: 0,
+        scopeProjectIds: cursorScope,
+      });
     }
-    return pagination.hasMore
-      ? encodeListCursor({ projectId: project.id, page: pagination.page + 1, offset: 0 })
+    const nextPage = pages[pageIndex + 1];
+    return nextPage
+      ? encodeListCursor({
+          projectId: nextPage.project.id,
+          page: nextPage.pagination.page,
+          offset: nextPage.startOffset,
+          scopeProjectIds: cursorScope,
+        })
       : null;
   };
-  const build = (items: Record<string, unknown>[]) => {
-    const nextCursor = makeCursor(items.length);
+
+  const build = (nextCursor: string | null): Record<string, unknown> => {
+    if (!groupedScope) {
+      const page = pages[0];
+      const group = groups[0] ?? {
+        project: { id: page.project.id, title: page.project.title },
+        tasks: [],
+        returnedCount: 0,
+        totalCount,
+      };
+      return { ...group, nextCursor, incomplete: nextCursor !== null };
+    }
     return {
-      project: { id: project.id, title: project.title },
-      tasks: items,
-      returnedCount: items.length,
-      totalCount: pagination.total,
+      projects: groups,
+      returnedCount,
+      totalCount,
       nextCursor,
       incomplete: nextCursor !== null,
     };
   };
 
-  for (const task of remaining) {
-    const candidate = [...selected, task];
-    if (JSON.stringify(build(candidate)).length + envelopeOverhead > maxResponseChars) break;
-    selected.push(task);
+  for (const [pageIndex, page] of pages.entries()) {
+    const remaining = page.tasks.slice(page.startOffset);
+    if (remaining.length === 0 && page.pagination.total === 0) {
+      const emptyGroup = {
+        project: { id: page.project.id, title: page.project.title },
+        tasks: [],
+        returnedCount: 0,
+        totalCount: 0,
+      };
+      const nextCursor = continuationAfter(pageIndex, page.startOffset, undefined);
+      groups.push(emptyGroup);
+      if (JSON.stringify(build(nextCursor)).length + envelopeOverhead > maxResponseChars) {
+        groups.pop();
+      }
+      continue;
+    }
+
+    for (const [relativeIndex, task] of remaining.entries()) {
+      const absoluteOffset = page.startOffset + relativeIndex;
+      let group = groups.find((entry) => entry.project.id === page.project.id);
+      const createdGroup = !group;
+      if (!group) {
+        group = {
+          project: { id: page.project.id, title: page.project.title },
+          tasks: [],
+          returnedCount: 0,
+          totalCount: page.pagination.total,
+        };
+        groups.push(group);
+      }
+      group.tasks.push(task);
+      group.returnedCount += 1;
+      returnedCount += 1;
+      const nextCursor = continuationAfter(
+        pageIndex,
+        absoluteOffset + 1,
+        page.rawTasks[absoluteOffset],
+      );
+      if (JSON.stringify(build(nextCursor)).length + envelopeOverhead > maxResponseChars) {
+        group.tasks.pop();
+        group.returnedCount -= 1;
+        returnedCount -= 1;
+        if (createdGroup) groups.pop();
+        if (returnedCount === 0) throw responseItemTooLarge(page.project);
+        return build(
+          continuationAfter(pageIndex, absoluteOffset, page.rawTasks[absoluteOffset - 1]),
+        );
+      }
+    }
+
+    if (page.pagination.hasMore) {
+      return build(
+        continuationAfter(pageIndex, page.tasks.length, page.rawTasks.at(-1)) ??
+          encodeListCursor({
+            projectId: page.project.id,
+            page: page.pagination.page + 1,
+            offset: 0,
+            scopeProjectIds: cursorScope,
+          }),
+      );
+    }
   }
-  return build(selected);
+  return build(null);
 }
 
 async function listProjectTasksInternal(
@@ -558,40 +691,59 @@ export async function listTasks(client: VikunjaApiClient, options: ListTasksOpti
     });
   }
 
-  const results = [];
-  if (cursor && projectsToQuery.length !== 1) {
+  const scopeProjectIds = projectsToQuery.map((project) => project.id);
+  const groupedScope = Boolean(options.projects || options.allProjects);
+  const cursorProjectIndex = cursor
+    ? projectsToQuery.findIndex((project) => project.id === cursor.projectId)
+    : 0;
+  if (cursor && cursorProjectIndex < 0) {
     throw new VikunjaError({
       status: 400,
-      code: 'CURSOR_SCOPE_REQUIRED',
+      code: 'CURSOR_SCOPE_MISMATCH',
       method: 'GET',
       path: '/tasks',
-      message: 'A continuation cursor must be resumed with exactly one project scope.',
+      message: 'The continuation cursor belongs to a different project scope.',
       fieldErrors: [],
     });
   }
-  for (const proj of projectsToQuery) {
-    if (cursor && cursor.projectId !== proj.id) {
+  if (cursor && (cursor.scopeProjectIds !== undefined || groupedScope)) {
+    const sameScope =
+      groupedScope &&
+      cursor.scopeProjectIds?.length === scopeProjectIds.length &&
+      cursor.scopeProjectIds.every((id, index) => id === scopeProjectIds[index]);
+    if (!sameScope) {
       throw new VikunjaError({
         status: 400,
         code: 'CURSOR_SCOPE_MISMATCH',
         method: 'GET',
-        path: `/projects/${proj.id}/tasks`,
-        message: 'The continuation cursor belongs to a different project.',
+        path: '/tasks',
+        message: 'The continuation cursor must be resumed with the same ordered project scope.',
         fieldErrors: [],
       });
     }
-    const projectOptions = cursor
-      ? cursor.updated
-        ? {
-            ...effectiveOptions,
-            page: 1,
-            afterUpdated: cursor.updated,
-            afterId: cursor.id,
-          }
-        : { ...effectiveOptions, page: cursor.page }
-      : effectiveOptions;
+  }
+
+  const results = [];
+  const minimalPages: MinimalProjectPage[] = [];
+  let minimalTotalCount = 0;
+  for (const [projectIndex, proj] of projectsToQuery.entries()) {
+    const beforeCursor = Boolean(cursor && projectIndex < cursorProjectIndex);
+    const atCursor = Boolean(cursor && projectIndex === cursorProjectIndex);
+    const projectOptions = beforeCursor
+      ? { ...effectiveOptions, page: 1, countOnly: true }
+      : atCursor
+        ? cursor!.updated
+          ? {
+              ...effectiveOptions,
+              page: 1,
+              afterUpdated: cursor!.updated,
+              afterId: cursor!.id,
+            }
+          : { ...effectiveOptions, page: cursor!.page }
+        : effectiveOptions;
     const rawRes = await listProjectTasksInternal(client, proj, projectOptions);
     const pagination = normalizePagination(rawRes);
+    minimalTotalCount += pagination.total;
 
     if (options.countOnly) {
       results.push({
@@ -601,6 +753,7 @@ export async function listTasks(client: VikunjaApiClient, options: ListTasksOpti
     } else {
       const rawTasks = toItemArray(rawRes);
       if (responseMode === 'minimal' || responseMode === 'receipt') {
+        if (beforeCursor) continue;
         const projected = rawTasks.map((task: any) =>
           projectTask(task, proj, webUrl, {
             fields: options.fields,
@@ -608,17 +761,14 @@ export async function listTasks(client: VikunjaApiClient, options: ListTasksOpti
             titleMaxChars: options.titleMaxChars,
           }),
         );
-        results.push(
-          boundedMinimalList(
-            proj,
-            projected,
-            rawTasks,
-            pagination,
-            cursor?.updated ? 0 : (cursor?.offset ?? 0),
-            options.maxResponseChars ?? DEFAULT_MINIMAL_RESPONSE_CHARS,
-            Boolean(options.changedSince || cursor?.updated),
-          ),
-        );
+        minimalPages.push({
+          project: proj,
+          tasks: projected,
+          rawTasks,
+          pagination,
+          startOffset: atCursor && !cursor?.updated ? (cursor?.offset ?? 0) : 0,
+          stableDelta: Boolean(options.changedSince || (atCursor && cursor?.updated)),
+        });
         continue;
       }
       const tasks = rawTasks.map((task: any) => {
@@ -637,6 +787,16 @@ export async function listTasks(client: VikunjaApiClient, options: ListTasksOpti
         truncated: pagination.hasMore,
       });
     }
+  }
+
+  if (!options.countOnly && (responseMode === 'minimal' || responseMode === 'receipt')) {
+    return boundedMinimalPages(
+      minimalPages,
+      scopeProjectIds,
+      groupedScope,
+      minimalTotalCount,
+      options.maxResponseChars ?? DEFAULT_MINIMAL_RESPONSE_CHARS,
+    );
   }
 
   if (options.project) {
@@ -1463,7 +1623,12 @@ export async function getTask(
       : taskRef.rawTask;
 
   if (responseMode === 'minimal' || responseMode === 'receipt') {
-    return { task: projectTask(rawTask, taskRef.project, webUrl, projectionOptions) };
+    return {
+      task: projectTask(rawTask, taskRef.project, webUrl, {
+        ...projectionOptions,
+        fields: projectionOptions.fields ?? ['portalRef', 'project', 'title', 'done', 'priority'],
+      }),
+    };
   }
 
   if (responseMode === 'compact') {

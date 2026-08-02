@@ -134,6 +134,32 @@ describe('portable project migration', () => {
     expect(safe).not.toContain('tk_abc123');
   });
 
+  it('sanitizes fine-grained and exact configured GitHub tokens', () => {
+    const fineGrained = 'github_pat_neutral_example_1234567890';
+    const exactConfigured = 'neutral-token-without-a-known-prefix';
+    const safe = sanitizePublicString(
+      `fine=${fineGrained} exact=${exactConfigured}`,
+      exactConfigured,
+    );
+
+    expect(safe).not.toContain(fineGrained);
+    expect(safe).not.toContain(exactConfigured);
+    expect(safe.match(/\[REDACTED_TOKEN\]/g)).toHaveLength(2);
+  });
+
+  it('sanitizes the trimmed credential used for GitHub authentication', () => {
+    const original = process.env.GITHUB_TOKEN;
+    process.env.GITHUB_TOKEN = '  neutral-token-with-spaces  ';
+    try {
+      const safe = sanitizePublicString('credential=neutral-token-with-spaces');
+      expect(safe).not.toContain('neutral-token-with-spaces');
+      expect(safe).toContain('[REDACTED_TOKEN]');
+    } finally {
+      if (original === undefined) delete process.env.GITHUB_TOKEN;
+      else process.env.GITHUB_TOKEN = original;
+    }
+  });
+
   it('sends credentials only to GitHub or an explicit trusted enterprise host', () => {
     expect(
       () =>
@@ -164,7 +190,17 @@ describe('portable project migration', () => {
   });
 
   it('writes a versioned sanitized manifest and preserves inline code', async () => {
-    const result = await previewProjectMigration(sourceClient(), options('preview-manifest'));
+    process.env.GITHUB_TOKEN = 'github_pat_manifest_neutral_1234567890';
+    const client = sourceClient();
+    const originalRequest = client.request;
+    client.request = jest.fn(async (method: string, requestPath: string, requestOptions?: any) => {
+      const response = await originalRequest(method, requestPath, requestOptions);
+      if (method === 'GET' && requestPath.startsWith('/projects/31/tasks')) {
+        response.items[0].description += ` ${process.env.GITHUB_TOKEN}`;
+      }
+      return response;
+    });
+    const result = await previewProjectMigration(client, options('preview-manifest'));
     const manifest = JSON.parse(await fs.readFile(path.join(root, result.manifestFile), 'utf8'));
 
     expect(result).toMatchObject({
@@ -183,6 +219,7 @@ describe('portable project migration', () => {
     expect(JSON.stringify(manifest)).not.toContain('@@INLINECODE');
     expect(JSON.stringify(manifest)).not.toContain('10.1.2.3');
     expect(JSON.stringify(manifest)).not.toContain('tk_private_value');
+    expect(JSON.stringify(manifest)).not.toContain(process.env.GITHUB_TOKEN);
     expect(JSON.stringify(manifest)).not.toContain('C:\\\\Users');
     expect(manifest.tasks[0].relations[0]).toMatchObject({ identifier: 'EX-6' });
   });

@@ -167,6 +167,26 @@ describe('durable idempotency ledger', () => {
     expect(write).toHaveBeenCalledTimes(1);
   });
 
+  it('does not finalize a durable operation after lease ownership is lost', async () => {
+    idempotency.clear();
+    const renew = jest.spyOn(idempotency, 'renewLease').mockReturnValue(false);
+    const persist = jest.spyOn(idempotency, 'setIfLeaseOwner');
+    const write = jest.fn(async () => ({ id: 7001, action: 'created' }));
+
+    await expect(
+      runDurableOperation('task-create', 'lost-lease', { title: 'A' }, write),
+    ).rejects.toMatchObject({ status: 409, code: 'IDEMPOTENCY_LEASE_LOST' });
+
+    expect(write).not.toHaveBeenCalled();
+    expect(persist).not.toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({ status: 'completed' }),
+    );
+    renew.mockRestore();
+    persist.mockRestore();
+  });
+
   it('looks up a completed receipt by its caller idempotency key', async () => {
     idempotency.clear();
     await runDurableOperation('task-create', 'human-retry-key', { title: 'A' }, async () => ({

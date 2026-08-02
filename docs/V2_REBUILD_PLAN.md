@@ -162,6 +162,8 @@ The first release includes only features tied to demonstrated workflows:
   response/schema budgets, precise search, delta reads, batch get, task-state
   verification, and programme snapshots;
 - durable SQLite/WAL bulk row receipts with lease-owner-checked resume;
+- one response-wide budget and resumable cross-project cursor for minimal task
+  lists, without repeated project objects in task rows;
 - optional local attachment hashes, bounded comment deltas, and a full-profile
   resumable GitHub migration with public sanitization and destination read-back.
 

@@ -73,7 +73,13 @@ function privateNetworkHostname(value: string): boolean {
 }
 
 export function sanitizePublicString(value: string, configuredToken?: string): string {
-  let safe = redactSecrets(value, configuredToken);
+  let safe = value;
+  const exactTokens = [configuredToken, process.env.GITHUB_TOKEN, process.env.GH_TOKEN]
+    .filter((token): token is string => typeof token === 'string')
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+  for (const token of new Set(exactTokens)) safe = redactSecrets(safe, token);
+  safe = safe.replace(/\bgithub_pat_[A-Za-z0-9_]{6,}\b/gi, '[REDACTED_TOKEN]');
   safe = safe.replace(/\b(?:tk|gh[pousr])_[A-Za-z0-9_-]{6,}\b/gi, '[REDACTED_TOKEN]');
   safe = safe.replace(/file:\/\/(?:\/|\\)?[^\s"'<>)]*/gi, '[private-path]');
   safe = safe.replace(/https?:\/\/(?:\[[^\]]+\]|[^\s/:?#)]+)(?::\d+)?[^\s)]*/gi, (url) => {

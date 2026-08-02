@@ -93,7 +93,8 @@ requests or legacy tracker scripts while the MCP is available.
   aggregates. Use `changedSince` for delta reads instead of re-listing an
   unchanged project.
 - Task-list `perPage` must not exceed 100. Paginate larger results and follow
-  `nextCursor` whenever `incomplete` is true.
+  `nextCursor` whenever `incomplete` is true. Resume a multi-project cursor
+  with the same ordered project scope.
 - Comment lists default to 20 items. Use `since`, `countOnly`, and
   `includeLatest` to avoid loading old comment bodies.
 - Keep searches scoped. Avoid `allProjects` when a project subset is known.

@@ -438,6 +438,10 @@ combined HTTP route.
 Lists default to a minimal projected shape and accept explicit `fields`,
 `includeUrl`, `titleMaxChars`, and `maxResponseChars`. Project identity is
 hoisted to the enclosing group instead of repeated on every task.
+The character budget applies once to the complete response, including grouped
+multi-project results. If one projected item cannot fit, the call fails with
+`RESPONSE_ITEM_TOO_LARGE` and tells the caller to request fewer fields or a
+shorter title.
 `responseMode: "standard"` preserves ordinary task detail and direct links,
 while explicit `full` includes the complete normalized task.
 Pagination is normalized to `page`, `perPage`,
@@ -464,10 +468,11 @@ reimplementing them locally.
   accidental match.
 - `page` and `perPage` are applied once by Vikunja. Default `perPage` is 20;
   requests above 100 are capped to 100 without hiding the remaining total.
-- Every list states displayed count, total, and exact continuation metadata.
+- Every minimal list states returned count, total, `incomplete`, and one opaque
+  `nextCursor` that advances across server pages and project groups.
 - Explicit `projects: [...]` and deliberate `allProjects: true` results are
-  grouped by project and expose independent `pagination` blocks. Continuation
-  requests name the project and next page.
+  grouped by project. Continue with the same ordered project scope and the
+  returned cursor; changed-since cursors use the exact `(updated,id)` boundary.
 - `countOnly: true` returns the v2 collection `total` and omits task items. A
   single-project response contains one total; subset and all-project responses
   contain one total per project. The MCP may request the smallest valid page

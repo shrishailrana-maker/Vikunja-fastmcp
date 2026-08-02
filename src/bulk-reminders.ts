@@ -193,15 +193,29 @@ function bulkOperation(
 }
 
 function saveBulkOperation(context: BulkOperationContext | null, state: any): void {
-  if (context) {
-    if (state.status === 'running') {
-      state.leaseUntil = Date.now() + BULK_LEASE_MS;
-      if (context.leaseToken) {
-        idempotency.renewLease(context.recordKey, context.leaseToken, BULK_LEASE_MS);
-      }
+  if (!context) return;
+  if (!context.leaseToken) throw bulkLeaseLost(context.operationId);
+  if (state.status === 'running') {
+    state.leaseUntil = Date.now() + BULK_LEASE_MS;
+    if (!idempotency.renewLease(context.recordKey, context.leaseToken, BULK_LEASE_MS)) {
+      throw bulkLeaseLost(context.operationId);
     }
-    idempotency.set(context.recordKey, state);
   }
+  if (!idempotency.setIfLeaseOwner(context.recordKey, context.leaseToken, state)) {
+    throw bulkLeaseLost(context.operationId);
+  }
+}
+
+function bulkLeaseLost(operationId: string): VikunjaError {
+  return new VikunjaError({
+    status: 409,
+    code: 'IDEMPOTENCY_LEASE_LOST',
+    method: 'TOOLS_CALL',
+    path: `vikunja_task_bulk.${operationId}`,
+    message:
+      'Bulk operation lease ownership was lost. No further rows were written; retry the identical payload with the same idempotencyKey.',
+    fieldErrors: [],
+  });
 }
 
 function reusedBulkSummary(context: BulkOperationContext): any {

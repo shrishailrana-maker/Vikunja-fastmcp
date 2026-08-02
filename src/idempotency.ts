@@ -40,6 +40,18 @@ interface StoredLease {
 const DEFAULT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const OPERATION_LEASE_MS = 120_000;
 
+function operationLeaseLost(namespace: string): VikunjaError {
+  return new VikunjaError({
+    status: 409,
+    code: 'IDEMPOTENCY_LEASE_LOST',
+    method: 'TOOLS_CALL',
+    path: namespace,
+    message:
+      'Durable operation lease ownership was lost. No receipt was finalized; retry the identical operation with the same idempotencyKey.',
+    fieldErrors: [],
+  });
+}
+
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize);
   if (value && typeof value === 'object') {
@@ -116,22 +128,36 @@ export async function runDurableOperation<T>(
     });
   }
 
-  const heartbeat = leased.leaseToken
-    ? setInterval(
-        () => {
-          try {
-            idempotency.renewLease(operationKey, leased.leaseToken!, OPERATION_LEASE_MS);
-          } catch {
-            // The final receipt write remains authoritative if a heartbeat is delayed.
-          }
-        },
-        Math.floor(OPERATION_LEASE_MS / 3),
-      )
-    : null;
+  if (!leased.leaseToken) throw operationLeaseLost(namespace);
+
+  let leaseLost = false;
+  const renewLease = () => {
+    if (
+      leaseLost ||
+      !idempotency.renewLease(operationKey, leased.leaseToken!, OPERATION_LEASE_MS)
+    ) {
+      leaseLost = true;
+      return false;
+    }
+    return true;
+  };
+
+  const heartbeat = setInterval(
+    () => {
+      try {
+        renewLease();
+      } catch {
+        leaseLost = true;
+      }
+    },
+    Math.floor(OPERATION_LEASE_MS / 3),
+  );
   heartbeat?.unref();
 
   try {
+    if (!renewLease()) throw operationLeaseLost(namespace);
     const result = await operation();
+    if (!renewLease()) throw operationLeaseLost(namespace);
     const partial =
       result !== null &&
       typeof result === 'object' &&
@@ -139,19 +165,34 @@ export async function runDurableOperation<T>(
         (result as any).action === 'partial' ||
         (result as any).status === 'partial');
     if (partial) {
-      // Preserve the partial receipt for the caller, but release the durable
-      // claim so the same key can retry the unfinished step. Nested evidence
-      // and relation writes have their own durable keys or content markers.
-      idempotency.delete(operationKey);
+      if (
+        !idempotency.setIfLeaseOwner(operationKey, leased.leaseToken, {
+          status: 'partial',
+          result,
+        })
+      ) {
+        leaseLost = true;
+        throw operationLeaseLost(namespace);
+      }
     } else {
-      idempotency.set(operationKey, { status: 'completed', result });
+      if (
+        !idempotency.setIfLeaseOwner(operationKey, leased.leaseToken, {
+          status: 'completed',
+          result,
+        })
+      ) {
+        leaseLost = true;
+        throw operationLeaseLost(namespace);
+      }
     }
     return result;
   } catch (error) {
-    idempotency.delete(operationKey);
+    if (!leaseLost) {
+      idempotency.setIfLeaseOwner(operationKey, leased.leaseToken, { status: 'failed' });
+    }
     throw error;
   } finally {
-    if (heartbeat) clearInterval(heartbeat);
+    clearInterval(heartbeat);
   }
 }
 
