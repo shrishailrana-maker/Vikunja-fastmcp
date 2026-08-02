@@ -69,6 +69,7 @@ describe('Config tests', () => {
       expect(config.vikunjaToken).toBe(TEST_TOKEN);
       expect(config.vikunjaWebUrl).toBe('https://vikunja-web.example.com/');
       expect(config.responseMode).toBe('minimal');
+      expect(config.toolProfile).toBe('core');
       expect(config.requestTimeoutMs).toBe(30_000);
       expect(config.transferTimeoutMs).toBe(60_000);
     });
@@ -91,6 +92,22 @@ describe('Config tests', () => {
           VIKUNJA_MCP_RESPONSE_MODE: 'verbose',
         }),
       ).toThrow('VIKUNJA_MCP_RESPONSE_MODE');
+    });
+
+    it('accepts a focused MCP tool profile and rejects unknown profiles', () => {
+      const config = loadConfig({
+        VIKUNJA_URL: 'https://vikunja.example.com/api/v2',
+        VIKUNJA_API_TOKEN: TEST_TOKEN,
+        VIKUNJA_MCP_TOOL_PROFILE: 'qa',
+      });
+      expect(config.toolProfile).toBe('qa');
+      expect(() =>
+        loadConfig({
+          VIKUNJA_URL: 'https://vikunja.example.com/api/v2',
+          VIKUNJA_API_TOKEN: TEST_TOKEN,
+          VIKUNJA_MCP_TOOL_PROFILE: 'everything-plus',
+        }),
+      ).toThrow('VIKUNJA_MCP_TOOL_PROFILE');
     });
 
     it('accepts an operator-selected request timeout', () => {

@@ -22,6 +22,7 @@ describe('MCP Server Registration and Dispatching tests', () => {
     mockFetch = jest.spyOn(global, 'fetch');
     process.env.VIKUNJA_URL = 'https://vikunja.example.com/api/v2';
     process.env.VIKUNJA_API_TOKEN = 'tk_token';
+    process.env.VIKUNJA_MCP_TOOL_PROFILE = 'compatibility';
   });
 
   afterEach(() => {
@@ -30,6 +31,7 @@ describe('MCP Server Registration and Dispatching tests', () => {
     delete process.env.VIKUNJA_API_TOKEN;
     delete process.env.VIKUNJA_MUTATION_SCOPE_MODE;
     delete process.env.VIKUNJA_MCP_RESPONSE_MODE;
+    delete process.env.VIKUNJA_MCP_TOOL_PROFILE;
   });
 
   it('recognizes an entry point reached through a junction or symlink', () => {
@@ -56,7 +58,7 @@ describe('MCP Server Registration and Dispatching tests', () => {
     const response = await handler({
       method: 'tools/list',
     });
-    expect(response.tools.length).toBe(18);
+    expect(response.tools.length).toBe(21);
 
     for (const name of [
       'vikunja_task_bulk',
@@ -241,6 +243,55 @@ describe('MCP Server Registration and Dispatching tests', () => {
     expect(eventBranch.properties).toHaveProperty('scope');
   });
 
+  it('uses small typed task tools in the default profile and hides the mega-router', async () => {
+    const handler = (server as any)._requestHandlers.get('tools/list');
+    delete process.env.VIKUNJA_MCP_TOOL_PROFILE;
+    const core = await handler({ method: 'tools/list' });
+    process.env.VIKUNJA_MCP_TOOL_PROFILE = 'compatibility';
+    const compatibility = await handler({ method: 'tools/list' });
+
+    const coreNames = core.tools.map((tool: any) => tool.name);
+    expect(coreNames).toEqual(
+      expect.arrayContaining([
+        'vikunja_task_read',
+        'vikunja_task_write',
+        'vikunja_task_workflow',
+        'vikunja_task_comments',
+        'vikunja_task_attachments',
+      ]),
+    );
+    expect(coreNames).not.toContain('vikunja_tasks');
+    expect(JSON.stringify(core.tools).length).toBeLessThan(
+      JSON.stringify(compatibility.tools).length * 0.65,
+    );
+
+    const readTool = core.tools.find((tool: any) => tool.name === 'vikunja_task_read');
+    const listBranch = readTool.inputSchema.oneOf.find(
+      (branch: any) => branch.properties.action.const === 'list',
+    );
+    expect(listBranch.properties.fields).toMatchObject({ type: 'array' });
+    expect(listBranch.properties.fields).not.toHaveProperty('anyOf');
+    const writeTool = core.tools.find((tool: any) => tool.name === 'vikunja_task_write');
+    const createBranch = writeTool.inputSchema.oneOf.find(
+      (branch: any) => branch.properties.action.const === 'create',
+    );
+    expect(createBranch.properties.fields).toMatchObject({ type: 'object' });
+  });
+
+  it('loads additional QA tools without exposing administrative tools', async () => {
+    const handler = (server as any)._requestHandlers.get('tools/list');
+    process.env.VIKUNJA_MCP_TOOL_PROFILE = 'qa';
+    const response = await handler({ method: 'tools/list' });
+    const names = response.tools.map((tool: any) => tool.name);
+
+    expect(names).toEqual(
+      expect.arrayContaining(['vikunja_task_bulk', 'vikunja_batch_import', 'vikunja_export_project']),
+    );
+    expect(names).not.toContain('vikunja_teams');
+    expect(names).not.toContain('vikunja_webhooks');
+    expect(names).not.toContain('vikunja_tasks');
+  });
+
   it('requires actor attribution and optimistic concurrency before dispatching writes', async () => {
     const taskTool = TOOLS.find((tool) => tool.name === 'vikunja_tasks')!;
     const client = {
@@ -310,7 +361,7 @@ describe('MCP Server Registration and Dispatching tests', () => {
     const response = await handler({
       method: 'tools/call',
       params: {
-        name: 'vikunja_tasks',
+        name: 'vikunja_task_read',
         arguments: {
           action: 'list',
           projectSelector: { id: 101 },

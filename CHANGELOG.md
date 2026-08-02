@@ -8,6 +8,10 @@
   budgets, and resumable cursors for task lists.
 - Enforce response-character budgets in the release benchmark for self-check,
   projected task reads, large lists, writes, and errors.
+- Replace the default mega task router with focused read, write, and workflow
+  tools; retain the router only in the explicit compatibility profile.
+- Add `core`, `qa`, `developer`, `full`, and `compatibility` tool profiles plus
+  release-gated schema-size budgets for each profile.
 
 ## 2.4.103 - 2026-07-31
 

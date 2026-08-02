@@ -527,3 +527,30 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     },
   ],
 };
+
+const taskActions = (actions: string[]) =>
+  TOOL_OPERATION_DOCS.vikunja_tasks.filter((operation) => actions.includes(operation.action));
+
+TOOL_OPERATION_DOCS.vikunja_task_read = taskActions(['get', 'list', 'summary']);
+TOOL_OPERATION_DOCS.vikunja_task_write = taskActions([
+  'create',
+  'create_if_absent',
+  'upsert',
+  'update',
+  'delete',
+]);
+TOOL_OPERATION_DOCS.vikunja_task_workflow = taskActions([
+  'close',
+  'reopen',
+  'close_with_evidence',
+  'assign',
+  'unassign',
+  'list-assignees',
+  'apply-label',
+  'remove-label',
+  'list-labels',
+  'set_status',
+  'relate',
+  'unrelate',
+  'list-relations',
+]);

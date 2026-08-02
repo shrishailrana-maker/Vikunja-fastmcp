@@ -11,6 +11,7 @@
 
 import os from 'os';
 import path from 'path';
+import { loadToolProfile, type ToolProfile } from './tool-profiles.js';
 
 export type ResponseMode = 'minimal' | 'receipt' | 'compact' | 'standard' | 'full';
 export type MutationScopeMode = 'off' | 'warn' | 'require';
@@ -26,6 +27,7 @@ export interface Config {
   // Optional so existing Config literals keep compiling; consumers use minimal
   // when no explicit mode is supplied.
   responseMode?: ResponseMode;
+  toolProfile?: ToolProfile;
   // Per-request timeout for ordinary JSON API calls.
   requestTimeoutMs?: number;
   // Longer timeout for streamed responses and multipart transfers.
@@ -188,6 +190,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     attachmentDownloadRoot,
     maxAttachmentBytes,
     responseMode,
+    toolProfile: loadToolProfile(env),
     requestTimeoutMs,
     transferTimeoutMs,
     mutationScopeMode,

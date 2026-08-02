@@ -30,6 +30,8 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { TOOL_OPERATION_DOCS } from './tool-contract.js';
+import { createTypedTaskTools } from './task-tools.js';
+import { loadToolProfile, selectToolsForProfile } from './tool-profiles.js';
 import {
   listTasks,
   createTask,
@@ -393,7 +395,7 @@ export interface McpToolDefinition {
 }
 
 function getToolManifest() {
-  return TOOLS.map((tool) => {
+  return getActiveTools().map((tool) => {
     const action = tool.inputSchema.shape.action as z.ZodTypeAny | undefined;
     const inner = action ? unwrapZod(action).schema : undefined;
     return {
@@ -1657,10 +1659,20 @@ export const TOOLS: McpToolDefinition[] = [
   },
 ];
 
+const legacyTaskTool = TOOLS.find((tool) => tool.name === 'vikunja_tasks');
+if (!legacyTaskTool) throw new Error('Internal task router is not registered.');
+TOOLS.push(
+  ...createTypedTaskTools((args, client) => legacyTaskTool.handler(args, client)),
+);
+
+function getActiveTools(): McpToolDefinition[] {
+  return selectToolsForProfile(TOOLS, loadToolProfile());
+}
+
 // Register Stdio Handlers
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   return {
-    tools: TOOLS.map((t) => ({
+    tools: getActiveTools().map((t) => ({
       name: t.name,
       description: toolDescription(t),
       inputSchema: addActionRequirements(t.name, zodToMcpSchema(t.inputSchema)),
@@ -1691,7 +1703,10 @@ function enforceToolMutationScope(
   client: VikunjaApiClient,
 ): void {
   const mode = client.getConfig().mutationScopeMode ?? 'require';
-  if (name === 'vikunja_tasks' && TASK_MUTATIONS.has(args.action)) {
+  if (
+    ['vikunja_tasks', 'vikunja_task_write', 'vikunja_task_workflow'].includes(name) &&
+    TASK_MUTATIONS.has(args.action)
+  ) {
     enforceMutationProjectScope(
       mode,
       `${name}.${args.action}`,
@@ -1780,7 +1795,7 @@ function requestedResponseMode(args: any): string {
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
-  const tool = TOOLS.find((t) => t.name === name);
+  const tool = getActiveTools().find((t) => t.name === name);
 
   if (!tool) {
     const envelope = safeEnvelopeText(
@@ -1856,7 +1871,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const effectiveResponseMode =
       parsedArgs.responseMode ?? client.getConfig().responseMode ?? 'minimal';
     const result =
-      ['vikunja_tasks', 'vikunja_task_bulk'].includes(name) &&
+      [
+        'vikunja_tasks',
+        'vikunja_task_write',
+        'vikunja_task_workflow',
+        'vikunja_task_bulk',
+      ].includes(name) &&
       ['minimal', 'receipt', 'compact'].includes(effectiveResponseMode)
         ? compactWriteEchoes(rawResult)
         : rawResult;
