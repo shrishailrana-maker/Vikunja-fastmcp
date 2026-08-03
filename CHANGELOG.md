@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.4.105 - 2026-08-03
+
+- Fix task-identifier lookup so unrelated `/projects` rows without usable
+  identifiers no longer break the lookup. Identified project rows still
+  receive strict validation.
+
 ## 2.4.104 - 2026-08-02
 
 - Apply optional first comments and relations during `create`,

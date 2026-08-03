@@ -327,6 +327,36 @@ describe('Identity and Resolution Cache tests', () => {
       });
     });
 
+    it('resolves OMA-349 when unrelated project rows lack a usable identifier', async () => {
+      mockFetch
+        .mockResolvedValueOnce(
+          jsonResponse(
+            projectPage([
+              { id: 101, title: 'Operations', identifier: 'OMA' },
+              { id: 102 },
+              null as any,
+            ]),
+          ),
+        )
+        .mockResolvedValueOnce(
+          jsonResponse(
+            taskPage({
+              id: 9349,
+              index: 349,
+              identifier: 'OMA-349',
+              title: 'Operations task',
+              project_id: 101,
+            }),
+          ),
+        );
+
+      await expect(resolveTask(client, { identifier: 'OMA-349' })).resolves.toMatchObject({
+        id: 9349,
+        identifier: 'OMA-349',
+        project: { id: 101, title: 'Operations' },
+      });
+    });
+
     it('resolves BETA-517 independently from ALPHA-517', async () => {
       mockFetch
         .mockResolvedValueOnce(

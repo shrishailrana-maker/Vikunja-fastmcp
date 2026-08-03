@@ -162,10 +162,10 @@ export class IdentityCache {
   setProjectIdentifiers(projects: { id: number; title: string; identifier?: string }[]) {
     this.projectIdentifierCache.clear();
     for (const project of projects) {
+      const identifier = typeof project?.identifier === 'string' ? project.identifier.trim() : '';
+      if (!identifier) continue;
       const ref = projectRefFromApi(project, '/projects');
       this.setProject(ref.title, ref);
-      const identifier = project.identifier?.trim();
-      if (!identifier) continue;
       const key = identifier.toLowerCase();
       this.projectIdentifierCache.set(key, [...(this.projectIdentifierCache.get(key) ?? []), ref]);
     }
