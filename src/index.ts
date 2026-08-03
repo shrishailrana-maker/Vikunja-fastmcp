@@ -34,6 +34,7 @@ import { createTypedTaskTools } from './task-tools.js';
 import { loadToolProfile, selectToolsForProfile } from './tool-profiles.js';
 import {
   listTasks,
+  listMyTasks,
   createTask,
   createIfAbsent,
   upsertTask,
@@ -745,6 +746,7 @@ export const TOOLS: McpToolDefinition[] = [
         'upsert',
         'get',
         'list',
+        'my_tasks',
         'summary',
         'batch_get',
         'verify_task_state',
@@ -820,6 +822,8 @@ export const TOOLS: McpToolDefinition[] = [
         .optional()
         .describe('Free-text task search alias for q; no filter DSL lookup is needed.'),
       searchIn: z.enum(['all', 'title', 'description']).optional(),
+      state: z.enum(['open', 'closed', 'all']).optional(),
+      ownership: z.enum(['assigned']).optional(),
       countOnly: z.boolean().optional(),
       filter: z.string().optional(),
       responseMode: z.enum(['minimal', 'receipt', 'compact', 'standard', 'full']).optional(),
@@ -918,6 +922,31 @@ export const TOOLS: McpToolDefinition[] = [
     }),
     handler: async (args, client) => {
       switch (args.action) {
+        case 'my_tasks': {
+          if (args.q !== undefined && args.search !== undefined && args.q !== args.search) {
+            throw badRequest('q and search must match when both are supplied.');
+          }
+          const searchText = args.q ?? args.search;
+          return listMyTasks(client, {
+            project: args.projectSelector,
+            projects: args.projects,
+            allProjects: args.allProjects,
+            state: args.state,
+            ownership: args.ownership,
+            page: args.page,
+            perPage: args.perPage,
+            label: args.label,
+            changedSince: args.changedSince,
+            q: searchText,
+            countOnly: args.countOnly,
+            responseMode: args.responseMode,
+            fields: Array.isArray(args.fields) ? args.fields : undefined,
+            includeUrl: args.includeUrl,
+            titleMaxChars: args.titleMaxChars,
+            maxResponseChars: args.maxResponseChars,
+            cursor: args.cursor,
+          });
+        }
         case 'list':
           if (args.q !== undefined && args.search !== undefined && args.q !== args.search) {
             throw badRequest('q and search must match when both are supplied.');

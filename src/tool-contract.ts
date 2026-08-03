@@ -114,6 +114,29 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
       note: 'Defaults to done=false unless done or allStates is supplied.',
     },
     {
+      action: 'my_tasks',
+      optional: [
+        'exactly one of projectSelector, projects, allProjects',
+        'state (open default, closed, or all)',
+        'ownership (assigned default; only assigned is supported)',
+        'page (default 1)',
+        'perPage (default 20; requests above 100 are safely capped to 100)',
+        'search (free-text task search)',
+        'label',
+        'changedSince (ISO timestamp)',
+        'countOnly',
+        'fields (projected task fields)',
+        'includeUrl (default false)',
+        'titleMaxChars',
+        'maxResponseChars (default 4000 in minimal mode)',
+        'cursor',
+        'responseMode (minimal default; receipt/compact/standard/full explicit)',
+      ],
+      execution:
+        'GET /user for the authenticated username, then exact-assignee task listing through the existing list path',
+      note: 'Returns only the current user id and username. The task scope remains exactly one projectSelector, projects, or allProjects:true.',
+    },
+    {
       action: 'summary',
       required: ['projectSelector'],
       execution: 'MCP-composed paginated counts by state, priority, and label',
@@ -692,6 +715,7 @@ const taskActions = (actions: string[]) =>
 TOOL_OPERATION_DOCS.vikunja_task_read = taskActions([
   'get',
   'list',
+  'my_tasks',
   'summary',
   'batch_get',
   'verify_task_state',

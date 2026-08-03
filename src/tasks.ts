@@ -1053,6 +1053,140 @@ export async function listTasks(client: VikunjaApiClient, options: ListTasksOpti
   return response;
 }
 
+export type MyTasksState = 'open' | 'closed' | 'all';
+
+export interface MyTasksOptions extends Omit<ListTasksOptions, 'assignee' | 'done' | 'allStates'> {
+  state?: MyTasksState;
+  ownership?: 'assigned';
+  search?: string;
+}
+
+/**
+ * List tasks assigned to the authenticated Vikunja user.
+ *
+ * The current username comes from GET /user so the server can apply its exact
+ * assignee filter. Listing, scoping, projection, cursors, and budgets remain
+ * owned by listTasks.
+ */
+export async function listMyTasks(client: VikunjaApiClient, options: MyTasksOptions): Promise<any> {
+  const { state = 'open', ownership = 'assigned', search, ...listOptions } = options;
+  if (ownership !== 'assigned') {
+    throw new VikunjaError({
+      status: 400,
+      code: 'INVALID_OWNERSHIP',
+      method: 'TOOLS_CALL',
+      path: 'ownership',
+      message: 'my_tasks only supports ownership="assigned".',
+      fieldErrors: [],
+    });
+  }
+
+  if (state !== 'open' && state !== 'closed' && state !== 'all') {
+    throw new VikunjaError({
+      status: 400,
+      code: 'INVALID_STATE',
+      method: 'TOOLS_CALL',
+      path: 'state',
+      message: 'my_tasks state must be open, closed, or all.',
+      fieldErrors: [],
+    });
+  }
+
+  const scopeCount =
+    (options.project ? 1 : 0) + (options.projects ? 1 : 0) + (options.allProjects ? 1 : 0);
+  if (scopeCount > 1) {
+    throw new VikunjaError({
+      status: 400,
+      code: 'INVALID_SCOPE',
+      method: 'GET',
+      path: '/tasks',
+      message: 'Specify exactly one of "project", "projects", or "allProjects".',
+      fieldErrors: [],
+    });
+  }
+  if (scopeCount === 0) {
+    throw new VikunjaError({
+      status: 400,
+      code: 'SCOPE_REQUIRED',
+      method: 'GET',
+      path: '/tasks',
+      message: 'List operation requires a scope: "project", "projects", or "allProjects".',
+      fieldErrors: [],
+    });
+  }
+
+  const user = await client.request<any>('GET', '/user');
+  const rawUsername = typeof user?.username === 'string' ? user.username : '';
+  const username = rawUsername.trim();
+  const userId = user?.id;
+  if (!username || !Number.isInteger(userId) || userId <= 0) {
+    throw new VikunjaError({
+      status: 502,
+      code: 'INVALID_CURRENT_USER',
+      method: 'GET',
+      path: '/user',
+      message:
+        'Vikunja returned no usable positive user id and username for the authenticated user.',
+      fieldErrors: [],
+    });
+  }
+
+  const responseMode = selectedResponseMode(client, options.responseMode);
+  const responseBudget =
+    options.maxResponseChars ??
+    (responseMode === 'minimal' || responseMode === 'receipt'
+      ? DEFAULT_MINIMAL_RESPONSE_CHARS
+      : undefined);
+  const userFieldOverhead =
+    JSON.stringify({ user: { id: userId, username: rawUsername } }).length - 1;
+  const envelopeOverhead = '```json\n{"ok":true,"data":}\n```'.length;
+  const listMaxResponseChars =
+    responseBudget === undefined ? undefined : responseBudget - userFieldOverhead;
+  if (listMaxResponseChars !== undefined && listMaxResponseChars <= envelopeOverhead) {
+    throw new VikunjaError({
+      status: 413,
+      code: 'RESPONSE_TOO_LARGE',
+      method: 'GET',
+      path: '/tasks',
+      message:
+        'The requested my_tasks response cannot fit maxResponseChars with the user identity. Use a larger budget.',
+      fieldErrors: [],
+    });
+  }
+
+  const listed = await listTasks(client, {
+    ...listOptions,
+    q: listOptions.q ?? search,
+    assignee: rawUsername,
+    done: state === 'open' ? false : state === 'closed' ? true : undefined,
+    allStates: state === 'all',
+    maxResponseChars: listMaxResponseChars,
+  });
+  const response = {
+    ...listed,
+    user: {
+      id: userId,
+      username: rawUsername,
+    },
+  };
+
+  if (
+    responseBudget !== undefined &&
+    JSON.stringify(response).length + '```json\n{"ok":true,"data":}\n```'.length > responseBudget
+  ) {
+    throw new VikunjaError({
+      status: 413,
+      code: 'RESPONSE_TOO_LARGE',
+      method: 'GET',
+      path: '/tasks',
+      message:
+        'The requested my_tasks response exceeds maxResponseChars. Use minimal mode, fewer fields, or a smaller page.',
+      fieldErrors: [],
+    });
+  }
+  return response;
+}
+
 interface LabelAggregate {
   label: string;
   total: number;

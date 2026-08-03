@@ -48,7 +48,7 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 ### `vikunja_tasks`
 * **Description**: Create, update, delete, close, assign, label, relate, or attach files to tasks.
 * **Parameters**:
-  * `action`: enum ["create", "create_if_absent", "upsert", "get", "list", "summary", "batch_get", "verify_task_state", "programme_snapshot", "task_dedupe", "lookup_external_key", "receipt_lookup", "update", "delete", "close", "reopen", "close_with_evidence", "append_evidence_if_changed", "close_if_verified", "transition_with_evidence", "assign", "unassign", "list-assignees", "apply-label", "remove-label", "list-labels", "set_status", "relate", "unrelate", "list-relations", "attach", "list-attachments", "download-attachment", "delete-attachment"] (required)
+  * `action`: enum ["create", "create_if_absent", "upsert", "get", "list", "my_tasks", "summary", "batch_get", "verify_task_state", "programme_snapshot", "task_dedupe", "lookup_external_key", "receipt_lookup", "update", "delete", "close", "reopen", "close_with_evidence", "append_evidence_if_changed", "close_if_verified", "transition_with_evidence", "assign", "unassign", "list-assignees", "apply-label", "remove-label", "list-labels", "set_status", "relate", "unrelate", "list-relations", "attach", "list-attachments", "download-attachment", "delete-attachment"] (required)
   * `taskSelector`: object (optional)
   * `projectSelector`: object (optional)
   * `projects`: array (optional)
@@ -68,6 +68,8 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
   * `q`: string (optional)
   * `search`: string (optional)
   * `searchIn`: enum ["all", "title", "description"] (optional)
+  * `state`: enum ["open", "closed", "all"] (optional)
+  * `ownership`: enum ["assigned"] (optional)
   * `countOnly`: boolean (optional)
   * `filter`: string (optional)
   * `responseMode`: enum ["minimal", "receipt", "compact", "standard", "full"] (optional)
@@ -119,6 +121,7 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 | `upsert` | projectSelector, actor, idempotencyKey, fields.title, externalKey | fields, expectedUpdatedAt, firstComment, relations, dryRun, responseMode | MCP-composed description-key lookup followed by create or conditional update. Requires server-side description filtering. Updating a matched title/description also requires expectedUpdatedAt. |
 | `get` | taskSelector | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), commentLimit (full mode only; default 5, max 100), attachmentLimit (full mode only; default 20, max 100), fields (projected task fields in minimal mode), includeUrl (default false), titleMaxChars, maxResponseChars, responseMode (minimal default; receipt/compact/standard/full explicit) | Direct compact/standard GET; full mode composes comments and attachments. taskSelector is exactly one of {globalId}, {identifier}, or {projectIndex}; bare numbers and strings are rejected. |
 | `list` | none | exactly one of projectSelector, projects, allProjects, page (default 1), perPage (default 20; requests above 100 are safely capped to 100), done, allStates, priority (0-5), label, assignee (exact username; numeric user IDs are not valid Vikunja list filters), titleContains (server-side title-only match), descriptionContains (requires server-side description filtering), changedSince (ISO timestamp), actor (matches stored "(by actor)" attribution; requires server-side description filtering), q, search (free-text alias for q), searchIn (all default, title, or description), filter, countOnly, fields (projected task fields), includeUrl (default false), titleMaxChars, maxResponseChars (default 4000 in minimal mode), cursor, responseMode (minimal default; receipt/compact/standard/full explicit) | Direct per project; grouped subsets/allProjects are MCP-composed. Defaults to done=false unless done or allStates is supplied. |
+| `my_tasks` | none | exactly one of projectSelector, projects, allProjects, state (open default, closed, or all), ownership (assigned default; only assigned is supported), page (default 1), perPage (default 20; requests above 100 are safely capped to 100), search (free-text task search), label, changedSince (ISO timestamp), countOnly, fields (projected task fields), includeUrl (default false), titleMaxChars, maxResponseChars (default 4000 in minimal mode), cursor, responseMode (minimal default; receipt/compact/standard/full explicit) | GET /user for the authenticated username, then exact-assignee task listing through the existing list path. Returns only the current user id and username. The task scope remains exactly one projectSelector, projects, or allProjects:true. |
 | `summary` | projectSelector | none | MCP-composed paginated counts by state, priority, and label |
 | `batch_get` | identifiers | fields, includeUrl, titleMaxChars, responseMode | MCP-composed bounded identity resolution and projected task reads |
 | `verify_task_state` | taskSelector | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), responseMode | MCP-composed task, latest comments, attachments, and relation metadata |
@@ -474,7 +477,7 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 ### `vikunja_task_read`
 * **Description**: Read, list, count, search, or summarize Vikunja tasks with bounded output.
 * **Parameters**:
-  * `action`: enum ["get", "list", "summary", "batch_get", "verify_task_state", "programme_snapshot", "task_dedupe", "lookup_external_key", "receipt_lookup"] (required)
+  * `action`: enum ["get", "list", "my_tasks", "summary", "batch_get", "verify_task_state", "programme_snapshot", "task_dedupe", "lookup_external_key", "receipt_lookup"] (required)
   * `taskSelector`: object (optional)
   * `projectSelector`: object (optional)
   * `projects`: array (optional)
@@ -495,6 +498,8 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
   * `q`: string (optional)
   * `search`: string (optional)
   * `searchIn`: enum ["all", "title", "description"] (optional)
+  * `state`: enum ["open", "closed", "all"] (optional)
+  * `ownership`: enum ["assigned"] (optional)
   * `countOnly`: boolean (optional)
   * `filter`: string (optional)
   * `responseMode`: enum ["minimal", "receipt", "compact", "standard", "full"] (optional)
@@ -518,6 +523,7 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 | --- | --- | --- | --- |
 | `get` | taskSelector | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), commentLimit (full mode only; default 5, max 100), attachmentLimit (full mode only; default 20, max 100), fields (projected task fields in minimal mode), includeUrl (default false), titleMaxChars, maxResponseChars, responseMode (minimal default; receipt/compact/standard/full explicit) | Direct compact/standard GET; full mode composes comments and attachments. taskSelector is exactly one of {globalId}, {identifier}, or {projectIndex}; bare numbers and strings are rejected. |
 | `list` | none | exactly one of projectSelector, projects, allProjects, page (default 1), perPage (default 20; requests above 100 are safely capped to 100), done, allStates, priority (0-5), label, assignee (exact username; numeric user IDs are not valid Vikunja list filters), titleContains (server-side title-only match), descriptionContains (requires server-side description filtering), changedSince (ISO timestamp), actor (matches stored "(by actor)" attribution; requires server-side description filtering), q, search (free-text alias for q), searchIn (all default, title, or description), filter, countOnly, fields (projected task fields), includeUrl (default false), titleMaxChars, maxResponseChars (default 4000 in minimal mode), cursor, responseMode (minimal default; receipt/compact/standard/full explicit) | Direct per project; grouped subsets/allProjects are MCP-composed. Defaults to done=false unless done or allStates is supplied. |
+| `my_tasks` | none | exactly one of projectSelector, projects, allProjects, state (open default, closed, or all), ownership (assigned default; only assigned is supported), page (default 1), perPage (default 20; requests above 100 are safely capped to 100), search (free-text task search), label, changedSince (ISO timestamp), countOnly, fields (projected task fields), includeUrl (default false), titleMaxChars, maxResponseChars (default 4000 in minimal mode), cursor, responseMode (minimal default; receipt/compact/standard/full explicit) | GET /user for the authenticated username, then exact-assignee task listing through the existing list path. Returns only the current user id and username. The task scope remains exactly one projectSelector, projects, or allProjects:true. |
 | `summary` | projectSelector | none | MCP-composed paginated counts by state, priority, and label |
 | `batch_get` | identifiers | fields, includeUrl, titleMaxChars, responseMode | MCP-composed bounded identity resolution and projected task reads |
 | `verify_task_state` | taskSelector | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), responseMode | MCP-composed task, latest comments, attachments, and relation metadata |

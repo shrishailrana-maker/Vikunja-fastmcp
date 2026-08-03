@@ -67,6 +67,7 @@ export function createTypedTaskTools(dispatch: TaskDispatcher): TypedTaskToolDef
         action: z.enum([
           'get',
           'list',
+          'my_tasks',
           'summary',
           'batch_get',
           'verify_task_state',
@@ -95,6 +96,8 @@ export function createTypedTaskTools(dispatch: TaskDispatcher): TypedTaskToolDef
         q: z.string().optional(),
         search: z.string().optional(),
         searchIn: z.enum(['all', 'title', 'description']).optional(),
+        state: z.enum(['open', 'closed', 'all']).optional(),
+        ownership: z.enum(['assigned']).optional(),
         countOnly: z.boolean().optional(),
         filter: z.string().optional(),
         responseMode: responseModeSchema,

@@ -162,6 +162,39 @@ describe('MCP Server Registration and Dispatching tests', () => {
     expect(schemaProperty(taskTool.inputSchema, listBranch, 'fields').anyOf).toEqual(
       expect.arrayContaining([expect.objectContaining({ type: 'array' })]),
     );
+
+    const myTasksBranch = taskTool.inputSchema.oneOf.find(
+      (branch: any) => branch.properties.action.const === 'my_tasks',
+    );
+    expect(myTasksBranch).toBeDefined();
+    expect(myTasksBranch.properties.state).toMatchObject({
+      type: 'string',
+      enum: ['open', 'closed', 'all'],
+    });
+    expect(myTasksBranch.properties.ownership).toMatchObject({
+      type: 'string',
+      enum: ['assigned'],
+    });
+    expect(myTasksBranch.required).not.toEqual(expect.arrayContaining(['state', 'ownership']));
+    expect(myTasksBranch.properties).toEqual(
+      expect.objectContaining({
+        projectSelector: expect.any(Object),
+        projects: expect.any(Object),
+        allProjects: { type: 'boolean' },
+        search: expect.any(Object),
+        label: expect.any(Object),
+        changedSince: expect.any(Object),
+        page: expect.any(Object),
+        perPage: expect.any(Object),
+        responseMode: expect.any(Object),
+        fields: expect.any(Object),
+        includeUrl: expect.any(Object),
+        titleMaxChars: expect.any(Object),
+        countOnly: expect.any(Object),
+        maxResponseChars: expect.any(Object),
+        cursor: expect.any(Object),
+      }),
+    );
     expect(listBranch.properties.includeUrl).toMatchObject({ type: 'boolean' });
     expect(listBranch.properties.titleMaxChars).toMatchObject({ type: 'integer' });
     expect(listBranch.properties.maxResponseChars).toMatchObject({ type: 'integer' });
@@ -837,6 +870,66 @@ describe('MCP Server Registration and Dispatching tests', () => {
     expect(response.isError).toBeUndefined();
     const taskListUrl = new URL(mockFetch.mock.calls[1][0] as string);
     expect(taskListUrl.searchParams.get('q')).toBe('duplicate title');
+  });
+
+  it('dispatches my_tasks through the current-user endpoint and rejects unsupported ownership', async () => {
+    const handler = (server as any)._requestHandlers.get('tools/call');
+    mockFetch.mockImplementation(async (url: string) => {
+      if (url.endsWith('/user')) {
+        return new Response(
+          JSON.stringify({ id: 7, username: 'example-user', email: 'private@example.com' }),
+          { status: 200 },
+        );
+      }
+      if (url.endsWith('/projects/101')) {
+        return new Response(JSON.stringify({ id: 101, title: 'Alpha' }), { status: 200 });
+      }
+      return new Response(
+        JSON.stringify({
+          items: [],
+          page: 1,
+          per_page: 20,
+          total: 0,
+          total_pages: 0,
+        }),
+        { status: 200 },
+      );
+    });
+
+    const response = await handler({
+      method: 'tools/call',
+      params: {
+        name: 'vikunja_task_read',
+        arguments: {
+          action: 'my_tasks',
+          projectSelector: { id: 101 },
+          ownership: 'assigned',
+        },
+      },
+    });
+
+    expect(response.isError).toBeUndefined();
+    const envelope = JSON.parse(
+      (response.content[0].text as string).match(/```json\n([\s\S]*?)\n```/)![1],
+    );
+    expect(envelope.data.user).toEqual({ id: 7, username: 'example-user' });
+    expect(JSON.stringify(envelope.data)).not.toContain('private@example.com');
+    expect(mockFetch.mock.calls.some(([url]: [string]) => String(url).endsWith('/user'))).toBe(
+      true,
+    );
+    const invalid = await handler({
+      method: 'tools/call',
+      params: {
+        name: 'vikunja_task_read',
+        arguments: {
+          action: 'my_tasks',
+          projectSelector: { id: 101 },
+          ownership: 'created',
+        },
+      },
+    });
+    expect(invalid.isError).toBe(true);
+    expect(invalid.content[0].text).toContain('VALIDATION_ERROR');
   });
 
   it('rejects conflicting q and search values without calling Vikunja', async () => {

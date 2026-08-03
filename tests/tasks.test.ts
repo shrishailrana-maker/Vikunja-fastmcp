@@ -13,6 +13,7 @@ import { jest } from '@jest/globals';
 import { VikunjaApiClient } from '../src/api.js';
 import {
   listTasks,
+  listMyTasks,
   buildFilterString,
   createTask,
   upsertTask,
@@ -120,6 +121,242 @@ describe('Tasks List and Scoping tests', () => {
   });
 
   describe('listTasks', () => {
+    it('lists assigned tasks for the authenticated user with a compact identity', async () => {
+      mockFetch
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({ id: 7, username: 'example-user', email: 'private@example.com' }),
+            { status: 200 },
+          ),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ id: 101, title: 'Alpha' }), { status: 200 }),
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              items: [
+                {
+                  id: 1,
+                  index: 10,
+                  identifier: 'ALPHA-10',
+                  title: 'Closed task',
+                  done: true,
+                  priority: 2,
+                  assignees: [{ id: 7, username: 'example-user' }],
+                },
+              ],
+              page: 1,
+              per_page: 20,
+              total: 1,
+              total_pages: 1,
+            }),
+            { status: 200 },
+          ),
+        );
+
+      const result = await listMyTasks(client, {
+        project: { id: 101 },
+        state: 'closed',
+        responseMode: 'compact',
+      });
+
+      expect(result.user).toEqual({ id: 7, username: 'example-user' });
+      expect(result.user).not.toHaveProperty('email');
+      expect(result.tasks[0]).toMatchObject({
+        id: 1,
+        portalRef: 'ALPHA-10',
+        done: true,
+      });
+      const taskListUrl = new URL(mockFetch.mock.calls[2][0] as string);
+      expect(taskListUrl.searchParams.get('filter')).toContain('done = true');
+      expect(taskListUrl.searchParams.get('filter')).toContain("assignees in 'example-user'");
+    });
+
+    it('preserves the exact non-empty username while validating it with trim', async () => {
+      mockFetch
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ id: 7, username: ' example-user ' }), { status: 200 }),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ id: 101, title: 'Alpha' }), { status: 200 }),
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({ items: [], page: 1, per_page: 20, total: 0, total_pages: 0 }),
+            { status: 200 },
+          ),
+        );
+
+      const result = await listMyTasks(client, {
+        project: { id: 101 },
+        responseMode: 'compact',
+      });
+
+      expect(result.user).toEqual({ id: 7, username: ' example-user ' });
+      expect(new URL(mockFetch.mock.calls[2][0] as string).searchParams.get('filter')).toContain(
+        "assignees in ' example-user '",
+      );
+    });
+
+    it('defaults to open assigned tasks and keeps count-only responses body-free', async () => {
+      mockFetch
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ id: 7, username: 'example-user' }), { status: 200 }),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ id: 101, title: 'Alpha' }), { status: 200 }),
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({ items: [], page: 1, per_page: 1, total: 4, total_pages: 4 }),
+            { status: 200 },
+          ),
+        );
+
+      const result = await listMyTasks(client, {
+        project: { id: 101 },
+        countOnly: true,
+      });
+
+      expect(result.user).toEqual({ id: 7, username: 'example-user' });
+      expect(result.project).toEqual({ id: 101, title: 'Alpha' });
+      expect(result.count).toBe(4);
+      expect(result).not.toHaveProperty('tasks');
+      const taskListUrl = new URL(mockFetch.mock.calls[2][0] as string);
+      expect(taskListUrl.searchParams.get('per_page')).toBe('1');
+      expect(taskListUrl.searchParams.get('filter')).toContain('done = false');
+      expect(taskListUrl.searchParams.get('filter')).toContain("assignees in 'example-user'");
+    });
+
+    it('forwards cursor and response budget options through my_tasks', async () => {
+      mockFetch.mockImplementation(async (input: string) => {
+        const url = String(input);
+        if (url.endsWith('/user')) {
+          return new Response(JSON.stringify({ id: 7, username: 'example-user' }), {
+            status: 200,
+          });
+        }
+        if (url.endsWith('/projects/101')) {
+          return new Response(JSON.stringify({ id: 101, title: 'Alpha' }), { status: 200 });
+        }
+        if (url.includes('/projects/101/tasks')) {
+          return new Response(
+            JSON.stringify({
+              items: [
+                {
+                  id: 9001,
+                  index: 1,
+                  identifier: 'ALPHA-1',
+                  title: 'A task',
+                  done: false,
+                  assignees: [{ id: 7, username: 'example-user' }],
+                },
+              ],
+              page: 1,
+              per_page: 1,
+              total: 2,
+              total_pages: 2,
+            }),
+            { status: 200 },
+          );
+        }
+        throw new Error(`Unexpected request ${url}`);
+      });
+
+      const result = await listMyTasks(client, {
+        project: { id: 101 },
+        search: 'A task',
+        perPage: 1,
+        maxResponseChars: 1_000,
+      });
+
+      expect(result.user).toEqual({ id: 7, username: 'example-user' });
+      expect(result.nextCursor).toEqual(expect.any(String));
+      expect(JSON.stringify(result).length).toBeLessThanOrEqual(1_000);
+      const taskListUrl = new URL(
+        mockFetch.mock.calls.find(([input]: [string]) =>
+          String(input).includes('/tasks'),
+        )![0] as string,
+      );
+      expect(taskListUrl.searchParams.get('q')).toBe('A task');
+    });
+
+    it('keeps the default minimal budget after adding user identity and resumes at the cursor', async () => {
+      const items = Array.from({ length: 100 }, (_, index) => ({
+        id: 7000 + index,
+        index: index + 1,
+        identifier: `ALPHA-${index + 1}`,
+        title: `Boundary task ${index + 1} ${'x'.repeat(96)}`,
+        done: false,
+      }));
+      mockFetch.mockImplementation(async (input: string) => {
+        const url = String(input);
+        if (url.endsWith('/user')) {
+          return new Response(JSON.stringify({ id: 7, username: 'example-user' }), {
+            status: 200,
+          });
+        }
+        if (url.endsWith('/projects/101')) {
+          return new Response(JSON.stringify({ id: 101, title: 'Alpha' }), { status: 200 });
+        }
+        if (url.includes('/projects/101/tasks')) {
+          return new Response(
+            JSON.stringify({
+              items,
+              page: 1,
+              per_page: 100,
+              total: 100,
+              total_pages: 1,
+            }),
+            { status: 200 },
+          );
+        }
+        throw new Error(`Unexpected request ${url}`);
+      });
+
+      const options = {
+        project: { id: 101 },
+        responseMode: 'minimal' as const,
+        fields: ['portalRef', 'title'] as ('portalRef' | 'title')[],
+        titleMaxChars: 100,
+      };
+      const first = await listMyTasks(client, options);
+      const envelopeOverhead = '```json\n{"ok":true,"data":}\n```'.length;
+
+      expect(JSON.stringify(first).length + envelopeOverhead).toBeLessThanOrEqual(4_000);
+      expect(first.returnedCount).toBeGreaterThan(0);
+      expect(first.nextCursor).toEqual(expect.any(String));
+
+      const resumed = await listMyTasks(client, { ...options, cursor: first.nextCursor });
+      expect(JSON.stringify(resumed).length + envelopeOverhead).toBeLessThanOrEqual(4_000);
+      expect(resumed.tasks[0].portalRef).toBe(`ALPHA-${first.returnedCount + 1}`);
+    });
+
+    it('rejects a malformed current-user response before listing tasks', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: 7, username: '   ' }), { status: 200 }),
+      );
+
+      await expect(listMyTasks(client, { project: { id: 101 } })).rejects.toMatchObject({
+        status: 502,
+        code: 'INVALID_CURRENT_USER',
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects a current-user response without a positive integer id', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: 0, username: 'example-user' }), { status: 200 }),
+      );
+
+      await expect(listMyTasks(client, { project: { id: 101 } })).rejects.toMatchObject({
+        status: 502,
+        code: 'INVALID_CURRENT_USER',
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
     it('should query a single project and format response', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,

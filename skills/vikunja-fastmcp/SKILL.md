@@ -81,6 +81,10 @@ requests or legacy tracker scripts while the MCP is available.
   not run `self_check` or probe filter syntax before a routine scoped search.
 - Use `assignee: "username"` for assignee lists. Vikunja list filters require
   usernames; numeric user IDs are only for operations that explicitly accept IDs.
+- Use `vikunja_task_read` with `action: "my_tasks"` for the authenticated user's
+  assigned tasks. Pass exactly one of `projectSelector`, `projects`, or
+  `allProjects: true`; `state` defaults to `open` and accepts `closed` or `all`.
+  The response exposes only the current user's `id` and `username`.
 - Prefer `countOnly: true` when only a total is needed.
 - Use `vikunja_task_read` `summary` for one-project counts by done state, priority,
   labels, and configured status labels without listing task bodies.

@@ -194,8 +194,9 @@ compatibility router:
 - `self_check` / `vikunja_auth` — compact diagnostics and current user. Use
   `detail: "full"` only for capabilities and local paths.
 - `vikunja_projects` — project list and get.
-- `vikunja_task_read` — scoped list/search, projected get, batch get, task
-  verification, project/programme snapshots, and durable receipt lookup.
+- `vikunja_task_read` — scoped list/search, `my_tasks` for the authenticated
+  user's assigned tasks, projected get, batch get, task verification,
+  project/programme snapshots, and durable receipt lookup.
 - `vikunja_task_write` — guarded create, create-if-absent, upsert, update, and
   delete operations. Create variants can add a first comment and relations in
   the same durable operation.
@@ -334,6 +335,10 @@ Task lists default to 20 projected items and cap each project page at 100. Use
 needed data; use `countOnly` for totals and follow `nextCursor` when
 `incomplete` is true. Request `responseMode: "standard"` for ordinary expanded
 task fields or `responseMode: "full"` for explicit bundled detail.
+Use `vikunja_task_read` with `action: "my_tasks"` to list tasks assigned to the
+authenticated user. Pass exactly one of `projectSelector`, `projects`, or
+`allProjects: true`; `state` defaults to `open` and also accepts `closed` or
+`all`. The response includes only the current user's `id` and `username`.
 
 The full-profile migration is intentionally fail-closed. Preview reports
 estimated API calls. `cancel` records a durable stop request checked before the

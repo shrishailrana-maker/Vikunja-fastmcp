@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.4.106 - 2026-08-03
+
+- Add `vikunja_task_read` `my_tasks` for bounded, cursor-based lists of tasks
+  assigned to the authenticated user, with open/closed/all state mapping and
+  a compact current-user identity.
+- Refresh the typed runtime contract, README, packaged skill, and generated
+  MCP API metadata.
+
 ## 2.4.105 - 2026-08-03
 
 - Fix task-identifier lookup so unrelated `/projects` rows without usable
