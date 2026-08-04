@@ -1,6 +1,6 @@
 {
   "name": "vikunja-fastmcp",
-  "version": "2.4.106",
+  "version": "2.4.107",
   "description": "Clean-room, v2-only Vikunja Model Context Protocol server (rebuilt from scratch; no legacy code).",
   "type": "module",
   "main": "dist/index.js",
@@ -58,7 +58,9 @@
   },
   "overrides": {
     "@hono/node-server": "2.0.11",
-    "fast-uri": "3.1.4"
+    "fast-uri": "3.1.5",
+    "hono": "4.13.0",
+    "ip-address": "10.4.0"
   },
   "devDependencies": {
     "@types/jest": "^30.0.0",

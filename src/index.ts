@@ -2285,7 +2285,7 @@ export const TOOLS: McpToolDefinition[] = [
   {
     name: 'vikunja_project_migration',
     description:
-      'Preview, run, cancel, resume, or inspect a durable Vikunja-to-GitHub project migration. Available only in the full tool profile.',
+      'Preview, run, cancel, resume, or inspect a durable Vikunja-to-GitHub project migration.',
     inputSchema: z.object({
       action: z.enum(['preview', 'run', 'status', 'cancel']),
       projectSelector: z

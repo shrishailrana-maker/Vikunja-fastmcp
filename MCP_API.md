@@ -380,7 +380,7 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 | `export` | projectSelector | format, destinationPath, includeComments, includeAttachments, includeRelations, taskLimit (default 1000), detailLimit (default 100 per task), overwrite (default false) | MCP-composed paginated export to sandboxed JSON or CSV. Creator is always included; comments, attachments, and relations are fetched only when their include flags are true. The receipt reports task count, API request count, elapsed time, and incomplete=false; bounded truncation fails explicitly. |
 
 ### `vikunja_project_migration`
-* **Description**: Preview, run, cancel, resume, or inspect a durable Vikunja-to-GitHub project migration. Available only in the full tool profile.
+* **Description**: Preview, run, cancel, resume, or inspect a durable Vikunja-to-GitHub project migration.
 * **Parameters**:
   * `action`: enum ["preview", "run", "status", "cancel"] (required)
   * `projectSelector`: object (optional)

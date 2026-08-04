@@ -260,7 +260,7 @@ describe('packaged Vikunja skill', () => {
     expect(normalizedSkill).toContain('Use `batch_get` for several known human identifiers');
     expect(normalizedSkill).toContain('Mutation responses use structured-only `receipt` mode');
     expect(normalizedSkill).toContain('refresh exactly one user-wide copy');
-    expect(normalizedSkill).toContain('Project migration is available only in the explicit `full`');
+    expect(normalizedSkill).toContain('they expose the same complete typed surface');
     expect(normalizedSkill).toContain(
       'Wrap file paths, commands, and code identifiers in inline backticks',
     );

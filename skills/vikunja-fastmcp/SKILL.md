@@ -19,10 +19,9 @@ requests or legacy tracker scripts while the MCP is available.
 4. After installing or updating the npm package, reuse and refresh exactly one
    user-wide copy of this packaged skill. Install it when missing; do not leave
    stale project-local or versioned duplicates that can override it.
-5. Use the default `core` tool profile for ordinary work. Select `qa`,
-   `developer`, or `full` only when the task needs those additional tools. Use
-   `compatibility` only while migrating a client that still calls the broad
-   `vikunja_tasks` router.
+5. Use any of the `core`, `qa`, `developer`, or `full` profiles for typed-tool
+   work; they expose the same complete typed surface. Use `compatibility` only
+   while migrating a client that still calls the broad `vikunja_tasks` router.
 
 ## Scope And Identity
 
@@ -189,11 +188,10 @@ requests or legacy tracker scripts while the MCP is available.
 
 ## Portable Migration
 
-- Project migration is available only in the explicit `full` profile. Preview
-  first and review its API-call estimate, then run with one stable idempotency
-  key and inspect paginated status receipts before archiving source tasks. Use
-  `cancel` with the operation ID and actor to stop before the next destination
-  write or source archival.
+- Preview project migration first and review its API-call estimate, then run
+  with one stable idempotency key and inspect paginated status receipts before
+  archiving source tasks. Use `cancel` with the operation ID and actor to stop
+  before the next destination write or source archival.
 - Public sanitization is mandatory. The GitHub token comes only from the MCP
   process environment and must never be placed in tool arguments or task text.
 - A source task closes only after the destination issue and every migrated

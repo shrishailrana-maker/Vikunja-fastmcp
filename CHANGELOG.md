@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.4.107 - 2026-08-04
+
+- Expose the complete typed MCP tool surface through the `core`, `qa`,
+  `developer`, and `full` profiles so coding agents can create tasks, manage
+  labels, and use administrative, export, webhook, and migration APIs without
+  switching profiles.
+- Keep the redundant broad `vikunja_tasks` router exclusive to
+  `compatibility`, and update profile documentation, skill guidance, tests,
+  and schema benchmarks.
+- Pin patched transitive versions of `fast-uri`, `hono`, and `ip-address` to
+  resolve newly published production dependency advisories.
+
 ## 2.4.106 - 2026-08-03
 
 - Add `vikunja_task_read` `my_tasks` for bounded, cursor-based lists of tasks

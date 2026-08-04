@@ -121,9 +121,8 @@ Optional:
 - `VIKUNJA_MCP_RESPONSE_MODE`: `minimal` (default), `receipt`, `compact`,
   `standard`, or `full`. `minimal` and `receipt` return structured JSON only.
 - `VIKUNJA_MCP_TOOL_PROFILE`: `core` (default), `qa`, `developer`, `full`, or
-  `compatibility`. Smaller profiles reduce the schema loaded into each agent
-  session. `compatibility` alone exposes the legacy broad `vikunja_tasks`
-  router.
+  `compatibility`. The first four profiles expose the complete typed tool set;
+  `compatibility` also exposes the legacy broad `vikunja_tasks` router.
 - `VIKUNJA_REQUEST_TIMEOUT_MS`: ordinary request timeout. Defaults to 30000.
 - `VIKUNJA_TRANSFER_TIMEOUT_MS`: streamed and multipart inactivity timeout.
   Defaults to 60000.
@@ -136,7 +135,7 @@ Optional:
   name derived from `VIKUNJA_URL`.
 - `VIKUNJA_IDEMPOTENCY_TTL_MS`: durable receipt lifetime. Defaults to 30 days.
 - `GITHUB_TOKEN` or `GH_TOKEN`: destination credential used only by the
-  full-profile GitHub migration tool. It is never accepted as a tool argument.
+  GitHub migration tool. It is never accepted as a tool argument.
 - `VIKUNJA_GITHUB_API_HOSTS`: optional comma-separated trusted GitHub Enterprise
   hostnames. GitHub.com uses `api.github.com` without configuration. IP literals,
   localhost, and unapproved hosts are rejected before a token is loaded.
@@ -188,8 +187,8 @@ tests. See [`fallback/README.md`](fallback/README.md) for the archive policy.
 
 ## Tools
 
-The default `core` profile exposes small typed tools instead of the broad
-compatibility router:
+The `core`, `qa`, `developer`, and `full` profiles expose the complete typed
+tool set instead of the broad compatibility router:
 
 - `self_check` / `vikunja_auth` — compact diagnostics and current user. Use
   `detail: "full"` only for capabilities and local paths.
@@ -208,15 +207,9 @@ compatibility router:
 - `vikunja_task_comments` — bounded comment lists and deltas with `since`,
   `countOnly`, and optional latest-comment metadata.
 
-The `qa` profile adds `vikunja_task_organize` for assignees, labels, status, and
-relations, plus labels, users, durable bulk work, reminders, import, and export.
-`developer` adds user export, templates, and webhooks. `full` adds every typed
-tool, including portable project migration. `compatibility` exposes all tools
-plus the old `vikunja_tasks` router and should be used only while moving an
-existing client to typed tools.
+Additional typed tools:
 
-Additional profile-dependent tools:
-
+- `vikunja_task_organize` — task assignees, labels, status, and relations
 - `vikunja_labels` — global labels (title or id)
 - `vikunja_users`
 - `vikunja_teams` — teams/members (`userId` is the Vikunja user id)
@@ -230,8 +223,8 @@ Additional profile-dependent tools:
 - `vikunja_export_project` — local JSON/CSV export with optional comments,
   attachments, and relations. Its receipt reports task count, actual API
   requests, elapsed time, and completion state.
-- `vikunja_project_migration` — full-profile preview/run/status/cancel workflow
-  for a resumable, sanitized GitHub issue migration with destination read-back.
+- `vikunja_project_migration` — preview/run/status/cancel workflow for a
+  resumable, sanitized GitHub issue migration with destination read-back.
 - `vikunja_request_user_export` / `vikunja_download_user_export`
 - `vikunja_templates` — machine-local templates and task instantiation
 - `vikunja_webhooks` — project/user webhooks and event discovery
@@ -340,7 +333,7 @@ authenticated user. Pass exactly one of `projectSelector`, `projects`, or
 `allProjects: true`; `state` defaults to `open` and also accepts `closed` or
 `all`. The response includes only the current user's `id` and `username`.
 
-The full-profile migration is intentionally fail-closed. Preview reports
+The project migration is intentionally fail-closed. Preview reports
 estimated API calls. `cancel` records a durable stop request checked before the
 next destination write and before source archival. The workflow writes a versioned,
 public-sanitized manifest, uses durable per-task receipts, verifies complete

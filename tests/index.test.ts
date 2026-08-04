@@ -374,29 +374,31 @@ describe('MCP Server Registration and Dispatching tests', () => {
     expect(eventBranch.properties).toHaveProperty('scope');
   });
 
-  it('uses small typed task tools in the default profile and hides the mega-router', async () => {
+  it('exposes every typed tool in all non-compatibility profiles', async () => {
     const handler = (server as any)._requestHandlers.get('tools/list');
-    delete process.env.VIKUNJA_MCP_TOOL_PROFILE;
-    const core = await handler({ method: 'tools/list' });
     process.env.VIKUNJA_MCP_TOOL_PROFILE = 'compatibility';
     const compatibility = await handler({ method: 'tools/list' });
+    const registeredNames = TOOLS.map((tool: any) => tool.name).sort();
+    const compatibilityNames = compatibility.tools.map((tool: any) => tool.name).sort();
+    const typedNames = registeredNames.filter((name: string) => name !== 'vikunja_tasks');
 
-    const coreNames = core.tools.map((tool: any) => tool.name);
-    expect(coreNames).toEqual(
-      expect.arrayContaining([
-        'vikunja_task_read',
-        'vikunja_task_write',
-        'vikunja_task_workflow',
-        'vikunja_task_comments',
-        'vikunja_task_attachments',
-      ]),
-    );
-    expect(coreNames).not.toContain('vikunja_tasks');
-    expect(coreNames).not.toContain('vikunja_task_organize');
-    expect(core.tools.every((tool: any) => !tool.description.includes('Actions:'))).toBe(true);
-    expect(JSON.stringify(core.tools).length).toBeLessThan(
-      JSON.stringify(compatibility.tools).length * 0.65,
-    );
+    expect(compatibilityNames).toEqual(registeredNames);
+    expect(compatibilityNames.filter((name: string) => name === 'vikunja_tasks')).toEqual([
+      'vikunja_tasks',
+    ]);
+
+    for (const profile of ['core', 'qa', 'developer', 'full'] as const) {
+      process.env.VIKUNJA_MCP_TOOL_PROFILE = profile;
+      const response = await handler({ method: 'tools/list' });
+      const names = response.tools.map((tool: any) => tool.name).sort();
+      expect(names).toEqual(typedNames);
+      expect(names).toContain('vikunja_task_organize');
+      expect(names).toContain('vikunja_labels');
+      expect(names).not.toContain('vikunja_tasks');
+    }
+
+    process.env.VIKUNJA_MCP_TOOL_PROFILE = 'core';
+    const core = await handler({ method: 'tools/list' });
 
     const readTool = core.tools.find((tool: any) => tool.name === 'vikunja_task_read');
     expect(readTool.inputSchema.oneOf.map((branch: any) => branch.properties.action.const)).toEqual(
@@ -425,7 +427,7 @@ describe('MCP Server Registration and Dispatching tests', () => {
     });
   });
 
-  it('loads additional QA tools without exposing administrative tools', async () => {
+  it('keeps administrative and migration tools in the typed profile surface', async () => {
     const handler = (server as any)._requestHandlers.get('tools/list');
     process.env.VIKUNJA_MCP_TOOL_PROFILE = 'qa';
     const response = await handler({ method: 'tools/list' });
@@ -437,12 +439,12 @@ describe('MCP Server Registration and Dispatching tests', () => {
         'vikunja_task_bulk',
         'vikunja_batch_import',
         'vikunja_export_project',
+        'vikunja_teams',
+        'vikunja_webhooks',
+        'vikunja_project_migration',
       ]),
     );
-    expect(names).not.toContain('vikunja_teams');
-    expect(names).not.toContain('vikunja_webhooks');
     expect(names).not.toContain('vikunja_tasks');
-    expect(names).not.toContain('vikunja_project_migration');
 
     process.env.VIKUNJA_MCP_TOOL_PROFILE = 'full';
     const full = await handler({ method: 'tools/list' });
