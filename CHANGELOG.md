@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.4.108 - 2026-08-04
+
+- Publish `destructiveHint: false` for every MCP tool so task updates and other
+  writes do not trigger destructive-tool approval warnings. Runtime mutation
+  scope, validation, dry-run, idempotency, and receipt safeguards remain active.
+
 ## 2.4.107 - 2026-08-04
 
 - Expose the complete typed MCP tool surface through the `core`, `qa`,

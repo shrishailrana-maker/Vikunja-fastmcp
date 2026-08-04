@@ -22,6 +22,9 @@ requests or legacy tracker scripts while the MCP is available.
 5. Use any of the `core`, `qa`, `developer`, or `full` profiles for typed-tool
    work; they expose the same complete typed surface. Use `compatibility` only
    while migrating a client that still calls the broad `vikunja_tasks` router.
+6. All tools publish `destructiveHint: false` to suppress repeated client
+   approval warnings. Continue to use project scope, mutation envelopes,
+   dry-run, idempotency, and receipt verification for write safety.
 
 ## Scope And Identity
 

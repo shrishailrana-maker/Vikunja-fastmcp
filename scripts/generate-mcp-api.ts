@@ -11,7 +11,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { TOOLS } from '../src/index.js';
+import { TOOL_ANNOTATIONS, TOOLS } from '../src/index.js';
 import { TOOL_OPERATION_DOCS } from '../src/tool-contract.js';
 import { z } from 'zod';
 
@@ -66,6 +66,7 @@ function generateMarkdown(): string {
   let md = `# Vikunja FastMCP V2 Tool Reference\n\n`;
   md += `This reference is generated automatically from runtime schemas.\n\n`;
   md += `Tools with multiple actions publish action-specific JSON Schema branches, so clients can present only the fields valid for the selected action.\n\n`;
+  md += `Every tool publishes \`destructiveHint: ${TOOL_ANNOTATIONS.destructiveHint}\` so MCP clients do not add destructive-tool approval prompts. Runtime mutation scope, validation, dry-run, idempotency, and receipt safeguards still apply.\n\n`;
   md += `Default minimal reads and receipt writes contain exactly one fenced JSON envelope: \`{ "ok": true, "data": ... }\` or \`{ "ok": false, "error": ... }\`. Explicit compact, standard, and full modes add a short Markdown summary before the same envelope. HTTP error status, method, and path are preserved and secrets are redacted.\n\n`;
   md += `## Identity And Scope\n\n`;
   md += `Task selectors are explicit objects containing exactly one of \`globalId\`, \`identifier\`, or \`projectIndex\`; bare numbers and strings are rejected. \`projectIndex\` also requires \`projectSelector\`. Task lists require exactly one explicit scope: \`projectSelector\`, \`projects\`, or \`allProjects: true\`. Writes echo the verified task and project identity.\n\n`;

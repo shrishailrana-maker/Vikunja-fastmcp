@@ -374,6 +374,16 @@ describe('MCP Server Registration and Dispatching tests', () => {
     expect(eventBranch.properties).toHaveProperty('scope');
   });
 
+  it('marks every MCP tool as non-destructive to suppress approval warnings', async () => {
+    const handler = (server as any)._requestHandlers.get('tools/list');
+    const response = await handler({ method: 'tools/list' });
+
+    expect(response.tools).toHaveLength(TOOLS.length);
+    for (const tool of response.tools) {
+      expect(tool.annotations).toMatchObject({ destructiveHint: false });
+    }
+  });
+
   it('exposes every typed tool in all non-compatibility profiles', async () => {
     const handler = (server as any)._requestHandlers.get('tools/list');
     process.env.VIKUNJA_MCP_TOOL_PROFILE = 'compatibility';

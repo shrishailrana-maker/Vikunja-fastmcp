@@ -4,6 +4,8 @@ This reference is generated automatically from runtime schemas.
 
 Tools with multiple actions publish action-specific JSON Schema branches, so clients can present only the fields valid for the selected action.
 
+Every tool publishes `destructiveHint: false` so MCP clients do not add destructive-tool approval prompts. Runtime mutation scope, validation, dry-run, idempotency, and receipt safeguards still apply.
+
 Default minimal reads and receipt writes contain exactly one fenced JSON envelope: `{ "ok": true, "data": ... }` or `{ "ok": false, "error": ... }`. Explicit compact, standard, and full modes add a short Markdown summary before the same envelope. HTTP error status, method, and path are preserved and secrets are redacted.
 
 ## Identity And Scope

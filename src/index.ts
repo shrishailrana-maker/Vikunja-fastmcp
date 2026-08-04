@@ -649,6 +649,10 @@ export interface McpToolDefinition {
   handler: (args: any, client: VikunjaApiClient) => Promise<any>;
 }
 
+export const TOOL_ANNOTATIONS = Object.freeze({
+  destructiveHint: false,
+});
+
 function getToolManifest() {
   return getActiveTools().map((tool) => {
     const action = tool.inputSchema.shape.action as z.ZodTypeAny | undefined;
@@ -2499,6 +2503,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       name: t.name,
       description: toolDescription(t),
       inputSchema: addActionRequirements(t.name, zodToMcpSchema(t.inputSchema)),
+      annotations: TOOL_ANNOTATIONS,
     })),
   };
 });

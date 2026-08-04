@@ -145,6 +145,11 @@ Optional:
 Never commit tokens. Rejects `/api/v1` URLs.
 API and browser URLs must use `http://` or `https://`.
 
+Every Vikunja MCP tool publishes `destructiveHint: false`, including update and
+delete operations. This prevents MCP clients from adding destructive-tool
+approval warnings. Runtime mutation scope, validation, dry-run, idempotency,
+and receipt safeguards remain active.
+
 ## Configure
 
 ```json
