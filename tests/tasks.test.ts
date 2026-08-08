@@ -118,6 +118,12 @@ describe('Tasks List and Scoping tests', () => {
         "done = false && description like '%parser''s report%' && description like '%by Example Agent%'",
       );
     });
+
+    it('canonicalizes delegated actor syntax before building a parser-safe filter', () => {
+      expect(buildFilterString({ actor: 'Codex (as srana)' })).toBe(
+        "done = false && description like '%by Codex as srana%'",
+      );
+    });
   });
 
   describe('listTasks', () => {
@@ -1063,6 +1069,64 @@ describe('Tasks List and Scoping tests', () => {
   });
 
   describe('Task Mutation (CRUD) tests', () => {
+    it('does not burn an idempotency key when project preflight fails before the first write', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              items: [{ id: 101, title: 'Alpha' }],
+              page: 1,
+              per_page: 100,
+              total: 1,
+              total_pages: 1,
+            }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: 101, title: 'Alpha' }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 201,
+          text: async () =>
+            JSON.stringify({
+              id: 9005,
+              index: 305,
+              identifier: 'ALPHA-305',
+              title: 'Recovered create',
+              project_id: 101,
+            }),
+        } as Response);
+
+      await expect(
+        createTask(
+          client,
+          { title: 'Missing' },
+          { title: 'Recovered create' },
+          'preflight-retry',
+          undefined,
+          'Codex',
+        ),
+      ).rejects.toMatchObject({ code: 'PROJECT_NOT_FOUND' });
+
+      await expect(
+        createTask(
+          client,
+          { id: 101 },
+          { title: 'Recovered create' },
+          'preflight-retry',
+          undefined,
+          'Codex',
+        ),
+      ).resolves.toMatchObject({ action: 'created', target: { id: 9005 } });
+      expect(mockFetch.mock.calls.filter((call: any) => call[1]?.method === 'POST')).toHaveLength(
+        1,
+      );
+    });
+
     it('upsert creates a marked task with actor attribution before the stable key', async () => {
       mockFetch
         .mockResolvedValueOnce({

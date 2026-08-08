@@ -22,6 +22,7 @@ import {
   formatSuccessEnvelope,
   formatFailureEnvelope,
   fetchAllCollectionItems,
+  normalizeDatesAndNulls,
 } from './format.js';
 import { toErrorEnvelope, VikunjaError, redactSecrets } from './errors.js';
 import { resolveLabel } from './tasks.js';
@@ -125,7 +126,7 @@ import {
   importCsvIdempotently,
   previewIdempotentCsvImport,
 } from './csv-import.js';
-import { enforceMutationProjectScope } from './mutation-policy.js';
+import { canonicalizeActor, enforceMutationProjectScope } from './mutation-policy.js';
 import { durableOperationKey, runDurableOperation } from './idempotency.js';
 import {
   createWebhook,
@@ -387,6 +388,66 @@ function safeEnvelopeText(text: string, configuredToken?: string): string {
   return redactSecrets(text, configuredToken ?? process.env.VIKUNJA_API_TOKEN);
 }
 
+function safeStructuredEnvelope(
+  envelope: Record<string, unknown>,
+  configuredToken?: string,
+): Record<string, unknown> {
+  return JSON.parse(safeEnvelopeText(JSON.stringify(envelope), configuredToken)) as Record<
+    string,
+    unknown
+  >;
+}
+
+function failureToolResult(
+  summary: string,
+  error: unknown,
+  responseMode: unknown,
+  configuredToken?: string,
+) {
+  const structuredContent = safeStructuredEnvelope({ ok: false, error }, configuredToken);
+  return {
+    isError: true,
+    structuredContent,
+    content: [
+      {
+        type: 'text' as const,
+        text: safeEnvelopeText(
+          formatFailureEnvelope(summary, structuredContent.error, {
+            structuredOnly: structuredOnlyMode(responseMode),
+          }),
+          configuredToken,
+        ),
+      },
+    ],
+  };
+}
+
+function successToolResult(
+  summary: string,
+  data: unknown,
+  responseMode: unknown,
+  configuredToken?: string,
+) {
+  const structuredContent = safeStructuredEnvelope(
+    { ok: true, data: normalizeDatesAndNulls(data) },
+    configuredToken,
+  );
+  return {
+    structuredContent,
+    content: [
+      {
+        type: 'text' as const,
+        text: safeEnvelopeText(
+          formatSuccessEnvelope(summary, structuredContent.data, {
+            structuredOnly: structuredOnlyMode(responseMode),
+          }),
+          configuredToken,
+        ),
+      },
+    ],
+  };
+}
+
 // Handler precondition failures are caller mistakes (missing/invalid args), so
 // they must surface as a 400 VALIDATION_ERROR, not a generic 500 from the
 // non-VikunjaError branch of toErrorEnvelope.
@@ -613,7 +674,7 @@ const actorValueSchema = z
   .trim()
   .min(1)
   .max(80)
-  .regex(/^[\p{L}\p{N} ._-]+$/u, 'actor contains unsupported characters');
+  .regex(/^[\p{L}\p{N} ._()_-]+$/u, 'actor contains unsupported characters');
 const actorSchema = actorValueSchema.optional();
 
 const taskSelectorSchema = z.union([
@@ -2643,44 +2704,35 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const tool = getActiveTools().find((t) => t.name === name);
 
   if (!tool) {
-    const envelope = safeEnvelopeText(
-      formatFailureEnvelope(
-        'Unknown tool.',
-        toErrorEnvelope(badRequest(`Tool not found: ${name}`)).error,
-        { structuredOnly: structuredOnlyMode(requestedResponseMode(args)) },
-      ),
+    return failureToolResult(
+      'Unknown tool.',
+      toErrorEnvelope(badRequest(`Tool not found: ${name}`)).error,
+      requestedResponseMode(args),
     );
-    return {
-      isError: true,
-      content: [{ type: 'text', text: envelope }],
-    };
   }
 
   // Parse args
   let parsedArgs: any;
   try {
     parsedArgs = tool.inputSchema.strict().parse(args || {});
+    if (typeof parsedArgs.actor === 'string') {
+      parsedArgs.actor = canonicalizeActor(parsedArgs.actor);
+    }
   } catch (err: any) {
-    const envelope = safeEnvelopeText(
-      formatFailureEnvelope(
-        'Invalid tool arguments.',
-        toErrorEnvelope(
-          new VikunjaError({
-            status: 400,
-            code: 'VALIDATION_ERROR',
-            method: 'TOOLS_CALL',
-            path: name,
-            message: err.message || 'Invalid tool arguments',
-            fieldErrors: [],
-          }),
-        ).error,
-        { structuredOnly: structuredOnlyMode(requestedResponseMode(args)) },
-      ),
+    return failureToolResult(
+      'Invalid tool arguments.',
+      toErrorEnvelope(
+        new VikunjaError({
+          status: 400,
+          code: 'VALIDATION_ERROR',
+          method: 'TOOLS_CALL',
+          path: name,
+          message: err.message || 'Invalid tool arguments',
+          fieldErrors: [],
+        }),
+      ).error,
+      requestedResponseMode(args),
     );
-    return {
-      isError: true,
-      content: [{ type: 'text', text: envelope }],
-    };
   }
 
   // Load config & instantiate client
@@ -2698,15 +2750,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         attachmentDownloadRoot: '/tmp',
       });
     } else {
-      const envelope = safeEnvelopeText(
-        formatFailureEnvelope('Configuration error.', toErrorEnvelope(err).error, {
-          structuredOnly: structuredOnlyMode(requestedResponseMode(parsedArgs)),
-        }),
+      return failureToolResult(
+        'Configuration error.',
+        toErrorEnvelope(err).error,
+        requestedResponseMode(parsedArgs),
       );
-      return {
-        isError: true,
-        content: [{ type: 'text', text: envelope }],
-      };
     }
   }
 
@@ -2741,52 +2789,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         fieldErrors: [] as { location: string; message: string }[],
         details: result.diagnostics ?? result,
       };
-      return {
-        isError: true,
-        content: [
-          {
-            type: 'text',
-            text: safeEnvelopeText(
-              formatFailureEnvelope(summary, errorPayload, {
-                structuredOnly: structuredOnlyMode(effectiveResponseMode),
-              }),
-              client.getConfig().vikunjaToken,
-            ),
-          },
-        ],
-      };
+      return failureToolResult(
+        summary,
+        errorPayload,
+        effectiveResponseMode,
+        client.getConfig().vikunjaToken,
+      );
     }
-    return {
-      content: [
-        {
-          type: 'text',
-          text: safeEnvelopeText(
-            formatSuccessEnvelope(summary, result, {
-              structuredOnly: ['minimal', 'receipt'].includes(effectiveResponseMode),
-            }),
-            client.getConfig().vikunjaToken,
-          ),
-        },
-      ],
-    };
-  } catch (err: any) {
-    const failure = toErrorEnvelope(err, client.getConfig().vikunjaToken);
-    const envelope = safeEnvelopeText(
-      formatFailureEnvelope(
-        `ERROR ${failure.error.code}: ${safeSummaryText(failure.error.message)}`,
-        failure.error,
-        {
-          structuredOnly: structuredOnlyMode(
-            parsedArgs.responseMode ?? client.getConfig().responseMode ?? 'minimal',
-          ),
-        },
-      ),
+    return successToolResult(
+      summary,
+      result,
+      effectiveResponseMode,
       client.getConfig().vikunjaToken,
     );
-    return {
-      isError: true,
-      content: [{ type: 'text', text: envelope }],
-    };
+  } catch (err: any) {
+    const failure = toErrorEnvelope(err, client.getConfig().vikunjaToken);
+    return failureToolResult(
+      `ERROR ${failure.error.code}: ${safeSummaryText(failure.error.message)}`,
+      failure.error,
+      parsedArgs.responseMode ?? client.getConfig().responseMode ?? 'minimal',
+      client.getConfig().vikunjaToken,
+    );
   }
 });
 

@@ -131,13 +131,20 @@ export function claimDurableOperation(
   return operationKey;
 }
 
+interface DurableOperationOptions {
+  preflight?: () => Promise<void>;
+}
+
 export async function runDurableOperation<T>(
   namespace: string,
   callerKey: string,
   payload: unknown,
   operation: () => Promise<T>,
+  options: DurableOperationOptions = {},
 ): Promise<T> {
   const operationKey = claimDurableOperation(namespace, callerKey, payload);
+  const callerHash = operationKey.split(':')[1];
+  const claimKey = `${namespace}:claim:${callerHash}`;
   const leased = idempotency.acquireLease(operationKey, { status: 'running' }, OPERATION_LEASE_MS);
   if (!leased.acquired) {
     if (leased.value?.status === 'completed') return leased.value.result as T;
@@ -182,6 +189,7 @@ export async function runDurableOperation<T>(
 
   try {
     if (!renewLease()) throw operationLeaseLost(namespace);
+    await options.preflight?.();
     operationStarted = true;
     const result = await operation();
     if (!renewLease()) throw operationLeaseLost(namespace);
@@ -214,7 +222,9 @@ export async function runDurableOperation<T>(
     }
     return result;
   } catch (error) {
-    if (operationStarted && (leaseLost || hasAmbiguousRemoteOutcome(error))) {
+    if (!operationStarted && !leaseLost) {
+      idempotency.releaseClaimIfLeaseOwner(operationKey, claimKey, leased.leaseToken);
+    } else if (operationStarted && (leaseLost || hasAmbiguousRemoteOutcome(error))) {
       idempotency.markOutcomeUnknown(operationKey, leased.leaseToken);
     } else if (!leaseLost) {
       idempotency.setIfLeaseOwner(operationKey, leased.leaseToken, {
@@ -415,6 +425,33 @@ export class IdempotencyCache {
         .run(key, leaseToken, now + leaseMs);
       this.database.exec('COMMIT');
       return { acquired: true, value: next, leaseToken };
+    } catch (error) {
+      this.database.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  releaseClaimIfLeaseOwner(key: string, claimKey: string, leaseToken: string): boolean {
+    this.database.exec('BEGIN IMMEDIATE');
+    try {
+      const lease = this.database
+        .prepare('SELECT token, expires_at FROM idempotency_leases WHERE key = ?')
+        .get(key) as unknown as StoredLease | undefined;
+      const claim = this.database
+        .prepare('SELECT result_json, updated_at FROM idempotency_records WHERE key = ?')
+        .get(claimKey) as unknown as StoredRow | undefined;
+      const claimValue = claim ? JSON.parse(claim.result_json) : null;
+      if (!lease || lease.token !== leaseToken || claimValue?.operationKey !== key) {
+        this.database.exec('COMMIT');
+        return false;
+      }
+      this.database
+        .prepare('DELETE FROM idempotency_leases WHERE key = ? AND token = ?')
+        .run(key, leaseToken);
+      this.database.prepare('DELETE FROM idempotency_records WHERE key = ?').run(key);
+      this.database.prepare('DELETE FROM idempotency_records WHERE key = ?').run(claimKey);
+      this.database.exec('COMMIT');
+      return true;
     } catch (error) {
       this.database.exec('ROLLBACK');
       throw error;

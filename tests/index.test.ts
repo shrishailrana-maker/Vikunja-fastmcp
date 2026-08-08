@@ -112,6 +112,29 @@ describe('MCP Server Registration and Dispatching tests', () => {
     const taskTool = response.tools.find((t: any) => t.name === 'vikunja_tasks');
     const taskDefinition = TOOLS.find((tool) => tool.name === 'vikunja_tasks')!;
     expect(
+      taskDefinition.inputSchema.parse({
+        action: 'list',
+        projectSelector: { id: 101 },
+        actor: 'Codex (as srana)',
+      }).actor,
+    ).toBe('Codex (as srana)');
+    expect(
+      taskDefinition.inputSchema.safeParse({
+        action: 'list',
+        projectSelector: { id: 101 },
+        actor: 'Codex <srana>',
+      }).success,
+    ).toBe(false);
+    const typedTaskDefinition = TOOLS.find((tool) => tool.name === 'vikunja_task_write')!;
+    expect(
+      typedTaskDefinition.inputSchema.parse({
+        action: 'create',
+        projectSelector: { id: 101 },
+        fields: { title: 'Typed create' },
+        actor: 'Codex (as srana)',
+      }).actor,
+    ).toBe('Codex (as srana)');
+    expect(
       taskDefinition.inputSchema.safeParse({
         action: 'get',
         taskSelector: { globalId: 99 },
@@ -1018,6 +1041,7 @@ describe('MCP Server Registration and Dispatching tests', () => {
     expect(jsonMatch).toBeTruthy();
     const envelope = JSON.parse(jsonMatch![1]);
     expect(envelope.ok).toBe(true);
+    expect(response.structuredContent).toEqual(envelope);
     expect(envelope.data.diagnostics.vikunjaUrl).toBe('https://vikunja.example.com/api/v2');
     expect(envelope.data.diagnostics.projectCount).toBe(0);
     expect(envelope.data.diagnostics).not.toHaveProperty('projects');
@@ -1122,6 +1146,27 @@ describe('MCP Server Registration and Dispatching tests', () => {
     expect(response.content[0].text).not.toContain('Invalid tool arguments.');
     expect(response.content[0].text).toContain('```json');
     expect(response.content[0].text).toContain('VALIDATION_ERROR');
+    expect(response.structuredContent).toMatchObject({
+      ok: false,
+      error: { code: 'VALIDATION_ERROR', status: 400 },
+    });
+  });
+
+  it('returns structured content for configuration errors', async () => {
+    const handler = (server as any)._requestHandlers.get('tools/call');
+    delete process.env.VIKUNJA_URL;
+
+    const response = await handler({
+      method: 'tools/call',
+      params: { name: 'vikunja_auth', arguments: { action: 'status' } },
+    });
+
+    expect(response.isError).toBe(true);
+    expect(response.structuredContent).toMatchObject({
+      ok: false,
+      error: { code: 'INTERNAL_SERVER_ERROR' },
+    });
+    expect(response.content[0].text).toContain('INTERNAL_SERVER_ERROR');
   });
 
   it('rejects unknown arguments instead of silently stripping them', async () => {
@@ -1382,6 +1427,7 @@ describe('MCP Server Registration and Dispatching tests', () => {
     expect(envelope.error.code).toBe('SELF_CHECK_FAILED');
     expect(envelope.error.status).toBe(503);
     expect(envelope.error.details.connectionStatus).toBe('offline');
+    expect(response.structuredContent).toEqual(envelope);
   });
 
   it('preserves a real upstream 401 instead of rewriting it to 403', async () => {
@@ -1412,6 +1458,7 @@ describe('MCP Server Registration and Dispatching tests', () => {
     const envelope = JSON.parse(jsonMatch![1]);
     expect(envelope.error.status).toBe(401);
     expect(envelope.error.code).toBe('UNAUTHORIZED');
+    expect(response.structuredContent).toEqual(envelope);
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 

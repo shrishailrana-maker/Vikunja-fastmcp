@@ -122,6 +122,8 @@ requests or legacy tracker scripts while the MCP is available.
   depend on a structured verification receipt.
 - Pass `actor` on create, every comment mutation, close, import, and every
   mutating bulk call. These operations reject missing attribution.
+- Delegated actors such as `Codex (as srana)` are accepted and normalized to
+  `Codex as srana` for stored attribution and parser-safe task filters.
 - Treat structured `actor` as the only attribution source. Do not also write
   `by <agent>` or `Actor: <agent>` in the description or comment text; the MCP
   appends one canonical suffix.
@@ -155,6 +157,11 @@ requests or legacy tracker scripts while the MCP is available.
   operation `status` cursor only when a failed or skipped row must be examined.
 - Mutation responses use structured-only `receipt` mode by default. Do not ask
   for `standard` or `full` merely to restate submitted text.
+- Read `structuredContent` first. It carries the same redacted `{ok,data}` or
+  `{ok:false,error}` envelope as the text fallback.
+- A close-with-evidence receipt reports and removes configured status-prefix
+  labels. Project-title lookup retries one transient catalog failure and fails
+  closed if malformed data could match the requested title.
 - Use one writer per task when several agents are active.
 
 ## Attachments And Errors

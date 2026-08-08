@@ -37,7 +37,7 @@ import {
 } from './idempotency.js';
 import { createComment } from './comments.js';
 import { attachFiles, AttachmentInfo } from './attachments.js';
-import { withActorAttribution } from './mutation-policy.js';
+import { canonicalizeActor, withActorAttribution } from './mutation-policy.js';
 
 const MAX_AGENT_PAGE_SIZE = 100;
 const MAX_PROJECT_SCOPE = 25;
@@ -364,7 +364,9 @@ export function buildFilterString(options: ListTasksOptions): string {
     // No parentheses in the pattern: Vikunja's filter tokenizer rejects "(" and
     // ")" inside quoted strings (live-verified 2026-07-23), so match the
     // attribution text "by <actor>" without the surrounding parens.
-    parts.push(`description like ${escapeFilterString(`%by ${options.actor}%`)}`);
+    parts.push(
+      `description like ${escapeFilterString(`%by ${canonicalizeActor(options.actor)}%`)}`,
+    );
   }
   if (options.changedSince !== undefined) {
     parts.push(`updated >= ${escapeFilterString(options.changedSince)}`);
@@ -1557,6 +1559,7 @@ export async function createTask(
   dryRun = false,
 ): Promise<any> {
   if (idempotencyKey && !dryRun) {
+    let project: ProjectRef | undefined;
     const echo = await runDurableOperation(
       'task-create',
       idempotencyKey,
@@ -1565,7 +1568,12 @@ export async function createTask(
         fields,
         actor,
       },
-      () => createTask(client, projectSelector, fields, undefined, undefined, actor, false),
+      () => createTask(client, { id: project!.id }, fields, undefined, undefined, actor, false),
+      {
+        preflight: async () => {
+          project = await resolveProject(client, projectSelector);
+        },
+      },
     );
     return attachToEcho(client, echo, attachments, idempotencyKey, actor);
   }
@@ -1648,6 +1656,7 @@ export async function createIfAbsent(
   dryRun = false,
 ): Promise<any> {
   if (idempotencyKey && !dryRun) {
+    let project: ProjectRef | undefined;
     const echo = await runDurableOperation(
       'task-create-absent',
       idempotencyKey,
@@ -1656,7 +1665,12 @@ export async function createIfAbsent(
         fields,
         actor,
       },
-      () => createIfAbsent(client, projectSelector, fields, undefined, undefined, actor, false),
+      () => createIfAbsent(client, { id: project!.id }, fields, undefined, undefined, actor, false),
+      {
+        preflight: async () => {
+          project = await resolveProject(client, projectSelector);
+        },
+      },
     );
     return echo.action === 'created'
       ? attachToEcho(client, echo, attachments, idempotencyKey, actor)
@@ -2394,7 +2408,8 @@ export async function deleteTask(
 export interface CloseWithEvidenceResult {
   comment: { id: number; author: { id?: number; username?: string }; created?: string };
   task: WriteEcho;
-  changed: ('comment' | 'done')[];
+  changed: ('comment' | 'done' | 'labels')[];
+  removedStatusLabels?: string[];
   composedCalls: string[];
   outcome?: 'completed' | 'partial' | 'preview';
   evidenceStatus?: 'created' | 'not-created' | 'would-create';
@@ -2432,6 +2447,14 @@ export async function closeWithEvidence(
     const taskRef = await resolveTask(client, taskSelector, projectSelector, {
       includeRawTask: true,
     });
+    const statusPrefix = client.getConfig().statusLabelPrefix ?? 'status:';
+    const statusLabels = taskRef.labels.filter((label) =>
+      label.title.toLowerCase().startsWith(statusPrefix.toLowerCase()),
+    );
+    const retainedLabels = taskRef.labels.filter(
+      (label) => !label.title.toLowerCase().startsWith(statusPrefix.toLowerCase()),
+    );
+    const removedStatusLabels = statusLabels.map((label) => label.title);
     if (dryRun) {
       return {
         task: {
@@ -2445,13 +2468,18 @@ export async function closeWithEvidence(
           },
         } as any,
         comment: { id: 0, author: {}, created: undefined },
-        changed: ['comment', 'done'],
+        changed: ['comment', 'done', ...(statusLabels.length > 0 ? (['labels'] as const) : [])],
+        removedStatusLabels,
         composedCalls: [],
         outcome: 'preview',
         evidenceStatus: 'would-create',
         taskStatus: 'would-close',
-        before: { done: Boolean(taskRef.rawTask?.done), evidencePresent: false },
-        after: { done: true, evidencePresent: true },
+        before: {
+          done: Boolean(taskRef.rawTask?.done),
+          evidencePresent: false,
+          statusLabels: removedStatusLabels,
+        },
+        after: { done: true, evidencePresent: true, statusLabels: [] },
         verification: { verdict: 'RECORDED' },
         dryRun: true,
       } as any;
@@ -2501,14 +2529,55 @@ export async function closeWithEvidence(
         outcome: 'partial',
         evidenceStatus: 'created',
         taskStatus,
-        before: { done: Boolean(taskRef.rawTask?.done), evidencePresent: false },
+        before: {
+          done: Boolean(taskRef.rawTask?.done),
+          evidencePresent: false,
+          statusLabels: removedStatusLabels,
+        },
         after: {
           done: taskStatus === 'unknown' ? null : taskStatus === 'closed',
           evidencePresent: true,
+          statusLabels: removedStatusLabels,
         },
         verification: { verdict: 'RECORDED' },
         error: toErrorEnvelope(error).error,
       };
+    }
+
+    if (statusLabels.length > 0) {
+      try {
+        await client.request<any>('PUT', `/tasks/${taskRef.id}/labels/bulk`, {
+          body: { labels: retainedLabels },
+        });
+        composedCalls.push(`PUT /tasks/${taskRef.id}/labels/bulk`);
+      } catch (error) {
+        return {
+          comment: {
+            id: comment.id,
+            author: comment.author,
+            created: comment.created,
+          },
+          task: taskEcho,
+          changed: taskEcho.action === 'unchanged' ? ['comment'] : ['comment', 'done'],
+          removedStatusLabels: [],
+          composedCalls,
+          outcome: 'partial',
+          evidenceStatus: 'created',
+          taskStatus: 'closed',
+          before: {
+            ...(taskEcho as any).before,
+            evidencePresent: false,
+            statusLabels: removedStatusLabels,
+          },
+          after: {
+            ...(taskEcho as any).after,
+            evidencePresent: true,
+            statusLabels: removedStatusLabels,
+          },
+          verification: { verdict: 'RECORDED' },
+          error: toErrorEnvelope(error).error,
+        };
+      }
     }
 
     return {
@@ -2518,19 +2587,33 @@ export async function closeWithEvidence(
         created: comment.created,
       },
       task: taskEcho,
-      changed: taskEcho.action === 'unchanged' ? ['comment'] : ['comment', 'done'],
+      changed:
+        taskEcho.action === 'unchanged'
+          ? ['comment', ...(statusLabels.length > 0 ? (['labels'] as const) : [])]
+          : ['comment', 'done', ...(statusLabels.length > 0 ? (['labels'] as const) : [])],
+      removedStatusLabels,
       composedCalls,
       outcome: 'completed',
       evidenceStatus: 'created',
       taskStatus: 'closed',
-      before: { ...(taskEcho as any).before, evidencePresent: false },
-      after: { ...(taskEcho as any).after, evidencePresent: true },
+      before: {
+        ...(taskEcho as any).before,
+        evidencePresent: false,
+        statusLabels: removedStatusLabels,
+      },
+      after: { ...(taskEcho as any).after, evidencePresent: true, statusLabels: [] },
       verification: { verdict: 'RECORDED' },
     };
   };
 
   return idempotencyKey && !dryRun
-    ? runDurableOperation('close-with-evidence', idempotencyKey, payload, execute)
+    ? runDurableOperation('close-with-evidence', idempotencyKey, payload, execute, {
+        preflight: projectSelector
+          ? async () => {
+              await resolveProject(client, projectSelector);
+            }
+          : undefined,
+      })
     : execute();
 }
 

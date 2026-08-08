@@ -159,6 +159,36 @@ describe('durable idempotency ledger', () => {
     ).toThrow(expect.objectContaining({ code: 'IDEMPOTENCY_KEY_REUSED', status: 409 }));
   });
 
+  it('releases a claim when explicit preflight fails before the remote write starts', async () => {
+    idempotency.clear();
+    const write = jest.fn(async () => ({ id: 7001, action: 'created' }));
+
+    await expect(
+      runDurableOperation('task-create', 'preflight-key', { project: 'Missing' }, write, {
+        preflight: async () => {
+          throw new Error('project lookup failed');
+        },
+      }),
+    ).rejects.toThrow('project lookup failed');
+    await expect(
+      runDurableOperation('task-create', 'preflight-key', { project: 101 }, write),
+    ).resolves.toMatchObject({ id: 7001 });
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns a completed receipt without rerunning preflight', async () => {
+    idempotency.clear();
+    const preflight = jest.fn(async () => {});
+    const write = jest.fn(async () => ({ id: 7001, action: 'created' }));
+    const options = { preflight };
+
+    await runDurableOperation('task-create', 'receipt-preflight', { project: 101 }, write, options);
+    await runDurableOperation('task-create', 'receipt-preflight', { project: 101 }, write, options);
+
+    expect(preflight).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
   it('prevents parallel duplicate writes and returns the durable result on retry', async () => {
     idempotency.clear();
     let release!: () => void;

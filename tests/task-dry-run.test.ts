@@ -117,7 +117,7 @@ describe('task mutation dry runs', () => {
     });
     await expect(
       closeWithEvidence(client, task, 'PASS', project, 'dry-run-close', 'Codex', true),
-    ).resolves.toMatchObject({ dryRun: true, changed: ['comment', 'done'] });
+    ).resolves.toMatchObject({ dryRun: true, changed: ['comment', 'done', 'labels'] });
 
     expect(request.mock.calls.every(([method]) => method === 'GET')).toBe(true);
   });

@@ -37,7 +37,7 @@ const actorSchema = z
   .trim()
   .min(1)
   .max(80)
-  .regex(/^[\p{L}\p{N} ._-]+$/u, 'actor contains unsupported characters')
+  .regex(/^[\p{L}\p{N} ._()_-]+$/u, 'actor contains unsupported characters')
   .optional();
 const taskFieldsSchema = z.object({
   title: z.string().trim().min(1).optional(),

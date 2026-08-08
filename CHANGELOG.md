@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.4.109 - 2026-08-08
+
+- Accept delegated actor syntax such as `Codex (as srana)` and normalize it
+  before attribution and task filtering.
+- Return normal MCP `structuredContent` for success, validation, diagnostics,
+  configuration, and upstream error results while retaining redacted text.
+- Reconcile configured status-prefix labels during `close_with_evidence` and
+  report partial outcomes when label repair fails after task closure.
+- Retry one transient project-catalog failure and skip malformed unrelated
+  project rows without weakening title-resolution completeness.
+- Resolve projects before claiming direct-create idempotency keys, so a
+  proven pre-write failure does not burn a corrected retry.
+
 ## 2.4.108 - 2026-08-04
 
 - Publish `destructiveHint: false` for every MCP tool so task updates and other

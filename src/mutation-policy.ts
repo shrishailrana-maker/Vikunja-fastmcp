@@ -56,11 +56,33 @@ export function enforceMutationProjectScope(
   });
 }
 
+export function canonicalizeActor(actor: string): string {
+  const normalized = actor
+    .trim()
+    .replace(
+      /\s+\(as\s+([\p{L}\p{N} ._-]+)\)$/iu,
+      (_match, delegatedIdentity: string) => ` as ${delegatedIdentity.trim()}`,
+    );
+  if (!/^[\p{L}\p{N} ._-]+$/u.test(normalized)) {
+    throw new VikunjaError({
+      status: 400,
+      code: 'ACTOR_INVALID',
+      method: 'TOOLS_CALL',
+      path: 'actor',
+      message:
+        'actor contains unsupported characters; use letters, numbers, spaces, dots, underscores, or hyphens.',
+      fieldErrors: [],
+    });
+  }
+  return normalized;
+}
+
 export function withActorAttribution(text: string | undefined, actor?: string): string | undefined {
   if (!actor) return text;
-  const suffix = `(by ${actor})`;
+  const canonicalActor = canonicalizeActor(actor);
+  const suffix = `(by ${canonicalActor})`;
   let body = text?.trimEnd() ?? '';
-  const escapedActor = actor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escapedActor = canonicalActor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const attributionLine = new RegExp(
     `^(?:\\(\\s*by\\s+${escapedActor}(?:\\s+\\(as\\s+[^)\\r\\n]+\\))?\\s*\\)|by\\s+${escapedActor}(?:\\s+\\(as\\s+[^)\\r\\n]+\\))?|actor\\s*:\\s*${escapedActor})[.!]?$`,
     'iu',

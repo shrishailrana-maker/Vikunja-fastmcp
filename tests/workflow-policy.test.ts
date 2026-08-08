@@ -7,7 +7,11 @@ import { VikunjaApiClient } from '../src/api.js';
 import { loadConfig } from '../src/config.js';
 import { createComment } from '../src/comments.js';
 import { cache } from '../src/identity.js';
-import { enforceMutationProjectScope, withActorAttribution } from '../src/mutation-policy.js';
+import {
+  canonicalizeActor,
+  enforceMutationProjectScope,
+  withActorAttribution,
+} from '../src/mutation-policy.js';
 import { createTask, projectSummary, setTaskStatus } from '../src/tasks.js';
 
 const TEST_TOKEN = `tk_${'a'.repeat(40)}`;
@@ -63,6 +67,11 @@ describe('workflow policy and compact project workflows', () => {
   });
 
   it('appends actor attribution once and persists it on task/comment creation', async () => {
+    expect(canonicalizeActor('Codex (as srana)')).toBe('Codex as srana');
+    expect(canonicalizeActor('Example Agent')).toBe('Example Agent');
+    expect(withActorAttribution('Verified.', 'Codex (as srana)')).toBe(
+      'Verified.\n\n(by Codex as srana)',
+    );
     expect(withActorAttribution('Verified.', 'Codex')).toBe('Verified.\n\n(by Codex)');
     expect(withActorAttribution('Verified.\n\n(by Codex)', 'Codex')).toBe(
       'Verified.\n\n(by Codex)',

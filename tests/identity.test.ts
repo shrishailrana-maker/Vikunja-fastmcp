@@ -154,6 +154,50 @@ describe('Identity and Resolution Cache tests', () => {
       expect(ref).toEqual({ id: 101, title: 'Alpha' });
     });
 
+    it('retries one transient project-catalog 502 before resolving by title', async () => {
+      mockFetch
+        .mockResolvedValueOnce(jsonResponse({ detail: 'temporary catalog failure' }, 502))
+        .mockResolvedValueOnce(jsonResponse(projectPage([{ id: 102, title: 'Beta' }])));
+
+      await expect(resolveProject(client, { title: 'Beta' })).resolves.toEqual({
+        id: 102,
+        title: 'Beta',
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('skips a malformed catalog row only when its title proves it is unrelated', async () => {
+      mockFetch.mockResolvedValue(
+        jsonResponse(
+          projectPage([
+            { id: 'invalid', title: 'Legacy' },
+            { id: 102, title: 'Beta' },
+          ]),
+        ),
+      );
+
+      await expect(resolveProject(client, { title: 'Beta' })).resolves.toEqual({
+        id: 102,
+        title: 'Beta',
+      });
+    });
+
+    it('fails closed when a malformed catalog row could match the requested title', async () => {
+      mockFetch.mockResolvedValue(
+        jsonResponse(
+          projectPage([
+            { id: 'invalid', title: 'Beta' },
+            { id: 101, title: 'Alpha' },
+          ]),
+        ),
+      );
+
+      await expect(resolveProject(client, { title: 'Beta' })).rejects.toMatchObject({
+        status: 502,
+        code: 'INVALID_API_RESPONSE',
+      });
+    });
+
     it('should throw PROJECT_NOT_FOUND if title matches no project', async () => {
       mockFetch.mockResolvedValue({
         ok: true,

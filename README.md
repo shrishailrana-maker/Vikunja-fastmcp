@@ -276,6 +276,16 @@ mutating bulk operations require `actor` attribution. `summary` returns project
 counts by done state, priority, label, and configured status label without
 returning task bodies.
 
+Actor names may use the delegated form `Codex (as srana)`; the MCP stores and
+filters the parser-safe equivalent `Codex as srana`. Tool results also expose
+the same `{ok,data}` or `{ok:false,error}` envelope through MCP
+`structuredContent`, while retaining the text envelope for older clients.
+
+`close_with_evidence` removes labels that match `VIKUNJA_STATUS_LABEL_PREFIX`
+after the task closes and reports the removed labels. Project-title resolution
+retries one transient catalog failure and ignores malformed unrelated rows;
+it fails closed when a malformed row could match the requested title.
+
 Attachment deletion additionally requires explicit `projectSelector`,
 `confirm:true`, and `actor`. The MCP resolves the task, verifies the attachment
 belongs to it, and returns the deleted metadata plus the remaining count. Use

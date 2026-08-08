@@ -207,16 +207,58 @@ export class IdentityCache {
 export const cache = new IdentityCache();
 
 let projectCatalogInFlight: Promise<any[]> | null = null;
+function fetchProjectCatalog(client: VikunjaApiClient): Promise<any[]> {
+  return fetchAllCollectionItems(async (path) => client.request<any>('GET', path), '/projects');
+}
+
 async function listAllProjects(client: VikunjaApiClient): Promise<any[]> {
   if (!projectCatalogInFlight) {
-    projectCatalogInFlight = fetchAllCollectionItems(
-      async (path) => client.request<any>('GET', path),
-      '/projects',
-    ).finally(() => {
+    projectCatalogInFlight = (async () => {
+      try {
+        return await fetchProjectCatalog(client);
+      } catch (error) {
+        if (!(error instanceof VikunjaError) || error.status < 500 || error.status >= 600) {
+          throw error;
+        }
+        return fetchProjectCatalog(client);
+      }
+    })().finally(() => {
       projectCatalogInFlight = null;
     });
   }
   return projectCatalogInFlight;
+}
+
+function invalidProjectCatalogForTitle(title: string): VikunjaError {
+  return new VikunjaError({
+    status: 502,
+    code: 'INVALID_API_RESPONSE',
+    method: 'GET',
+    path: '/projects',
+    message: `Vikunja returned a malformed project that could match "${title}"; title resolution cannot be proven complete.`,
+    fieldErrors: [],
+  });
+}
+
+async function validProjectsForTitle(client: VikunjaApiClient, title: string): Promise<any[]> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const valid: any[] = [];
+    let couldMatchMalformed = false;
+    for (const project of await listAllProjects(client)) {
+      try {
+        valid.push({ ...project, ...projectRefFromApi(project, '/projects') });
+      } catch (error) {
+        if (!(error instanceof VikunjaError) || error.code !== 'INVALID_API_RESPONSE') throw error;
+        const rawTitle = typeof project?.title === 'string' ? project.title.trim() : '';
+        if (!rawTitle || rawTitle.toLowerCase() === title.toLowerCase()) {
+          couldMatchMalformed = true;
+        }
+      }
+    }
+    if (!couldMatchMalformed) return valid;
+    if (attempt === 1) throw invalidProjectCatalogForTitle(title);
+  }
+  throw invalidProjectCatalogForTitle(title);
 }
 
 export async function listAllLabels(client: VikunjaApiClient): Promise<any[]> {
@@ -350,10 +392,7 @@ export async function resolveProject(
       return cached[0];
     }
 
-    const projects = (await listAllProjects(client)).map((project) => ({
-      ...project,
-      ...projectRefFromApi(project, '/projects'),
-    }));
+    const projects = await validProjectsForTitle(client, selector.title);
     const exactMatches = projects.filter(
       (p) => p.title.toLowerCase() === selector.title!.toLowerCase(),
     );

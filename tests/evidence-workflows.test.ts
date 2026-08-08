@@ -49,6 +49,47 @@ describe('structured evidence workflows', () => {
 
   afterEach(() => jest.restoreAllMocks());
 
+  it('removes stale status labels when close_with_evidence closes a task', async () => {
+    const labelledTask = {
+      ...task,
+      labels: [
+        { id: 10, title: 'status:review' },
+        { id: 11, title: 'phase:test' },
+      ],
+    };
+    const request = jest.spyOn(client, 'request').mockImplementation(async (method, path) => {
+      if (method === 'GET' && path === '/tasks/9005') return labelledTask;
+      if (method === 'POST' && path === '/tasks/9005/comments') {
+        return {
+          id: 77,
+          comment: '<p>Verified.</p>',
+          author: { id: 4, username: 'tester' },
+          created: '2026-07-23T12:00:00Z',
+        };
+      }
+      if (method === 'PATCH' && path === '/tasks/9005') return { ...labelledTask, done: true };
+      if (method === 'PUT' && path === '/tasks/9005/labels/bulk') return {};
+      throw new Error(`unexpected request ${method} ${path}`);
+    });
+
+    const result = await closeWithEvidence(
+      client,
+      { globalId: 9005 },
+      'Verified.',
+      undefined,
+      undefined,
+      'Codex',
+    );
+
+    expect(request).toHaveBeenCalledWith('PUT', '/tasks/9005/labels/bulk', {
+      body: { labels: [{ id: 11, title: 'phase:test' }] },
+    });
+    expect(result.changed).toEqual(['comment', 'done', 'labels']);
+    expect(result.removedStatusLabels).toEqual(['status:review']);
+    expect(result.before.statusLabels).toEqual(['status:review']);
+    expect(result.after.statusLabels).toEqual([]);
+  });
+
   it('returns NO CHANGE when the same evidence key is already present', async () => {
     const request = jest.spyOn(client, 'request').mockImplementation(async (method, path) => {
       if (method !== 'GET') throw new Error(`unexpected write ${method}`);
