@@ -2,11 +2,15 @@ import { server } from '../src/index.js';
 
 const profiles = ['core', 'qa', 'developer', 'full', 'compatibility'] as const;
 const budgets: Record<(typeof profiles)[number], number> = {
-  core: 60_000,
-  qa: 60_000,
-  developer: 60_000,
-  full: 60_000,
-  compatibility: 90_000,
+  // v2.5 adds three guarded task actions; keep a bounded 62k ceiling while
+  // preserving the same typed surface across the named profiles.
+  core: 62_000,
+  qa: 62_000,
+  developer: 62_000,
+  full: 62_000,
+  // The compatibility router includes the legacy broad schema in addition to
+  // the typed surface; v2.5 added enough guarded actions to require 92k.
+  compatibility: 92_000,
 };
 const handler = (server as any)._requestHandlers.get('tools/list');
 const results: Record<string, { tools: number; chars: number }> = {};

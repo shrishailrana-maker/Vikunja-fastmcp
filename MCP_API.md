@@ -17,7 +17,7 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 ## Tools
 
 ### `self_check`
-* **Description**: Run a compact configuration and connection self-check; use detail=full only for diagnostics.
+* **Description**: Run a compact configuration, connection, and server-entitlement self-check; use detail=full only for diagnostics.
 * **Parameters**:
   * `detail`: enum ["basic", "full"] (optional)
 
@@ -48,9 +48,9 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 | `get` | project.id or project.title | none | Direct GET /projects/{id} |
 
 ### `vikunja_tasks`
-* **Description**: Create, update, delete, close, assign, label, relate, or attach files to tasks.
+* **Description**: Create, duplicate, update, delete, mark read, close, assign, label, relate, or attach files to tasks.
 * **Parameters**:
-  * `action`: enum ["create", "create_if_absent", "upsert", "get", "list", "my_tasks", "summary", "batch_get", "verify_task_state", "programme_snapshot", "task_dedupe", "lookup_external_key", "receipt_lookup", "update", "delete", "close", "reopen", "close_with_evidence", "append_evidence_if_changed", "close_if_verified", "transition_with_evidence", "assign", "unassign", "list-assignees", "apply-label", "remove-label", "list-labels", "set_status", "relate", "unrelate", "list-relations", "attach", "list-attachments", "download-attachment", "delete-attachment"] (required)
+  * `action`: enum ["create", "create_if_absent", "upsert", "get", "list", "my_tasks", "summary", "batch_get", "verify_task_state", "programme_snapshot", "task_dedupe", "lookup_external_key", "receipt_lookup", "list_time_entries", "update", "delete", "duplicate", "mark_read", "close", "reopen", "close_with_evidence", "append_evidence_if_changed", "close_if_verified", "transition_with_evidence", "assign", "unassign", "list-assignees", "apply-label", "remove-label", "list-labels", "set_status", "relate", "unrelate", "list-relations", "attach", "list-attachments", "download-attachment", "delete-attachment"] (required)
   * `taskSelector`: object (optional)
   * `projectSelector`: object (optional)
   * `projects`: array (optional)
@@ -131,8 +131,11 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 | `task_dedupe` | projectSelector, title | responseMode | Advisory server-side title candidate search |
 | `lookup_external_key` | projectSelector, externalKey | responseMode | Direct server-side stable-marker lookup; never scans the whole project |
 | `receipt_lookup` | operation, idempotencyKey | responseMode | Machine-local durable idempotency receipt lookup |
+| `list_time_entries` | taskSelector, projectSelector | page (default 1), perPage (default 50, max 100), q, countOnly | Project-verified direct GET /tasks/{id}/time-entries. Read-only, bounded pagination. Vikunja exposes time-entry user IDs, not user profiles, on this route. |
 | `update` | taskSelector, fields, projectSelector, actor, idempotencyKey | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), expectedUpdatedAt, fields.appendDescription (mutually exclusive with fields.description), dryRun, responseMode | Identity/read preflight followed by RFC 6902 PATCH. Replacing title or description requires expectedUpdatedAt. |
 | `delete` | taskSelector, projectSelector, actor, idempotencyKey | dryRun, responseMode | Identity preflight then DELETE /tasks/{id} |
+| `duplicate` | taskSelector, projectSelector, confirm, actor, idempotencyKey | dryRun, responseMode | Project-verified direct POST /tasks/{id}/duplicate. confirm must be true. The durable receipt protects same-installation retries only; it is not server-enforced uniqueness or a cross-host lock. |
+| `mark_read` | taskSelector, projectSelector, actor, idempotencyKey | dryRun, responseMode | Project-verified direct PUT /tasks/{id}/read. Vikunja treats an already-read task as a successful no-op. |
 | `close` | taskSelector, projectSelector, actor, idempotencyKey | dryRun, responseMode | Identity/read preflight then task update transport |
 | `reopen` | taskSelector, projectSelector, actor, idempotencyKey | dryRun, responseMode | Identity/read preflight then task update transport |
 | `close_with_evidence` | taskSelector, projectSelector, actor, idempotencyKey | evidence (preferred structured form), evidenceComment (compatibility), dryRun, responseMode | MCP-composed comment create followed by task close |
@@ -477,9 +480,9 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 | `delete` | webhookId | scope, projectSelector | Direct project or user webhook delete |
 
 ### `vikunja_task_read`
-* **Description**: Read, list, count, search, or summarize Vikunja tasks with bounded output.
+* **Description**: Read, list, count, search, summarize, or inspect bounded task time entries in Vikunja.
 * **Parameters**:
-  * `action`: enum ["get", "list", "my_tasks", "summary", "batch_get", "verify_task_state", "programme_snapshot", "task_dedupe", "lookup_external_key", "receipt_lookup"] (required)
+  * `action`: enum ["get", "list", "my_tasks", "summary", "batch_get", "verify_task_state", "programme_snapshot", "task_dedupe", "lookup_external_key", "receipt_lookup", "list_time_entries"] (required)
   * `taskSelector`: object (optional)
   * `projectSelector`: object (optional)
   * `projects`: array (optional)
@@ -533,17 +536,19 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 | `task_dedupe` | projectSelector, title | responseMode | Advisory server-side title candidate search |
 | `lookup_external_key` | projectSelector, externalKey | responseMode | Direct server-side stable-marker lookup; never scans the whole project |
 | `receipt_lookup` | operation, idempotencyKey | responseMode | Machine-local durable idempotency receipt lookup |
+| `list_time_entries` | taskSelector, projectSelector | page (default 1), perPage (default 50, max 100), q, countOnly | Project-verified direct GET /tasks/{id}/time-entries. Read-only, bounded pagination. Vikunja exposes time-entry user IDs, not user profiles, on this route. |
 
 ### `vikunja_task_write`
-* **Description**: Create, upsert, update, or delete Vikunja tasks with identity and write guards.
+* **Description**: Create, duplicate, upsert, update, or delete Vikunja tasks with identity and write guards.
 * **Parameters**:
-  * `action`: enum ["create", "create_if_absent", "upsert", "update", "delete"] (required)
+  * `action`: enum ["create", "create_if_absent", "upsert", "update", "delete", "duplicate"] (required)
   * `taskSelector`: object (optional)
   * `projectSelector`: object (optional)
   * `fields`: object (optional)
   * `expectedUpdatedAt`: string (optional)
   * `actor`: string (optional); min 1, max 80
   * `idempotencyKey`: string (optional); min 1, max 200
+  * `confirm`: boolean (optional)
   * `externalKey`: string (optional)
   * `attachments`: array (optional)
   * `firstComment`: string (optional); min 1
@@ -560,11 +565,12 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 | `upsert` | projectSelector, actor, idempotencyKey, fields.title, externalKey | fields, expectedUpdatedAt, firstComment, relations, dryRun, responseMode | MCP-composed description-key lookup followed by create or conditional update. Requires server-side description filtering. Updating a matched title/description also requires expectedUpdatedAt. |
 | `update` | taskSelector, fields, projectSelector, actor, idempotencyKey | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), expectedUpdatedAt, fields.appendDescription (mutually exclusive with fields.description), dryRun, responseMode | Identity/read preflight followed by RFC 6902 PATCH. Replacing title or description requires expectedUpdatedAt. |
 | `delete` | taskSelector, projectSelector, actor, idempotencyKey | dryRun, responseMode | Identity preflight then DELETE /tasks/{id} |
+| `duplicate` | taskSelector, projectSelector, confirm, actor, idempotencyKey | dryRun, responseMode | Project-verified direct POST /tasks/{id}/duplicate. confirm must be true. The durable receipt protects same-installation retries only; it is not server-enforced uniqueness or a cross-host lock. |
 
 ### `vikunja_task_workflow`
-* **Description**: Close, reopen, and record verification evidence through guarded workflows.
+* **Description**: Mark read, close, reopen, and record verification evidence through guarded workflows.
 * **Parameters**:
-  * `action`: enum ["close", "reopen", "close_with_evidence", "append_evidence_if_changed", "close_if_verified", "transition_with_evidence"] (required)
+  * `action`: enum ["close", "reopen", "mark_read", "close_with_evidence", "append_evidence_if_changed", "close_if_verified", "transition_with_evidence"] (required)
   * `taskSelector`: object (optional)
   * `projectSelector`: object (optional)
   * `evidenceComment`: string (optional); min 1
@@ -581,6 +587,7 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 
 | Action | Required | Optional | Execution |
 | --- | --- | --- | --- |
+| `mark_read` | taskSelector, projectSelector, actor, idempotencyKey | dryRun, responseMode | Project-verified direct PUT /tasks/{id}/read. Vikunja treats an already-read task as a successful no-op. |
 | `close` | taskSelector, projectSelector, actor, idempotencyKey | dryRun, responseMode | Identity/read preflight then task update transport |
 | `reopen` | taskSelector, projectSelector, actor, idempotencyKey | dryRun, responseMode | Identity/read preflight then task update transport |
 | `close_with_evidence` | taskSelector, projectSelector, actor, idempotencyKey | evidence (preferred structured form), evidenceComment (compatibility), dryRun, responseMode | MCP-composed comment create followed by task close |

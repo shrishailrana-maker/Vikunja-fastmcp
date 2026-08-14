@@ -12,11 +12,11 @@ Local API references for agents:
 - [`VIKUNJA_V2_API_REFERENCE.md`](VIKUNJA_V2_API_REFERENCE.md): generated method,
   path, operation, and schema index.
 
-The current contract targets the official Vikunja
-[`v2.4.0`](https://github.com/go-vikunja/vikunja/releases/tag/v2.4.0) release
-at tag commit `907850feae3866ae9b16ea1c7b84a4d77273415a`.
-The JSON snapshot is the local HTTP authority. Re-download and review it when
-the Vikunja service is upgraded; never substitute the old SDK or v1 docs.
+The minimum supported server remains the official Vikunja
+[`v2.4.0`](https://github.com/go-vikunja/vikunja/releases/tag/v2.4.0). The
+checked-in JSON snapshot was refreshed from a live Vikunja `v2.5.0` service and
+is the local HTTP authority for the routes used here. Re-download and review it
+when the service is upgraded; never substitute the old SDK or v1 docs.
 
 ## Design Rules
 
@@ -66,7 +66,7 @@ own path map is not treated as a missing capability.
 
 All paths below are relative to `/api/v2`. Creates use `POST`; partial updates
 prefer `PATCH`. Task updates use RFC 6902 JSON Patch and other partial resource
-updates use JSON Merge Patch. The MCP targets Vikunja 2.4.0 and does not carry
+updates use JSON Merge Patch. The MCP targets the v2 contract and does not carry
 older API workarounds. `PUT` is reserved for a documented full replacement or
 bulk replacement body.
 
@@ -77,6 +77,7 @@ bulk replacement body.
 | Projects                | `GET /projects`, `GET /projects/{id}`                                                 | Direct                                       |
 | Task list               | `GET /projects/{project}/tasks`, `GET /tasks`                                         | Direct                                       |
 | Task get/create         | `GET /tasks/{projecttask}`, `POST /projects/{project}/tasks`                          | Direct                                       |
+| Native bulk task create | `POST /projects/{project}/tasks/bulk`                                                  | Direct; v2.5.0+ only                         |
 | Task update/delete      | `PATCH`, `DELETE /tasks/{projecttask}`                                                | Direct                                       |
 | Assignees               | `GET`, `POST`, bulk `PUT`, and member `DELETE` below `/tasks/{projecttask}/assignees` | Direct                                       |
 | Task labels             | `GET`, `POST`, bulk `PUT`, and label `DELETE` below `/tasks/{projecttask}/labels`     | Direct                                       |
@@ -118,6 +119,18 @@ Agents inspect the saved OpenAPI and generated reference before adding an HTTP
 call. The live capability gate still revalidates them because the installed
 server may be newer than the committed snapshot.
 
+### v2.5 migration notes
+
+The refreshed snapshot records the v2.5 native project bulk-create route and
+the v2.5 `Project.parent_project_id` and `Subscription.entity` shapes. The
+MCP's first v2.5 slice exposes task duplication, mark-read, and read-only task
+time entries; native bulk-create remains documented but intentionally not
+wrapped until its atomic response and partial-error behavior have a dedicated
+MCP receipt contract. Conditional `ETag` reads are also deferred because the
+current client intentionally exposes JSON results without response headers or
+304 metadata. Server-side uniqueness, optimistic concurrency, and collection
+version guarantees remain open upstream concerns.
+
 ## Typed Tool Surface And Profiles
 
 The default `core` profile exposes small typed schemas:
@@ -126,11 +139,25 @@ The default `core` profile exposes small typed schemas:
 | ----------------------------- | --------------------------------------------------------------------------- |
 | `self_check` / `vikunja_auth` | Compact diagnostics and current identity                                    |
 | `vikunja_projects`            | Project list and get                                                        |
-| `vikunja_task_read`           | List/search, projection, batch get, verification, snapshots, receipt lookup |
-| `vikunja_task_write`          | Guarded CRUD, assignment, labels, status, and relations                     |
-| `vikunja_task_workflow`       | Evidence and verified-close workflows                                       |
+| `vikunja_task_read`           | List/search, projection, time entries, batch get, verification, snapshots, receipt lookup |
+| `vikunja_task_write`          | Guarded CRUD and confirmed task duplication                                 |
+| `vikunja_task_workflow`       | Mark-read, evidence, and verified-close workflows                           |
 | `vikunja_task_comments`       | CRUD plus bounded page/delta/count reads                                    |
 | `vikunja_task_attachments`    | Upload, bounded list, download, and ownership-safe delete                   |
+
+### Pro feature gates
+
+Vikunja Pro currently exposes three entitlement keys: `admin_panel`,
+`time_tracking`, and `audit_logs`. The `self_check` response reports
+`enabledProFeatures`; full diagnostics also report each entitlement and its
+MCP surface. `list_time_entries` preflights `/info` and returns
+`FEATURE_NOT_LICENSED` when `time_tracking` is disabled, because Vikunja
+intentionally answers those routes with `404 Not Found` in community mode.
+Some v2.5 OpenAPI generators describe `enabled_pro_features` as integer enum
+values even though Vikunja's runtime JSON marshals them as string keys. The
+MCP accepts both encodings (`1/2/3` and `admin_panel/time_tracking/audit_logs`).
+Admin-panel and audit-log operations remain unexposed until this MCP has a
+typed, scope-safe contract for them.
 
 Profiles add only the tools needed by the client:
 
@@ -153,6 +180,7 @@ administration remain outside this MCP.
 The limits are part of the public MCP contract rather than hidden truncation:
 
 - task pages default to 20 and are capped at 100 items per project page;
+- task time-entry pages default to 50 and are capped at 100 items;
 - bulk update accepts at most 100 explicit task selectors;
 - composed bulk create accepts at most 100 tasks and is non-atomic;
 - composed bulk delete accepts at most 100 explicit task selectors, is non-atomic, and
@@ -541,7 +569,16 @@ rerun skips recorded rows and reports created/skipped/failed counts. Deleting
 the ledger can permit duplicates but cannot delete or overwrite tasks. Preview
 performs validation without writes in both modes.
 
-These are MCP workflows, not new Vikunja endpoints.
+These are MCP workflows, not new Vikunja endpoints. Native task duplication
+uses Vikunja's `POST /tasks/{id}/duplicate` after project-verified identity
+resolution and requires `confirm:true`, actor attribution, and a durable local
+idempotency key. The receipt avoids retrying the same request on this MCP
+installation; it does not establish server-enforced uniqueness or a cross-host
+lease. `PUT /tasks/{id}/read` uses the same identity and receipt envelope, and
+Vikunja treats an already-read task as a successful no-op. The read-only
+`GET /tasks/{id}/time-entries` action is project-verified and bounded to one
+page; it returns only server-provided time-entry fields, including numeric user
+IDs rather than inferred user profiles.
 
 ## Attachments
 
@@ -716,7 +753,7 @@ compact output, pagination, zero dates, HTML/entity conversion, attachment
 path and symlink safety, upload limits, download limits, request timeouts,
 strict tool arguments, and the complete source route matrix.
 
-The rebuild does not include time entries, project views, buckets, a local
+The rebuild does not include time-entry mutations, project views, buckets, a local
 task database, generic retries, circuit breakers, client-side filtering, or a
 v1 compatibility layer. Compatibility tools for reminders, webhooks, exports,
 CSV import, templates, and bulk task work stay thin: direct v2 routes where

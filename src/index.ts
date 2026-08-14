@@ -43,6 +43,9 @@ import {
   getTask,
   updateTask,
   deleteTask,
+  duplicateTask,
+  markTaskRead,
+  listTaskTimeEntries,
   closeWithEvidence,
   assignTask,
   unassignTask,
@@ -729,7 +732,7 @@ export const TOOLS: McpToolDefinition[] = [
   {
     name: 'self_check',
     description:
-      'Run a compact configuration and connection self-check; use detail=full only for diagnostics.',
+      'Run a compact configuration, connection, and server-entitlement self-check; use detail=full only for diagnostics.',
     inputSchema: z.object({
       detail: z.enum(['basic', 'full']).optional(),
     }),
@@ -803,7 +806,8 @@ export const TOOLS: McpToolDefinition[] = [
   },
   {
     name: 'vikunja_tasks',
-    description: 'Create, update, delete, close, assign, label, relate, or attach files to tasks.',
+    description:
+      'Create, duplicate, update, delete, mark read, close, assign, label, relate, or attach files to tasks.',
     inputSchema: z.object({
       action: z.enum([
         'create',
@@ -819,8 +823,11 @@ export const TOOLS: McpToolDefinition[] = [
         'task_dedupe',
         'lookup_external_key',
         'receipt_lookup',
+        'list_time_entries',
         'update',
         'delete',
+        'duplicate',
+        'mark_read',
         'close',
         'reopen',
         'close_with_evidence',
@@ -1217,6 +1224,18 @@ export const TOOLS: McpToolDefinition[] = [
               maxResponseChars: args.maxResponseChars,
             },
           );
+        case 'list_time_entries':
+          if (!args.taskSelector)
+            throw badRequest('taskSelector is required for list_time_entries.');
+          if (!args.projectSelector) {
+            throw badRequest('projectSelector is required for list_time_entries.');
+          }
+          return listTaskTimeEntries(client, args.taskSelector, args.projectSelector, {
+            page: args.page,
+            perPage: args.perPage,
+            q: args.q ?? args.search,
+            countOnly: args.countOnly,
+          });
         case 'update':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
           if (Array.isArray(args.fields)) {
@@ -1270,6 +1289,27 @@ export const TOOLS: McpToolDefinition[] = [
             args,
             { taskSelector: args.taskSelector },
             (dryRun) => deleteTask(client, args.taskSelector, args.projectSelector, dryRun),
+          );
+        case 'duplicate':
+          if (!args.taskSelector) throw badRequest('taskSelector is required for duplicate.');
+          if (args.confirm !== true) {
+            throw badRequest('confirm=true is required for task duplication.');
+          }
+          return runTaskMutation(
+            client,
+            'task-duplicate',
+            args,
+            { taskSelector: args.taskSelector, confirm: true },
+            (dryRun) => duplicateTask(client, args.taskSelector, args.projectSelector, dryRun),
+          );
+        case 'mark_read':
+          if (!args.taskSelector) throw badRequest('taskSelector is required for mark_read.');
+          return runTaskMutation(
+            client,
+            'task-mark-read',
+            args,
+            { taskSelector: args.taskSelector },
+            (dryRun) => markTaskRead(client, args.taskSelector, args.projectSelector, dryRun),
           );
         case 'close':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');
@@ -2572,6 +2612,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 const TASK_MUTATIONS = new Set([
   'update',
   'delete',
+  'duplicate',
+  'mark_read',
   'close',
   'reopen',
   'close_with_evidence',

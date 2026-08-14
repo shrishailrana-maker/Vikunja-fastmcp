@@ -23,15 +23,20 @@ describe('V2 OpenAPI Capability Gate', () => {
     openapi = JSON.parse(content);
   });
 
-  it('pins the sanitized contract to Vikunja 2.4.0', () => {
-    expect(openapi.info?.version).toBe('v2.4.0');
+  it('pins the sanitized contract to the live Vikunja v2.5.0 snapshot', () => {
+    expect(openapi.info?.version).toBe('v2.5.0');
     expect(openapi.openapi).toBe('3.1.0');
-    expect(openapi.servers).toEqual([
-      { url: '/api/v2' },
-      { url: 'https://vikunja.example.com/api/v2' },
-    ]);
+    expect(openapi.servers).toEqual([{ url: '/api/v2' }]);
     expect(openapi.components?.schemas?.FormFile).toBeUndefined();
     expect(openapi.components?.schemas?.VikunjaErrorModel?.properties?.i18n_params).toBeDefined();
+    expect(openapi.components?.schemas?.Project?.properties?.parent_project_id?.type).toEqual([
+      'integer',
+      'null',
+    ]);
+    expect(openapi.components?.schemas?.Subscription?.properties?.entity?.enum).toEqual([
+      'project',
+      'task',
+    ]);
     expect(
       openapi.paths?.['/tasks/{projecttask}']?.patch?.requestBody?.content?.[
         'application/json-patch+json'
@@ -46,6 +51,7 @@ describe('V2 OpenAPI Capability Gate', () => {
     { method: 'get', path: '/projects' },
     { method: 'get', path: '/projects/{id}' },
     { method: 'get', path: '/projects/{project}/tasks' },
+    { method: 'post', path: '/projects/{project}/tasks/bulk' },
     { method: 'get', path: '/projects/{project}/tasks/by-index/{index}' },
     { method: 'get', path: '/tasks' },
     { method: 'put', path: '/tasks/bulk' },
@@ -53,6 +59,9 @@ describe('V2 OpenAPI Capability Gate', () => {
     { method: 'post', path: '/projects/{project}/tasks' },
     { method: 'patch', path: '/tasks/{projecttask}' },
     { method: 'delete', path: '/tasks/{projecttask}' },
+    { method: 'post', path: '/tasks/{projecttask}/duplicate' },
+    { method: 'put', path: '/tasks/{projecttask}/read' },
+    { method: 'get', path: '/tasks/{task_id}/time-entries' },
     { method: 'get', path: '/tasks/{projecttask}/assignees' },
     { method: 'post', path: '/tasks/{projecttask}/assignees' },
     { method: 'delete', path: '/tasks/{projecttask}/assignees/{user}' },

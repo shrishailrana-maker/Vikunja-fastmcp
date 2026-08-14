@@ -42,6 +42,43 @@ import { canonicalizeActor, withActorAttribution } from './mutation-policy.js';
 const MAX_AGENT_PAGE_SIZE = 100;
 const MAX_PROJECT_SCOPE = 25;
 const DEFAULT_MINIMAL_RESPONSE_CHARS = 4_000;
+const VIKUNJA_TIME_TRACKING_FEATURE = 'time_tracking';
+
+async function requireProFeature(
+  client: VikunjaApiClient,
+  feature: string,
+  operationPath: string,
+): Promise<void> {
+  const info = await client.request<any>('GET', '/info');
+  const enabled = info?.enabled_pro_features;
+  if (!Array.isArray(enabled)) {
+    throw new VikunjaError({
+      status: 502,
+      code: 'PRO_FEATURE_STATUS_UNAVAILABLE',
+      method: 'GET',
+      path: '/info',
+      message: 'Vikunja did not return enabled Pro feature entitlements.',
+      fieldErrors: [],
+      remediation: 'Refresh the Vikunja server contract before using this Pro-gated operation.',
+    });
+  }
+  const enabledNames = enabled.flatMap((value: unknown) => {
+    if (value === feature) return [feature];
+    if (feature === VIKUNJA_TIME_TRACKING_FEATURE && value === 2) return [feature];
+    return [];
+  });
+  if (enabledNames.length === 0) {
+    throw new VikunjaError({
+      status: 404,
+      code: 'FEATURE_NOT_LICENSED',
+      method: 'GET',
+      path: operationPath,
+      message: `Vikunja Pro feature "${feature}" is not enabled on this instance. The route is intentionally unavailable without an active license.`,
+      fieldErrors: [],
+      remediation: `Activate the Vikunja Pro ${feature} entitlement and restart the server.`,
+    });
+  }
+}
 
 export const TASK_READ_FIELDS = [
   'id',
@@ -2403,6 +2440,164 @@ export async function deleteTask(
     before: { exists: true },
     after: { exists: false },
   };
+}
+
+function taskMutationTarget(task: {
+  id: number;
+  index: number;
+  identifier?: string;
+  project: ProjectRef;
+  title: string;
+}) {
+  return {
+    id: task.id,
+    index: task.index,
+    identifier: task.identifier,
+    project: task.project,
+    title: task.title,
+  };
+}
+
+/**
+ * Duplicate one task through Vikunja's native copy route. The local durable
+ * receipt only protects retries from this MCP installation.
+ */
+export async function duplicateTask(
+  client: VikunjaApiClient,
+  taskSelector: TaskSelectorInput,
+  projectSelector?: { id?: number; title?: string },
+  dryRun = false,
+): Promise<any> {
+  const source = await resolveTask(client, taskSelector, projectSelector);
+  const sourceTarget = taskMutationTarget(source);
+
+  if (dryRun) {
+    return {
+      action: 'would_duplicate',
+      operation: 'duplicate',
+      source: sourceTarget,
+      target: sourceTarget,
+      before: { sourceTaskId: source.id },
+      after: { duplicateTask: 'not-created' },
+      dryRun: true,
+    };
+  }
+
+  const response = await client.request<any>('POST', `/tasks/${source.id}/duplicate`);
+  const duplicated = response?.duplicated_task;
+  if (
+    !duplicated ||
+    !Number.isInteger(duplicated.id) ||
+    duplicated.id <= 0 ||
+    !Number.isInteger(duplicated.index) ||
+    duplicated.index <= 0 ||
+    typeof duplicated.title !== 'string' ||
+    duplicated.title.trim() === ''
+  ) {
+    throw new VikunjaError({
+      status: 502,
+      code: 'INVALID_API_RESPONSE',
+      method: 'POST',
+      path: `/tasks/${source.id}/duplicate`,
+      message: 'Vikunja returned an invalid duplicated_task response.',
+      fieldErrors: [],
+    });
+  }
+
+  const duplicatedTask = normalizeTask(
+    duplicated,
+    source.project,
+    client.getConfig().vikunjaWebUrl,
+  );
+  return {
+    action: 'duplicated',
+    operation: 'duplicate',
+    source: sourceTarget,
+    target: taskMutationTarget(duplicatedTask),
+    before: { sourceTaskId: source.id },
+    after: { sourceTaskId: source.id, duplicateTaskId: duplicatedTask.id },
+  };
+}
+
+/**
+ * Clear the authenticated user's unread state for a task. The upstream route
+ * is idempotent, so an already-read task is reported as a successful write.
+ */
+export async function markTaskRead(
+  client: VikunjaApiClient,
+  taskSelector: TaskSelectorInput,
+  projectSelector?: { id?: number; title?: string },
+  dryRun = false,
+): Promise<any> {
+  const task = await resolveTask(client, taskSelector, projectSelector);
+  const target = taskMutationTarget(task);
+
+  if (dryRun) {
+    return {
+      action: 'would_mark_read',
+      operation: 'mark_read',
+      target,
+      before: { read: 'unknown' },
+      after: { read: true },
+      dryRun: true,
+    };
+  }
+
+  const response = await client.request<any>('PUT', `/tasks/${task.id}/read`);
+  return {
+    action: 'marked_read',
+    operation: 'mark_read',
+    target,
+    after: { read: true },
+    ...(typeof response?.message === 'string' ? { message: response.message } : {}),
+  };
+}
+
+export interface ListTaskTimeEntriesOptions {
+  page?: number;
+  perPage?: number;
+  q?: string;
+  countOnly?: boolean;
+}
+
+function normalizeTaskTimeEntry(entry: any) {
+  const normalized = normalizeDatesAndNulls(entry);
+  return {
+    id: normalized.id,
+    taskId: normalized.task_id ?? null,
+    projectId: normalized.project_id ?? null,
+    userId: normalized.user_id ?? null,
+    comment: normalized.comment ?? '',
+    startTime: normalized.start_time ?? null,
+    endTime: normalized.end_time ?? null,
+    created: normalized.created ?? null,
+    updated: normalized.updated ?? null,
+  };
+}
+
+/** Read one bounded page of time entries for a project-verified task. */
+export async function listTaskTimeEntries(
+  client: VikunjaApiClient,
+  taskSelector: TaskSelectorInput,
+  projectSelector: { id?: number; title?: string },
+  options: ListTaskTimeEntriesOptions = {},
+): Promise<any> {
+  await requireProFeature(client, VIKUNJA_TIME_TRACKING_FEATURE, '/tasks/{task_id}/time-entries');
+  const task = await resolveTask(client, taskSelector, projectSelector);
+  const page = options.page ?? 1;
+  const perPage = options.perPage ?? 50;
+  const query = new URLSearchParams({ page: String(page), per_page: String(perPage) });
+  if (options.q?.trim()) query.set('q', options.q.trim());
+
+  const path = `/tasks/${task.id}/time-entries?${query.toString()}`;
+  const response = await client.request<any>('GET', path);
+  const pagination = normalizePagination(response);
+  const target = taskMutationTarget(task);
+  const timeEntries = toItemArray(response).map(normalizeTaskTimeEntry);
+
+  return options.countOnly
+    ? { task: target, count: pagination.total, pagination }
+    : { task: target, timeEntries, pagination };
 }
 
 export interface CloseWithEvidenceResult {

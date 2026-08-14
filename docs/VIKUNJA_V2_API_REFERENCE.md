@@ -4,13 +4,12 @@ This file is generated from the sanitized local OpenAPI snapshot.
 
 - Raw specification: [`vikunja-v2-openapi.json`](vikunja-v2-openapi.json)
 - Upstream API documentation: https://vikunja.io/docs/api-documentation/
-- Official Vikunja release: https://github.com/go-vikunja/vikunja/releases/tag/v2.4.0
-- Official tag commit: `907850feae3866ae9b16ea1c7b84a4d77273415a`
-- API generation: live Vikunja 2.4.0 service
-- Snapshot date: 2026-07-22
+- Minimum supported official release: https://github.com/go-vikunja/vikunja/releases/tag/v2.4.0
+- API generation: live Vikunja 2.5.0 service
+- Snapshot date: 2026-08-14
 - OpenAPI version: 3.1.0
 - API title: Vikunja API
-- API version: v2.4.0
+- API version: v2.5.0
 
 Vikunja generates this OpenAPI document at runtime. The checked-in copy is
 the latest-only HTTP authority for this MCP and must be refreshed when the
@@ -79,6 +78,7 @@ minimum supported Vikunja release changes. Instance URLs are replaced with
 | DELETE | `/projects/{project}/shares/{share}` | `shares-delete` | Remove a link share from a project |
 | GET | `/projects/{project}/tasks` | `project-tasks-list` | List tasks in a project |
 | POST | `/projects/{project}/tasks` | `tasks-create` | Create a task |
+| POST | `/projects/{project}/tasks/bulk` | `tasks-bulk-create` | Create tasks atomically in a project |
 | GET | `/projects/{project}/tasks/by-index/{index}` | `tasks-read-by-index` | Get a task by its project index |
 | GET | `/projects/{project}/teams` | `project-teams-list` | List the teams a project is shared with |
 | POST | `/projects/{project}/teams` | `project-teams-create` | Share a project with a team |

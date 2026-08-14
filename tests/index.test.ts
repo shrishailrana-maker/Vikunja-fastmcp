@@ -134,6 +134,10 @@ describe('MCP Server Registration and Dispatching tests', () => {
         actor: 'Codex (as srana)',
       }).actor,
     ).toBe('Codex (as srana)');
+    const typedTaskReadDefinition = TOOLS.find((tool) => tool.name === 'vikunja_task_read')!;
+    const typedTaskWorkflowDefinition = TOOLS.find(
+      (tool) => tool.name === 'vikunja_task_workflow',
+    )!;
     expect(
       taskDefinition.inputSchema.safeParse({
         action: 'get',
@@ -264,11 +268,45 @@ describe('MCP Server Registration and Dispatching tests', () => {
     const createBranch = taskTool.inputSchema.oneOf.find(
       (branch: any) => branch.properties.action.const === 'create',
     );
+    const duplicateBranch = taskTool.inputSchema.oneOf.find(
+      (branch: any) => branch.properties.action.const === 'duplicate',
+    );
+    const markReadBranch = taskTool.inputSchema.oneOf.find(
+      (branch: any) => branch.properties.action.const === 'mark_read',
+    );
+    const timeEntriesBranch = taskTool.inputSchema.oneOf.find(
+      (branch: any) => branch.properties.action.const === 'list_time_entries',
+    );
     const closeBranch = taskTool.inputSchema.oneOf.find(
       (branch: any) => branch.properties.action.const === 'close',
     );
     expect(createBranch.required).toContain('actor');
     expect(createBranch.required).toContain('idempotencyKey');
+    expect(duplicateBranch.required).toEqual(
+      expect.arrayContaining([
+        'taskSelector',
+        'projectSelector',
+        'confirm',
+        'actor',
+        'idempotencyKey',
+      ]),
+    );
+    expect(markReadBranch.required).toEqual(
+      expect.arrayContaining(['taskSelector', 'projectSelector', 'actor', 'idempotencyKey']),
+    );
+    expect(timeEntriesBranch.required).toEqual(
+      expect.arrayContaining(['taskSelector', 'projectSelector']),
+    );
+    expect(timeEntriesBranch.properties.perPage).toMatchObject({ maximum: 100 });
+    expect(
+      typedTaskDefinition.inputSchema.safeParse({ action: 'duplicate', confirm: true }).success,
+    ).toBe(true);
+    expect(typedTaskWorkflowDefinition.inputSchema.safeParse({ action: 'mark_read' }).success).toBe(
+      true,
+    );
+    expect(
+      typedTaskReadDefinition.inputSchema.safeParse({ action: 'list_time_entries' }).success,
+    ).toBe(true);
     expect(closeBranch.required).toContain('actor');
     for (const action of [
       'create',
@@ -1009,6 +1047,231 @@ describe('MCP Server Registration and Dispatching tests', () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
+  it('duplicates, marks read, and lists time entries through project-verified v2.5 routes', async () => {
+    const handler = (server as any)._requestHandlers.get('tools/call');
+    const sourceTask = {
+      id: 9005,
+      index: 305,
+      identifier: 'ALPHA-305',
+      title: 'Source task',
+      project_id: 101,
+      project: { title: 'Alpha' },
+    };
+    mockFetch.mockImplementation(async (url: string, request: RequestInit) => {
+      const parsed = new URL(url);
+      if (parsed.pathname.endsWith('/projects/101')) {
+        return new Response(JSON.stringify({ id: 101, title: 'Alpha' }), { status: 200 });
+      }
+      if (parsed.pathname.endsWith('/info')) {
+        return new Response(JSON.stringify({ enabled_pro_features: ['time_tracking'] }), {
+          status: 200,
+        });
+      }
+      if (parsed.pathname.endsWith('/tasks/9005/duplicate')) {
+        expect(request.method).toBe('POST');
+        return new Response(
+          JSON.stringify({
+            duplicated_task: {
+              ...sourceTask,
+              id: 9006,
+              index: 306,
+              identifier: 'ALPHA-306',
+              title: 'Source task copy',
+            },
+          }),
+          { status: 201 },
+        );
+      }
+      if (parsed.pathname.endsWith('/tasks/9005/read')) {
+        expect(request.method).toBe('PUT');
+        return new Response(JSON.stringify({ message: 'Task marked as read.' }), { status: 200 });
+      }
+      if (parsed.pathname.endsWith('/tasks/9005/time-entries')) {
+        expect(request.method).toBe('GET');
+        expect(parsed.searchParams.get('page')).toBe('2');
+        expect(parsed.searchParams.get('per_page')).toBe('25');
+        expect(parsed.searchParams.get('q')).toBe('investigation');
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: 11,
+                task_id: 9005,
+                user_id: 7,
+                comment: 'Investigated',
+                start_time: '2026-08-14T10:00:00Z',
+                end_time: null,
+                created: '2026-08-14T11:00:00Z',
+                updated: '2026-08-14T11:00:00Z',
+              },
+            ],
+            page: 2,
+            per_page: 25,
+            total: 26,
+            total_pages: 2,
+          }),
+          { status: 200 },
+        );
+      }
+      if (parsed.pathname.endsWith('/tasks/9005')) {
+        expect(request.method).toBe('GET');
+        return new Response(JSON.stringify(sourceTask), { status: 200 });
+      }
+      throw new Error(`Unexpected request: ${request.method} ${parsed.pathname}`);
+    });
+
+    const withoutConfirmation = await handler({
+      method: 'tools/call',
+      params: {
+        name: 'vikunja_task_write',
+        arguments: {
+          action: 'duplicate',
+          taskSelector: { globalId: 9005 },
+          projectSelector: { id: 101 },
+          actor: 'Codex',
+          idempotencyKey: 'duplicate-task-9005',
+        },
+      },
+    });
+    expect(withoutConfirmation.isError).toBe(true);
+    expect(withoutConfirmation.content[0].text).toContain('confirm=true is required');
+    expect(mockFetch).not.toHaveBeenCalled();
+
+    const duplicate = await handler({
+      method: 'tools/call',
+      params: {
+        name: 'vikunja_task_write',
+        arguments: {
+          action: 'duplicate',
+          taskSelector: { globalId: 9005 },
+          projectSelector: { id: 101 },
+          confirm: true,
+          actor: 'Codex',
+          idempotencyKey: 'duplicate-task-9005',
+        },
+      },
+    });
+    expect(duplicate.isError).not.toBe(true);
+    expect(duplicate.structuredContent.data).toMatchObject({
+      action: 'duplicated',
+      source: { id: 9005 },
+      target: { id: 9006, portalRef: 'ALPHA-306', title: 'Source task copy' },
+      idempotency: { state: 'recorded' },
+    });
+
+    const markRead = await handler({
+      method: 'tools/call',
+      params: {
+        name: 'vikunja_task_workflow',
+        arguments: {
+          action: 'mark_read',
+          taskSelector: { globalId: 9005 },
+          projectSelector: { id: 101 },
+          actor: 'Codex',
+          idempotencyKey: 'mark-read-task-9005',
+        },
+      },
+    });
+    expect(markRead.isError).not.toBe(true);
+    expect(markRead.structuredContent.data).toMatchObject({
+      action: 'marked_read',
+      target: { id: 9005, portalRef: 'ALPHA-305' },
+      after: { read: true },
+      message: 'Task marked as read.',
+      idempotency: { state: 'recorded' },
+    });
+
+    const timeEntries = await handler({
+      method: 'tools/call',
+      params: {
+        name: 'vikunja_task_read',
+        arguments: {
+          action: 'list_time_entries',
+          taskSelector: { globalId: 9005 },
+          projectSelector: { id: 101 },
+          page: 2,
+          perPage: 25,
+          q: 'investigation',
+        },
+      },
+    });
+    expect(timeEntries.isError).not.toBe(true);
+    expect(timeEntries.structuredContent.data).toMatchObject({
+      task: { id: 9005, identifier: 'ALPHA-305', project: { id: 101, title: 'Alpha' } },
+      timeEntries: [
+        {
+          id: 11,
+          taskId: 9005,
+          userId: 7,
+          comment: 'Investigated',
+          endTime: null,
+        },
+      ],
+      pagination: { page: 2, perPage: 25, total: 26, totalPages: 2, nextPage: null },
+    });
+  });
+
+  it('reports the time-tracking license gate before calling the gated route', async () => {
+    const handler = (server as any)._requestHandlers.get('tools/call');
+    mockFetch.mockImplementation(async (url: string) => {
+      if (url.endsWith('/info')) {
+        return new Response(JSON.stringify({ enabled_pro_features: [] }), { status: 200 });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    const response = await handler({
+      method: 'tools/call',
+      params: {
+        name: 'vikunja_task_read',
+        arguments: {
+          action: 'list_time_entries',
+          taskSelector: { globalId: 2344 },
+          projectSelector: { id: 3 },
+          countOnly: true,
+        },
+      },
+    });
+
+    expect(response.isError).toBe(true);
+    expect(response.structuredContent.error).toMatchObject({
+      status: 404,
+      code: 'FEATURE_NOT_LICENSED',
+      path: '/tasks/{task_id}/time-entries',
+    });
+    expect(response.structuredContent.error.message).toContain('time_tracking');
+    expect(mockFetch.mock.calls.some(([url]: [string]) => url.includes('/time-entries'))).toBe(
+      false,
+    );
+  });
+
+  it('normalizes integer Pro feature enums from generated Vikunja schemas', async () => {
+    const handler = (server as any)._requestHandlers.get('tools/call');
+    mockFetch.mockImplementation(async (url: string) => {
+      if (url.endsWith('/user')) {
+        return new Response(JSON.stringify({ id: 7, username: 'example-user' }), { status: 200 });
+      }
+      if (url.endsWith('/info')) {
+        return new Response(JSON.stringify({ enabled_pro_features: [2] }), { status: 200 });
+      }
+      if (url.includes('/projects')) {
+        return new Response(
+          JSON.stringify({ items: [], page: 1, per_page: 50, total: 0, total_pages: 0 }),
+          { status: 200 },
+        );
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    const response = await handler({
+      method: 'tools/call',
+      params: { name: 'self_check', arguments: {} },
+    });
+    expect(response.structuredContent.data.diagnostics.enabledProFeatures).toEqual([
+      'time_tracking',
+    ]);
+  });
+
   it('should dispatch call to self_check diagnostic successfully', async () => {
     const handler = (server as any)._requestHandlers.get('tools/call');
 
@@ -1087,7 +1350,8 @@ describe('MCP Server Registration and Dispatching tests', () => {
       return {
         ok: true,
         status: 200,
-        text: async () => JSON.stringify({ version: 'v2.4.0-test' }),
+        text: async () =>
+          JSON.stringify({ version: 'v2.5.0-test', enabled_pro_features: ['time_tracking'] }),
       } as Response;
     });
 
@@ -1104,7 +1368,15 @@ describe('MCP Server Registration and Dispatching tests', () => {
       currentUser: { id: 7, username: 'example-user' },
       projectCount: 1,
       projects: [{ id: 101, title: 'Alpha', archived: false }],
+      enabledProFeatures: ['time_tracking'],
     });
+    expect(diagnostics.proFeatures).toEqual(
+      expect.arrayContaining([
+        { feature: 'time_tracking', enabled: true, mcpSurface: 'time_entries' },
+        { feature: 'admin_panel', enabled: false, mcpSurface: null },
+        { feature: 'audit_logs', enabled: false, mcpSurface: null },
+      ]),
+    );
     expect(diagnostics.packageVersion).toEqual(expect.any(String));
     expect(diagnostics.buildPath).toEqual(expect.any(String));
     expect(diagnostics.apiDocumentPath).toEqual(expect.any(String));

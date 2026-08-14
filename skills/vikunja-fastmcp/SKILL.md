@@ -26,6 +26,11 @@ requests or legacy tracker scripts while the MCP is available.
    approval warnings. Continue to use project scope, mutation envelopes,
    dry-run, idempotency, and receipt verification for write safety.
 
+7. Vikunja Pro gates `admin_panel`, `time_tracking`, and `audit_logs`. Read
+   `enabledProFeatures` from `self_check` before using gated features. The
+   typed time-entry action reports `FEATURE_NOT_LICENSED` when
+   `time_tracking` is unavailable; do not retry its intentional 404.
+
 ## Scope And Identity
 
 - Pass `projectSelector` for every project-specific list, search, create, or
@@ -103,6 +108,10 @@ requests or legacy tracker scripts while the MCP is available.
   with the same ordered project scope.
 - Comment lists default to 20 items. Use `since`, `countOnly`, and
   `includeLatest` to avoid loading old comment bodies.
+- On Vikunja v2.5, use `vikunja_task_read` with `action: "list_time_entries"`
+  for one project-verified, bounded task time-entry page. Set `countOnly: true`
+  when only the total is needed; the route returns server-provided numeric
+  user IDs and does not infer user profiles.
 - Keep searches scoped. Avoid `allProjects` when a project subset is known.
 
 ## Writes
@@ -116,6 +125,15 @@ requests or legacy tracker scripts while the MCP is available.
   detector, so reruns update the existing finding instead of duplicating it.
 - Prefer `create_if_absent` for duplicate-sensitive creation, while remembering
   it is best-effort rather than a distributed lock.
+- To copy a task on Vikunja v2.5, use `vikunja_task_write` with
+  `action: "duplicate"`, explicit task/project selectors, `confirm: true`, an
+  actor, and a stable idempotency key. The native duplicate route does not
+  promise attachment or relation copying in its contract; inspect the returned
+  target and add any required child data explicitly.
+- Use `vikunja_task_workflow` with `action: "mark_read"` to clear the current
+  user's unread state. It is an idempotent server no-op when already read, but
+  still requires explicit selectors, actor attribution, and a stable receipt
+  key in this MCP.
 - Add verification evidence before closing work. Use `close_with_evidence` when appropriate.
 - Use `append_evidence_if_changed` with a stable evidence key when repeated
   builds may produce the same proof. Use `close_if_verified` when closure must

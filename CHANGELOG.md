@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.5.0 - 2026-08-14
+
+- Refresh the checked-in Vikunja v2 OpenAPI snapshot to the live v2.5.0
+  contract and raise the minimum supported server baseline to Vikunja 2.5.0.
+- Add guarded task duplication, idempotent mark-read, and bounded project-verified
+  task time-entry reads using native v2 routes.
+- Raise the typed-schema benchmark ceiling to 62,000 characters to account for
+  those three guarded action branches without removing any scope or fields.
+- Detect Vikunja Pro entitlements from `/info`, surface them through
+  `self_check`, and identify the license-gated time-entry response explicitly.
+- Tolerate the v2.5 OpenAPI/runtime disagreement where Pro entitlements are
+  documented as integer enums but serialized as string keys.
+- Raise the compatibility schema benchmark ceiling to 92,000 characters for
+  the legacy broad router plus the v2.5 typed actions.
+
 ## 2.4.109 - 2026-08-08
 
 - Accept delegated actor syntax such as `Codex (as srana)` and normalize it

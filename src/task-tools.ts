@@ -62,7 +62,8 @@ export function createTypedTaskTools(dispatch: TaskDispatcher): TypedTaskToolDef
   return [
     {
       name: 'vikunja_task_read',
-      description: 'Read, list, count, search, or summarize Vikunja tasks with bounded output.',
+      description:
+        'Read, list, count, search, summarize, or inspect bounded task time entries in Vikunja.',
       inputSchema: z.object({
         action: z.enum([
           'get',
@@ -75,6 +76,7 @@ export function createTypedTaskTools(dispatch: TaskDispatcher): TypedTaskToolDef
           'task_dedupe',
           'lookup_external_key',
           'receipt_lookup',
+          'list_time_entries',
         ]),
         taskSelector: taskSelectorSchema.optional(),
         projectSelector: projectSelectorSchema.optional(),
@@ -138,15 +140,16 @@ export function createTypedTaskTools(dispatch: TaskDispatcher): TypedTaskToolDef
     {
       name: 'vikunja_task_write',
       description:
-        'Create, upsert, update, or delete Vikunja tasks with identity and write guards.',
+        'Create, duplicate, upsert, update, or delete Vikunja tasks with identity and write guards.',
       inputSchema: z.object({
-        action: z.enum(['create', 'create_if_absent', 'upsert', 'update', 'delete']),
+        action: z.enum(['create', 'create_if_absent', 'upsert', 'update', 'delete', 'duplicate']),
         taskSelector: taskSelectorSchema.optional(),
         projectSelector: projectSelectorSchema.optional(),
         fields: taskFieldsSchema.optional(),
         expectedUpdatedAt: z.string().optional(),
         actor: actorSchema,
         idempotencyKey: z.string().trim().min(1).max(200).optional(),
+        confirm: z.boolean().optional(),
         externalKey: z.string().regex(EXTERNAL_KEY_PATTERN).optional(),
         attachments: z.array(z.string()).optional(),
         firstComment: z.string().trim().min(1).optional(),
@@ -168,11 +171,13 @@ export function createTypedTaskTools(dispatch: TaskDispatcher): TypedTaskToolDef
     },
     {
       name: 'vikunja_task_workflow',
-      description: 'Close, reopen, and record verification evidence through guarded workflows.',
+      description:
+        'Mark read, close, reopen, and record verification evidence through guarded workflows.',
       inputSchema: z.object({
         action: z.enum([
           'close',
           'reopen',
+          'mark_read',
           'close_with_evidence',
           'append_evidence_if_changed',
           'close_if_verified',

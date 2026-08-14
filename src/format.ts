@@ -57,12 +57,12 @@ function invalidCollectionResponse(): VikunjaError {
     code: 'INVALID_COLLECTION_RESPONSE',
     method: 'GET',
     path: 'collection',
-    message: 'Vikunja 2.4 returned an invalid collection response; expected an items wrapper.',
+    message: 'Vikunja returned an invalid collection response; expected an items wrapper.',
     fieldErrors: [],
   });
 }
 
-// Vikunja 2.4 list endpoints return `{ items, page, per_page, total,
+// Vikunja v2 list endpoints return `{ items, page, per_page, total,
 // total_pages }`. Reject any other shape so API drift cannot masquerade as an
 // empty result.
 export function toItemArray<T = any>(res: any): T[] {

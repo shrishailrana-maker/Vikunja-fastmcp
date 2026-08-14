@@ -179,6 +179,13 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
       execution: 'Machine-local durable idempotency receipt lookup',
     },
     {
+      action: 'list_time_entries',
+      required: ['taskSelector', 'projectSelector'],
+      optional: ['page (default 1)', 'perPage (default 50, max 100)', 'q', 'countOnly'],
+      execution: 'Project-verified direct GET /tasks/{id}/time-entries',
+      note: 'Read-only, bounded pagination. Vikunja exposes time-entry user IDs, not user profiles, on this route.',
+    },
+    {
       action: 'update',
       required: ['taskSelector', 'fields', ...mutationEnvelope],
       optional: [
@@ -196,6 +203,20 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
       required: ['taskSelector', ...mutationEnvelope],
       optional: ['dryRun', 'responseMode'],
       execution: 'Identity preflight then DELETE /tasks/{id}',
+    },
+    {
+      action: 'duplicate',
+      required: ['taskSelector', 'projectSelector', 'confirm', 'actor', 'idempotencyKey'],
+      optional: ['dryRun', 'responseMode'],
+      execution: 'Project-verified direct POST /tasks/{id}/duplicate',
+      note: 'confirm must be true. The durable receipt protects same-installation retries only; it is not server-enforced uniqueness or a cross-host lock.',
+    },
+    {
+      action: 'mark_read',
+      required: ['taskSelector', ...mutationEnvelope],
+      optional: ['dryRun', 'responseMode'],
+      execution: 'Project-verified direct PUT /tasks/{id}/read',
+      note: 'Vikunja treats an already-read task as a successful no-op.',
     },
     {
       action: 'close',
@@ -723,6 +744,7 @@ TOOL_OPERATION_DOCS.vikunja_task_read = taskActions([
   'task_dedupe',
   'lookup_external_key',
   'receipt_lookup',
+  'list_time_entries',
 ]);
 TOOL_OPERATION_DOCS.vikunja_task_write = taskActions([
   'create',
@@ -730,8 +752,10 @@ TOOL_OPERATION_DOCS.vikunja_task_write = taskActions([
   'upsert',
   'update',
   'delete',
+  'duplicate',
 ]);
 TOOL_OPERATION_DOCS.vikunja_task_workflow = taskActions([
+  'mark_read',
   'close',
   'reopen',
   'close_with_evidence',

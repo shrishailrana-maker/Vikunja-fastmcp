@@ -173,7 +173,7 @@ operations use the configured byte ceiling (100 MiB by default). These limits
 are generated into `MCP_API.md` and must remain synchronized with runtime
 schemas.
 
-Not included: project mutation/member administration, time entries, views,
+Not included: project mutation/member administration, time-entry mutations, views,
 buckets, client-side filters, a task-state database, or v1 compatibility.
 
 Teams and saved filters remain in scope because the owner uses them, but they

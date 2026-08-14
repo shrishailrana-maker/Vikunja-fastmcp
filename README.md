@@ -23,7 +23,8 @@ profile, response, ledger, and migration decisions are recorded in
 ## Requirements
 
 - Node.js 24 LTS+
-- Vikunja 2.4.0 with `/api/v2`
+- Vikunja 2.4.0+ with `/api/v2` (the checked-in contract is refreshed and
+  validated against a Vikunja v2.5.0 service)
 - Vikunja API token with access to the projects you need
 
 ## Install
@@ -200,12 +201,12 @@ tool set instead of the broad compatibility router:
 - `vikunja_projects` — project list and get.
 - `vikunja_task_read` — scoped list/search, `my_tasks` for the authenticated
   user's assigned tasks, projected get, batch get, task verification,
-  project/programme snapshots, and durable receipt lookup.
+  project/programme snapshots, durable receipt lookup, and bounded task time-entry pages.
 - `vikunja_task_write` — guarded create, create-if-absent, upsert, update, and
-  delete operations. Create variants can add a first comment and relations in
-  the same durable operation.
-- `vikunja_task_workflow` — close, reopen, evidence append, verified close, and
-  other composed evidence workflows with compact receipts.
+  delete operations, plus confirmed task duplication. Create variants can add a
+  first comment and relations in the same durable operation.
+- `vikunja_task_workflow` — mark-read, close, reopen, evidence append, verified
+  close, and other composed evidence workflows with compact receipts.
 - `vikunja_task_attachments` — typed upload, bounded list/count, authenticated
   download, optional local SHA-256/duplicate warnings, and ownership-verified
   deletion.
@@ -248,6 +249,15 @@ Receipts survive MCP restarts and concurrent local agent processes. They are
 protected by an atomic local execution lease, but are not a distributed lock
 across different machines. The ledger directory is private to the current user
 where the operating system supports POSIX permissions.
+
+Task duplication additionally requires explicit source `taskSelector` and
+`projectSelector`, `confirm:true`, `actor`, and a stable `idempotencyKey`.
+Vikunja creates the copy; the local receipt only protects retries from this MCP
+installation and does not provide server-enforced uniqueness or cross-host
+locking. `mark_read` uses the same explicit selectors, actor, and idempotency
+envelope; an already-read task remains a server-side no-op. Task time-entry
+listing is read-only, project-verified, and paginated; it exposes the numeric
+time-entry user ID returned by Vikunja rather than a copied user profile.
 
 Use `upsert` with a stable `externalKey` when a detector or repeated agent run
 must update the same finding instead of creating duplicates. For three or more
@@ -316,6 +326,15 @@ Vikunja permissions still apply per operation. Applying a label may be denied
 even when ordinary task updates are allowed. Some Vikunja builds also require
 JWT/local-password authentication for user-data export routes; the MCP
 preserves the real `401` instead of presenting false JWT advice.
+
+Vikunja Pro currently gates three server capabilities: `admin_panel`,
+`time_tracking`, and `audit_logs`. `self_check` reports the instance's
+`enabledProFeatures` and, in full detail, the entitlement map. The typed
+time-entry read checks `time_tracking` first and returns `FEATURE_NOT_LICENSED`
+with the license remediation instead of exposing Vikunja's intentional opaque
+404. It accepts both the string and integer enum encodings seen in v2.5
+`/info` responses. The MCP does not claim admin-panel or audit-log operations
+that it has not implemented.
 If Vikunja 2.4 returns `subscription.entity: expected integer` while reading a
 write response, the MCP reports `VIKUNJA_SUBSCRIPTION_SCHEMA_BUG` with the
 [upstream issue](https://github.com/go-vikunja/vikunja/issues/3316). It does

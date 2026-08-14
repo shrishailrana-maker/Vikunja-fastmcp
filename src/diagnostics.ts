@@ -36,7 +36,28 @@ export const OPERATIONAL_NOTES: string[] = [
   'CSV imports, exports, and downloads obey the configured attachment size/path sandbox.',
   'User-data export authentication is server-specific; some Vikunja builds reject API tokens and require JWT/local-password confirmation.',
   'Task label operations require the caller to have the corresponding label and project permissions.',
+  'Vikunja Pro gates admin_panel, time_tracking, and audit_logs. self_check reports the enabled server entitlements; time-entry reads fail clearly when time_tracking is disabled.',
 ];
+
+export const VIKUNJA_PRO_FEATURES = ['admin_panel', 'time_tracking', 'audit_logs'] as const;
+export type VikunjaProFeature = (typeof VIKUNJA_PRO_FEATURES)[number];
+
+// Vikunja's runtime JSON marshals these enum values as strings, while some
+// generated v2.5 OpenAPI snapshots describe the same field as integer enums.
+const PRO_FEATURE_IDS: Record<number, VikunjaProFeature> = {
+  1: 'admin_panel',
+  2: 'time_tracking',
+  3: 'audit_logs',
+};
+
+function summarizeProFeatures(enabled: unknown): string[] {
+  if (!Array.isArray(enabled)) return [];
+  return enabled.flatMap((feature) => {
+    if (typeof feature === 'string') return [feature];
+    if (typeof feature === 'number' && PRO_FEATURE_IDS[feature]) return [PRO_FEATURE_IDS[feature]];
+    return [];
+  });
+}
 
 export const SERVER_DEPENDENT_CAPABILITIES = [
   {
@@ -103,6 +124,13 @@ export interface DiagnosticResult {
     unsupportedOperations?: { operation: string; reason: string }[];
     operationalNotes?: string[];
     serverDependentCapabilities?: typeof SERVER_DEPENDENT_CAPABILITIES;
+    enabledProFeatures?: string[];
+    proFeatures?: {
+      feature: VikunjaProFeature;
+      enabled: boolean;
+      mcpSurface: 'time_entries' | null;
+    }[];
+    proFeatureError?: string;
   };
 }
 
@@ -135,6 +163,7 @@ export async function runSelfCheck(
     packageVersion,
     attachmentDownloadRootWritable: false,
     projectCount: 0,
+    enabledProFeatures: [],
   };
   if (detail === 'full') {
     Object.assign(diagnostics, {
@@ -151,6 +180,11 @@ export async function runSelfCheck(
       unsupportedOperations: UNSUPPORTED_OPERATIONS,
       operationalNotes: OPERATIONAL_NOTES,
       serverDependentCapabilities: SERVER_DEPENDENT_CAPABILITIES,
+      proFeatures: VIKUNJA_PRO_FEATURES.map((feature) => ({
+        feature,
+        enabled: false,
+        mcpSurface: feature === 'time_tracking' ? 'time_entries' : null,
+      })),
     });
   }
 
@@ -195,6 +229,23 @@ export async function runSelfCheck(
     diagnostics.currentUser = { id: user.id, username: user.username };
     diagnostics.authenticationState = 'authenticated';
     diagnostics.connectionStatus = 'online';
+    try {
+      const info = await client.request<any>('GET', '/info');
+      const enabled = summarizeProFeatures(info?.enabled_pro_features);
+      diagnostics.enabledProFeatures = enabled;
+      if (detail === 'full') {
+        diagnostics.proFeatures = VIKUNJA_PRO_FEATURES.map((feature) => ({
+          feature,
+          enabled: enabled.includes(feature),
+          mcpSurface: feature === 'time_tracking' ? 'time_entries' : null,
+        }));
+      }
+    } catch (err: any) {
+      diagnostics.proFeatureError = redactSecrets(
+        err.message || 'Unable to read Vikunja Pro feature entitlements.',
+        config.vikunjaToken,
+      );
+    }
     if (detail === 'full') {
       const projects = await fetchAllCollectionItems<any>(
         async (requestPath) => client.request<any>('GET', requestPath),
