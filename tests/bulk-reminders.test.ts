@@ -18,6 +18,60 @@ import path from 'node:path';
 describe('bulk task composition', () => {
   beforeEach(() => idempotency.clear());
 
+  it('returns bounded per-row error codes in partial workflow summaries', async () => {
+    const request = jest.fn(async (method: string, path: string) => {
+      if (method === 'GET' && path === '/projects/101') {
+        return { id: 101, title: 'Alpha' };
+      }
+      if (method === 'GET' && path === '/tasks/1') {
+        return {
+          id: 1,
+          index: 1,
+          identifier: 'ALPHA-1',
+          title: 'Status task',
+          project_id: 101,
+          project: { title: 'Alpha' },
+          labels: [{ id: 7, title: 'bug' }],
+        };
+      }
+      if (method === 'GET' && path.startsWith('/labels?')) {
+        return {
+          items: [
+            { id: 5, title: 'status:open' },
+            { id: 167, title: 'status:open' },
+          ],
+          page: 1,
+          per_page: 100,
+          total: 2,
+          total_pages: 1,
+        };
+      }
+      throw new Error(`Unexpected ${method} ${path}`);
+    });
+    const client = {
+      request,
+      getConfig: () => ({
+        statusLabelPrefix: 'status:',
+        vikunjaWebUrl: 'https://vikunja.example.com/',
+        vikunjaToken: 'test-token',
+      }),
+    } as any;
+
+    const result = await bulkWorkflowTasks(
+      client,
+      'set_status',
+      [{ globalId: 1 }],
+      { id: 101 },
+      { statusLabel: 'status:open', actor: 'Codex', idempotencyKey: 'duplicate-status' },
+    );
+
+    expect(result).toMatchObject({ status: 'partial', failed: 1 });
+    expect(result.errors).toEqual([
+      expect.objectContaining({ row: 1, code: 'LABEL_TITLE_AMBIGUOUS', retryable: false }),
+    ]);
+    expect(result.errors[0].message).toContain('Use a numeric label ID');
+  });
+
   it('continues after a failed create row and returns a compact result', async () => {
     const request = jest.fn(async (method: string, path: string, options?: any) => {
       if (method === 'GET' && path === '/projects/101') return { id: 101, title: 'Alpha' };
@@ -62,7 +116,7 @@ describe('bulk task composition', () => {
         { id: 9001, portalRef: 'ALPHA-1', title: 'First' },
         { id: 9003, portalRef: 'ALPHA-3', title: 'Third' },
       ],
-      failed: [{ row: 2, title: 'Broken', error: 'Row rejected' }],
+      failed: [{ row: 2, title: 'Broken', errorCode: 'VALIDATION_ERROR', error: 'Row rejected' }],
     });
   });
 

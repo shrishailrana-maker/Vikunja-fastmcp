@@ -37,16 +37,26 @@ const actorSchema = z
   .trim()
   .min(1)
   .max(80)
-  .regex(/^[\p{L}\p{N} ._()_-]+$/u, 'actor contains unsupported characters')
+  .regex(
+    /^[\p{L}\p{N} ._()_-]+$/u,
+    'actor may contain only letters, numbers, spaces, dots, underscores, or hyphens; use an optional "(as NAME)" suffix for delegation (for example, "Codex (as srana)")',
+  )
   .optional();
-const taskFieldsSchema = z.object({
-  title: z.string().trim().min(1).optional(),
-  description: z.string().optional(),
-  appendDescription: z.string().optional(),
-  done: z.boolean().optional(),
-  priority: z.number().int().min(0).max(5).optional(),
-  dueDate: z.string().nullable().optional(),
-});
+const taskFieldsSchema = z
+  .object({
+    title: z.string().trim().min(1).optional(),
+    description: z.string().optional(),
+    appendDescription: z.string().optional(),
+    done: z.boolean().optional(),
+    priority: z.number().int().min(0).max(5).optional(),
+    dueDate: z.string().nullable().optional(),
+    labels: z
+      .array(z.union([z.string().trim().min(1), z.number().int().positive()]))
+      .max(50)
+      .optional()
+      .describe('Labels to add after task creation or upsert; titles must be unambiguous.'),
+  })
+  .strict();
 const verificationEvidenceSchema = z
   .object({
     command: z.string().trim().min(1),
@@ -190,7 +200,7 @@ export function createTypedTaskTools(dispatch: TaskDispatcher): TypedTaskToolDef
         expectedUpdatedAt: z.string().optional(),
         actor: actorSchema,
         idempotencyKey: z.string().trim().min(1).max(200).optional(),
-        statusLabel: z.string().trim().min(1).optional(),
+        statusLabel: z.union([z.string().trim().min(1), z.number().int().positive()]).optional(),
         createIfMissing: z.boolean().optional(),
         dryRun: z.boolean().optional(),
         responseMode: responseModeSchema,
@@ -219,7 +229,7 @@ export function createTypedTaskTools(dispatch: TaskDispatcher): TypedTaskToolDef
         idempotencyKey: z.string().trim().min(1).max(200).optional(),
         userSelector: z.union([z.string().trim().min(1), z.number().int().positive()]).optional(),
         labelTitle: z.union([z.string().trim().min(1), z.number().int().positive()]).optional(),
-        statusLabel: z.string().trim().min(1).optional(),
+        statusLabel: z.union([z.string().trim().min(1), z.number().int().positive()]).optional(),
         createIfMissing: z.boolean().optional(),
         otherTaskSelector: taskSelectorSchema.optional(),
         relationKind: z.string().optional(),

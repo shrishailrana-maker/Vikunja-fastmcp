@@ -1142,11 +1142,6 @@ describe('Tasks List and Scoping tests', () => {
         } as Response)
         .mockResolvedValueOnce({
           ok: true,
-          status: 200,
-          text: async () => JSON.stringify({ id: 101, title: 'Alpha' }),
-        } as Response)
-        .mockResolvedValueOnce({
-          ok: true,
           status: 201,
           text: async () =>
             JSON.stringify({
@@ -1176,6 +1171,73 @@ describe('Tasks List and Scoping tests', () => {
       );
       expect(description.trim().endsWith('</p>')).toBe(true);
       expect(description).toContain('[vfm-key:detector:file.ts:10]');
+    });
+
+    it('upsert applies requested labels and returns them in the write receipt', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: 101, title: 'Alpha' }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({ items: [], page: 1, per_page: 5, total: 0, total_pages: 0 }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 201,
+          text: async () =>
+            JSON.stringify({
+              id: 9005,
+              index: 305,
+              identifier: 'ALPHA-305',
+              title: 'Labeled finding',
+              project_id: 101,
+            }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: 9005, labels: [] }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              items: [{ id: 12, title: 'status:open' }],
+              page: 1,
+              per_page: 100,
+              total: 1,
+              total_pages: 1,
+            }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ labels: [{ id: 12, title: 'status:open' }] }),
+        } as Response);
+
+      const result = await upsertTask(
+        client,
+        { id: 101 },
+        { title: 'Labeled finding', labels: [12] },
+        'detector:labels:12',
+      );
+
+      expect(result).toMatchObject({
+        action: 'created',
+        labels: [{ id: 12, title: 'status:open' }],
+      });
+      const labelPut = mockFetch.mock.calls.find(
+        (call: any) => call[1]?.method === 'PUT' && String(call[0]).endsWith('/labels/bulk'),
+      );
+      expect(JSON.parse(labelPut[1].body)).toEqual({
+        labels: [{ id: 12, title: 'status:open' }],
+      });
     });
 
     it('upsert updates the one exact stable-key match without creating a second task', async () => {

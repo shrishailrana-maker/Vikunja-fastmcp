@@ -677,7 +677,10 @@ const actorValueSchema = z
   .trim()
   .min(1)
   .max(80)
-  .regex(/^[\p{L}\p{N} ._()_-]+$/u, 'actor contains unsupported characters');
+  .regex(
+    /^[\p{L}\p{N} ._()_-]+$/u,
+    'actor may contain only letters, numbers, spaces, dots, underscores, or hyphens; use an optional "(as NAME)" suffix for delegation (for example, "Codex (as srana)")',
+  );
 const actorSchema = actorValueSchema.optional();
 
 const taskSelectorSchema = z.union([
@@ -858,10 +861,12 @@ export const TOOLS: McpToolDefinition[] = [
         .optional(),
       projects: z
         .array(
-          z.object({
-            id: z.number().int().positive().optional(),
-            title: z.string().trim().min(1).optional(),
-          }),
+          z
+            .object({
+              id: z.number().int().positive().optional(),
+              title: z.string().trim().min(1).optional(),
+            })
+            .strict(),
         )
         .max(25)
         .optional(),
@@ -901,14 +906,21 @@ export const TOOLS: McpToolDefinition[] = [
       responseMode: z.enum(['minimal', 'receipt', 'compact', 'standard', 'full']).optional(),
       fields: z
         .union([
-          z.object({
-            title: z.string().trim().min(1).optional(),
-            description: z.string().optional(),
-            appendDescription: z.string().optional(),
-            done: z.boolean().optional(),
-            priority: z.number().int().min(0).max(5).optional(),
-            dueDate: z.string().nullable().optional(),
-          }),
+          z
+            .object({
+              title: z.string().trim().min(1).optional(),
+              description: z.string().optional(),
+              appendDescription: z.string().optional(),
+              done: z.boolean().optional(),
+              priority: z.number().int().min(0).max(5).optional(),
+              dueDate: z.string().nullable().optional(),
+              labels: z
+                .array(z.union([z.string().trim().min(1), z.number().int().positive()]))
+                .max(50)
+                .optional()
+                .describe('Labels to add after task creation or upsert.'),
+            })
+            .strict(),
           z.array(z.enum(TASK_READ_FIELDS)).min(1),
         ])
         .optional(),
@@ -956,7 +968,7 @@ export const TOOLS: McpToolDefinition[] = [
       actor: actorSchema,
       userSelector: z.union([z.string().trim().min(1), z.number().int().positive()]).optional(),
       labelTitle: z.union([z.string().trim().min(1), z.number().int().positive()]).optional(),
-      statusLabel: z.string().trim().min(1).optional(),
+      statusLabel: z.union([z.string().trim().min(1), z.number().int().positive()]).optional(),
       createIfMissing: z.boolean().optional(),
       otherTaskSelector: taskSelectorSchema.optional(),
       relationKind: z.string().optional(),
@@ -1106,6 +1118,7 @@ export const TOOLS: McpToolDefinition[] = [
             done: args.fields.done,
             priority: args.fields.priority,
             dueDate: args.fields.dueDate,
+            labels: args.fields.labels,
           };
           return runDirectTaskMutation(
             client,
@@ -1145,6 +1158,7 @@ export const TOOLS: McpToolDefinition[] = [
             done: args.fields.done,
             priority: args.fields.priority,
             dueDate: args.fields.dueDate,
+            labels: args.fields.labels,
           };
           return runDirectTaskMutation(
             client,
@@ -1199,6 +1213,7 @@ export const TOOLS: McpToolDefinition[] = [
                   done: args.fields.done,
                   priority: args.fields.priority,
                   dueDate: args.fields.dueDate,
+                  labels: args.fields.labels,
                 },
                 args.externalKey,
                 args.expectedUpdatedAt,
@@ -2084,36 +2099,44 @@ export const TOOLS: McpToolDefinition[] = [
           priority: z.number().int().min(0).max(5).optional(),
           dueDate: z.string().nullable().optional(),
         })
+        .strict()
         .optional(),
       tasks: z
         .array(
-          z.object({
-            title: z.string().trim().min(1),
-            description: z.string().optional(),
-            done: z.boolean().optional(),
-            priority: z.number().int().min(0).max(5).optional(),
-            dueDate: z.string().nullable().optional(),
-            externalKey: z.string().regex(EXTERNAL_KEY_PATTERN).optional(),
-            expectedUpdatedAt: z.string().optional(),
-            firstComment: z.string().trim().min(1).optional(),
-            relations: z
-              .array(
-                z
-                  .object({
-                    otherTaskSelector: taskSelectorSchema,
-                    relationKind: z.string().trim().min(1),
-                  })
-                  .strict(),
-              )
-              .max(20)
-              .optional(),
-          }),
+          z
+            .object({
+              title: z.string().trim().min(1),
+              description: z.string().optional(),
+              done: z.boolean().optional(),
+              priority: z.number().int().min(0).max(5).optional(),
+              dueDate: z.string().nullable().optional(),
+              labels: z
+                .array(z.union([z.string().trim().min(1), z.number().int().positive()]))
+                .max(50)
+                .optional()
+                .describe('Labels to add after each task is created or upserted.'),
+              externalKey: z.string().regex(EXTERNAL_KEY_PATTERN).optional(),
+              expectedUpdatedAt: z.string().optional(),
+              firstComment: z.string().trim().min(1).optional(),
+              relations: z
+                .array(
+                  z
+                    .object({
+                      otherTaskSelector: taskSelectorSchema,
+                      relationKind: z.string().trim().min(1),
+                    })
+                    .strict(),
+                )
+                .max(20)
+                .optional(),
+            })
+            .strict(),
         )
         .min(1)
         .max(100)
         .optional(),
       userSelector: z.union([z.string().trim().min(1), z.number().int().positive()]).optional(),
-      statusLabel: z.string().trim().min(1).optional(),
+      statusLabel: z.union([z.string().trim().min(1), z.number().int().positive()]).optional(),
       labelTitle: z.union([z.string().trim().min(1), z.number().int().positive()]).optional(),
       evidenceComment: z.string().trim().min(1).optional(),
       createIfMissing: z.boolean().optional(),

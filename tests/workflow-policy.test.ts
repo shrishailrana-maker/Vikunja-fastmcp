@@ -69,6 +69,12 @@ describe('workflow policy and compact project workflows', () => {
   it('appends actor attribution once and persists it on task/comment creation', async () => {
     expect(canonicalizeActor('Codex (as srana)')).toBe('Codex as srana');
     expect(canonicalizeActor('Example Agent')).toBe('Example Agent');
+    expect(() => canonicalizeActor('Codex (Sol / GPT-5.6)')).toThrow(
+      expect.objectContaining({
+        code: 'ACTOR_INVALID',
+        message: expect.stringContaining('optional delegated suffix'),
+      }),
+    );
     expect(withActorAttribution('Verified.', 'Codex (as srana)')).toBe(
       'Verified.\n\n(by Codex as srana)',
     );
@@ -86,6 +92,12 @@ describe('workflow policy and compact project workflows', () => {
     expect(withActorAttribution('Verified.\n\n(by Codex)\n\n(by Codex)', 'Codex')).toBe(
       'Verified.\n\n(by Codex)',
     );
+    expect(
+      withActorAttribution(
+        'Evidence\n\n(by Codex)\n\n[vfm-key:detector:one]\n\n(by Codex)',
+        'Codex',
+      ),
+    ).toBe('Evidence\n\n(by Codex)\n\n[vfm-key:detector:one]');
 
     mockFetch
       .mockResolvedValueOnce({
@@ -289,5 +301,55 @@ describe('workflow policy and compact project workflows', () => {
     expect(mockFetch.mock.calls.some((call) => (call[1] as RequestInit)?.method === 'POST')).toBe(
       false,
     );
+  });
+
+  it('accepts a numeric status label ID when titles are ambiguous', async () => {
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            id: 42,
+            index: 5,
+            identifier: 'ALPHA-5',
+            title: 'Status task',
+            project_id: 7,
+            project: { title: 'Alpha' },
+            labels: [{ id: 1, title: 'bug' }],
+          }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            items: [
+              { id: 5, title: 'status:open' },
+              { id: 167, title: 'status:open' },
+            ],
+            page: 1,
+            per_page: 100,
+            total: 2,
+            total_pages: 1,
+          }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ labels: [] }),
+      } as Response);
+
+    const result = await setTaskStatus(client, 42, 167);
+    expect(result).toMatchObject({ action: 'updated', statusLabel: 'status:open' });
+    const put = mockFetch.mock.calls.find((call) =>
+      String(call[0]).endsWith('/tasks/42/labels/bulk'),
+    );
+    expect(JSON.parse((put![1] as RequestInit).body as string)).toEqual({
+      labels: [
+        { id: 1, title: 'bug' },
+        { id: 167, title: 'status:open' },
+      ],
+    });
   });
 });

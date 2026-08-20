@@ -123,6 +123,9 @@ requests or legacy tracker scripts while the MCP is available.
   Inspect the durable row receipt when a composed sub-operation is partial.
 - Use `upsert` with a stable `externalKey`, such as file plus line plus
   detector, so reruns update the existing finding instead of duplicating it.
+- `fields.labels` on create/upsert accepts label titles or numeric IDs, applies
+  them through the task-label route, and appears in the receipt; unsupported
+  task-write fields must fail validation rather than being silently ignored.
 - Prefer `create_if_absent` for duplicate-sensitive creation, while remembering
   it is best-effort rather than a distributed lock.
 - To copy a task on Vikunja v2.5, use `vikunja_task_write` with
@@ -161,7 +164,9 @@ requests or legacy tracker scripts while the MCP is available.
   only adding evidence.
 - Use `set_status` to replace all labels in the configured status-prefix group
   in one request. Keep `createIfMissing: false` unless label creation is
-  explicitly intended.
+  explicitly intended. `statusLabel` accepts a title or numeric label ID; use
+  the numeric ID when duplicate global titles exist. `self_check` detail=full
+  reports duplicate workflow-label titles and candidate IDs.
 - When a label title is ambiguous, pass the numeric label ID.
 - Use CSV `mode: "idempotent"` plus a stable `idempotencyKey` for retry-safe
   row-by-row imports; use `mode: "native"` only when speed matters more than
@@ -171,8 +176,9 @@ requests or legacy tracker scripts while the MCP is available.
 - Treat composed bulk operations as bounded and non-atomic. Their durable
   SQLite receipts survive local MCP restarts and prevent concurrent same-key
   writes on one machine, but they are not a distributed lock between machines.
-- Bulk mutations return counts by default. Read item receipts through the
-  operation `status` cursor only when a failed or skipped row must be examined.
+- Bulk mutations return counts plus bounded per-row error codes/messages by
+  default. Read item receipts through the operation `status` cursor when a
+  failed or skipped row needs the full receipt.
 - Mutation responses use structured-only `receipt` mode by default. Do not ask
   for `standard` or `full` merely to restate submitted text.
 - Read `structuredContent` first. It carries the same redacted `{ok,data}` or

@@ -2,12 +2,12 @@ import { server } from '../src/index.js';
 
 const profiles = ['core', 'qa', 'developer', 'full', 'compatibility'] as const;
 const budgets: Record<(typeof profiles)[number], number> = {
-  // v2.5 adds three guarded task actions; keep a bounded 62k ceiling while
-  // preserving the same typed surface across the named profiles.
-  core: 62_000,
-  qa: 62_000,
-  developer: 62_000,
-  full: 62_000,
+  // v2.5.1 adds bounded label selectors, numeric status IDs, and diagnostic
+  // fields; keep a bounded 63k ceiling across the named typed profiles.
+  core: 63_000,
+  qa: 63_000,
+  developer: 63_000,
+  full: 63_000,
   // The compatibility router includes the legacy broad schema in addition to
   // the typed surface; v2.5 added enough guarded actions to require 92k.
   compatibility: 92_000,

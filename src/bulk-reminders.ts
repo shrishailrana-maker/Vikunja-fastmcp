@@ -29,6 +29,7 @@ export interface BulkTaskFields {
 
 export interface BulkCreateTaskFields extends BulkTaskFields {
   title: string;
+  labels?: (string | number)[];
   externalKey?: string;
   expectedUpdatedAt?: string;
   firstComment?: string;
@@ -111,6 +112,11 @@ function retryableBulkError(error: any): boolean {
   return status === 408 || status === 429 || status >= 500;
 }
 
+function bulkErrorCode(error: any): string {
+  const code = error?.code ?? error?.error?.code;
+  return typeof code === 'string' && code.length > 0 ? code : 'BULK_ROW_FAILED';
+}
+
 function skipRecordedRow(state: any, row: number): boolean {
   const receipt = state.receipts?.find((candidate: any) => candidate.row === row);
   if (!receipt) return false;
@@ -139,6 +145,16 @@ function bulkSummary(state: any) {
     if (name === 'failed') return receipts.filter((receipt: any) => receipt.ok === false).length;
     return receipts.filter((receipt: any) => receiptState(receipt) === name).length;
   };
+  const errors = receipts
+    .filter((receipt: any) => receipt.ok === false)
+    .slice(0, 100)
+    .map((receipt: any) => ({
+      row: receipt.row,
+      taskId: receipt.taskId ?? null,
+      code: receipt.errorCode ?? receipt.code ?? 'BULK_ROW_FAILED',
+      message: receipt.error ?? 'Bulk row failed.',
+      retryable: receipt.retryable !== false,
+    }));
   return {
     operationId: state.operationId,
     status: state.status,
@@ -149,6 +165,7 @@ function bulkSummary(state: any) {
     unchanged: count('unchanged'),
     skipped: count('skipped'),
     failed: count('failed'),
+    ...(errors.length > 0 ? { errors } : {}),
     actor: state.actor,
   };
 }
@@ -330,6 +347,7 @@ export async function bulkUpdateTasks(
         receipts.push(
           bulkRowReceipt(index + 1, 'failed', {
             taskSelector,
+            errorCode: bulkErrorCode(error),
             error: redactSecrets(
               error?.message || 'Task update preview failed',
               client.getConfig().vikunjaToken,
@@ -416,6 +434,7 @@ export async function bulkUpdateTasks(
         row: index + 1,
         taskId: selectorId(taskSelector),
         taskSelector,
+        errorCode: bulkErrorCode(error),
         error: redactSecrets(
           error?.message || 'Task update failed',
           client.getConfig().vikunjaToken,
@@ -483,6 +502,7 @@ export async function bulkCreateTasks(
         receipts.push(
           bulkRowReceipt(index + 1, 'failed', {
             title: task.title,
+            errorCode: bulkErrorCode(error),
             error: redactSecrets(
               error?.message || 'Task create preview failed',
               client.getConfig().vikunjaToken,
@@ -550,6 +570,7 @@ export async function bulkCreateTasks(
         const failure = {
           row: index + 1,
           title: task.title,
+          errorCode: 'COMPOSED_SUBOPERATION_FAILED',
           error:
             'Task was created, but one or more requested comment or relation operations failed.',
           retryable: composedErrors.some((error: any) => error.retryable !== false),
@@ -589,6 +610,7 @@ export async function bulkCreateTasks(
       const failure = {
         row: index + 1,
         title: task.title,
+        errorCode: bulkErrorCode(error),
         error: redactSecrets(
           error?.message || 'Task creation failed',
           client.getConfig().vikunjaToken,
@@ -733,6 +755,7 @@ async function bulkChangeAssignee(
             row: index + 1,
             taskId: selectorId(taskSelector),
             taskSelector,
+            errorCode: bulkErrorCode(error),
             error: errorMessage,
             retryable: retryableBulkError(error),
           }
@@ -820,6 +843,7 @@ export async function bulkDeleteTasks(
         receipts.push(
           bulkRowReceipt(index + 1, 'failed', {
             taskSelector,
+            errorCode: bulkErrorCode(error),
             error: redactSecrets(
               error?.message || 'Task delete preview failed',
               client.getConfig().vikunjaToken,
@@ -873,6 +897,7 @@ export async function bulkDeleteTasks(
         row: index + 1,
         taskId: selectorId(taskSelector),
         taskSelector,
+        errorCode: bulkErrorCode(error),
         error: redactSecrets(
           error?.message || 'Task deletion failed',
           client.getConfig().vikunjaToken,
@@ -894,7 +919,7 @@ export type BulkWorkflowAction =
   'set_status' | 'apply-label' | 'remove-label' | 'close_with_evidence';
 
 export interface BulkWorkflowOptions {
-  statusLabel?: string;
+  statusLabel?: string | number;
   labelTitle?: string | number;
   evidenceComment?: string;
   createIfMissing?: boolean;
@@ -1006,6 +1031,7 @@ export async function bulkWorkflowTasks(
             finalIdentity: target,
             ...(partial
               ? {
+                  errorCode: bulkErrorCode(echo.error),
                   error: echo.error?.message ?? 'Workflow partially completed',
                   retryable: echo.error?.retryable ?? retryableBulkError(echo.error),
                 }
@@ -1021,6 +1047,7 @@ export async function bulkWorkflowTasks(
           'failed',
           {
             taskSelector,
+            errorCode: bulkErrorCode(error),
             error: redactSecrets(
               error?.message || 'Bulk workflow row failed',
               client.getConfig().vikunjaToken,

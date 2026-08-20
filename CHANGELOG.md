@@ -1,6 +1,12 @@
 # Changelog
 
-## 2.5.0 - 2026-08-14
+## 2.5.1 - 2026-08-20
+
+- Apply task-write `fields.labels` through the task-label API and return applied
+  labels instead of silently discarding them.
+- Accept numeric label IDs for `set_status`, expose bounded per-row bulk error
+  codes/messages, deduplicate generated actor attribution, and report the
+  accepted actor syntax plus duplicate workflow-label titles in diagnostics.
 
 - Refresh the checked-in Vikunja v2 OpenAPI snapshot to the live v2.5.0
   contract and raise the minimum supported server baseline to Vikunja 2.5.0.
@@ -14,6 +20,8 @@
   documented as integer enums but serialized as string keys.
 - Raise the compatibility schema benchmark ceiling to 92,000 characters for
   the legacy broad router plus the v2.5 typed actions.
+- Raise the typed schema benchmark ceiling to 63,000 characters for the
+  bounded label selectors, numeric status IDs, and diagnostics fields.
 
 ## 2.4.109 - 2026-08-08
 

@@ -12,6 +12,7 @@
 import { loadConfig } from './config.js';
 import { VikunjaApiClient } from './api.js';
 import { fetchAllCollectionItems, normalizePagination } from './format.js';
+import { listAllLabels } from './identity.js';
 import { redactSecrets } from './errors.js';
 import fs from 'fs/promises';
 import path from 'path';
@@ -37,6 +38,7 @@ export const OPERATIONAL_NOTES: string[] = [
   'User-data export authentication is server-specific; some Vikunja builds reject API tokens and require JWT/local-password confirmation.',
   'Task label operations require the caller to have the corresponding label and project permissions.',
   'Vikunja Pro gates admin_panel, time_tracking, and audit_logs. self_check reports the enabled server entitlements; time-entry reads fail clearly when time_tracking is disabled.',
+  'self_check detail=full reports duplicate configured workflow-label titles; use a numeric label ID with set_status when titles are ambiguous.',
 ];
 
 export const VIKUNJA_PRO_FEATURES = ['admin_panel', 'time_tracking', 'audit_logs'] as const;
@@ -131,6 +133,8 @@ export interface DiagnosticResult {
       mcpSurface: 'time_entries' | null;
     }[];
     proFeatureError?: string;
+    duplicateWorkflowLabels?: { title: string; ids: number[] }[];
+    workflowLabelError?: string;
   };
 }
 
@@ -185,6 +189,7 @@ export async function runSelfCheck(
         enabled: false,
         mcpSurface: feature === 'time_tracking' ? 'time_entries' : null,
       })),
+      duplicateWorkflowLabels: [],
     });
   }
 
@@ -258,6 +263,33 @@ export async function runSelfCheck(
       }));
       diagnostics.projectCount = projectSummaries.length;
       diagnostics.projects = projectSummaries;
+      try {
+        const prefix = config.statusLabelPrefix ?? 'status:';
+        const grouped = new Map<string, { title: string; ids: number[] }>();
+        for (const label of await listAllLabels(client)) {
+          const title = typeof label?.title === 'string' ? label.title.trim() : '';
+          const id = Number(label?.id);
+          if (
+            !title.toLowerCase().startsWith(prefix.toLowerCase()) ||
+            !Number.isInteger(id) ||
+            id <= 0
+          ) {
+            continue;
+          }
+          const key = title.toLowerCase();
+          const current: { title: string; ids: number[] } = grouped.get(key) ?? { title, ids: [] };
+          current.ids.push(id);
+          grouped.set(key, current);
+        }
+        diagnostics.duplicateWorkflowLabels = [...grouped.values()].filter(
+          (entry) => entry.ids.length > 1,
+        );
+      } catch (err: any) {
+        diagnostics.workflowLabelError = redactSecrets(
+          err.message || 'Unable to inspect workflow labels.',
+          config.vikunjaToken,
+        );
+      }
     } else {
       const projectPage = await client.request<any>('GET', '/projects?page=1&per_page=1');
       diagnostics.projectCount = normalizePagination(projectPage).total;

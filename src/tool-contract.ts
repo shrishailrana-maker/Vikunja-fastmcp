@@ -41,7 +41,14 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     {
       action: 'create',
       required: [...mutationEnvelope, 'fields.title'],
-      optional: ['fields', 'attachments', 'firstComment', 'relations', 'dryRun', 'responseMode'],
+      optional: [
+        'fields (including labels)',
+        'attachments',
+        'firstComment',
+        'relations',
+        'dryRun',
+        'responseMode',
+      ],
       execution:
         'Direct POST; MCP-composed when attachments, a first comment, or relations are supplied',
       note: 'For 3 or more tasks use vikunja_task_bulk create instead of repeated create calls.',
@@ -49,7 +56,14 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     {
       action: 'create_if_absent',
       required: [...mutationEnvelope, 'fields.title'],
-      optional: ['fields', 'attachments', 'firstComment', 'relations', 'dryRun', 'responseMode'],
+      optional: [
+        'fields (including labels)',
+        'attachments',
+        'firstComment',
+        'relations',
+        'dryRun',
+        'responseMode',
+      ],
       execution: 'MCP-composed exact-title search then optional create/attach',
       note: 'Best-effort duplicate prevention, not a distributed lock.',
     },
@@ -65,7 +79,7 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
         'responseMode',
       ],
       execution: 'MCP-composed description-key lookup followed by create or conditional update',
-      note: 'Requires server-side description filtering. Updating a matched title/description also requires expectedUpdatedAt.',
+      note: 'Requires server-side description filtering. fields.labels are applied and returned in the receipt; updating a matched title/description also requires expectedUpdatedAt.',
     },
     {
       action: 'get',
@@ -304,7 +318,7 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
       required: ['taskSelector', 'statusLabel', ...mutationEnvelope],
       optional: ['createIfMissing (default false)', 'dryRun', 'responseMode'],
       execution: 'Identity preflight then one bulk label-set replacement',
-      note: 'Preserves non-status labels and repairs multiple configured-prefix labels.',
+      note: 'statusLabel accepts an exact title or numeric label ID; preserves non-status labels and repairs multiple configured-prefix labels.',
     },
     {
       action: 'relate',
@@ -515,7 +529,13 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     {
       action: 'create',
       required: ['projectSelector', 'tasks', 'actor', 'idempotencyKey'],
-      optional: ['tasks[].externalKey', 'tasks[].firstComment', 'tasks[].relations', 'dryRun'],
+      optional: [
+        'tasks[].externalKey',
+        'tasks[].labels',
+        'tasks[].firstComment',
+        'tasks[].relations',
+        'dryRun',
+      ],
       execution: 'MCP-composed bounded task creates with durable row receipts',
       note: 'Each row may provide externalKey, expectedUpdatedAt, firstComment, and relations. Repeating the same request resumes failed rows and skips recorded successes.',
     },
@@ -541,7 +561,8 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
       action: 'set_status',
       required: ['projectSelector', 'taskSelectors', 'statusLabel', 'actor', 'idempotencyKey'],
       optional: ['createIfMissing', 'dryRun'],
-      execution: 'MCP-composed per-task status-label transitions with durable row receipts',
+      execution:
+        'MCP-composed per-task status-label transitions with durable row receipts; statusLabel accepts a title or numeric label ID',
     },
     {
       action: 'apply-label',

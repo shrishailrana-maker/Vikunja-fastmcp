@@ -1347,6 +1347,23 @@ describe('MCP Server Registration and Dispatching tests', () => {
             }),
         } as Response;
       }
+      if (url.includes('/labels')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              items: [
+                { id: 5, title: 'status:open' },
+                { id: 167, title: 'status:open' },
+              ],
+              page: 1,
+              per_page: 100,
+              total: 2,
+              total_pages: 1,
+            }),
+        } as Response;
+      }
       return {
         ok: true,
         status: 200,
@@ -1369,6 +1386,7 @@ describe('MCP Server Registration and Dispatching tests', () => {
       projectCount: 1,
       projects: [{ id: 101, title: 'Alpha', archived: false }],
       enabledProFeatures: ['time_tracking'],
+      duplicateWorkflowLabels: [{ title: 'status:open', ids: [5, 167] }],
     });
     expect(diagnostics.proFeatures).toEqual(
       expect.arrayContaining([

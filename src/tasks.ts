@@ -37,7 +37,11 @@ import {
 } from './idempotency.js';
 import { createComment } from './comments.js';
 import { attachFiles, AttachmentInfo } from './attachments.js';
-import { canonicalizeActor, withActorAttribution } from './mutation-policy.js';
+import {
+  canonicalizeActor,
+  stripGeneratedAttribution,
+  withActorAttribution,
+} from './mutation-policy.js';
 
 const MAX_AGENT_PAGE_SIZE = 100;
 const MAX_PROJECT_SCOPE = 25;
@@ -176,6 +180,8 @@ export interface TaskCreationRelationInput {
   otherTaskSelector: TaskSelectorInput;
   relationKind: string;
 }
+
+export type TaskLabelSelector = string | number;
 
 export interface TaskCreationCompositionOptions {
   firstComment?: string;
@@ -330,6 +336,95 @@ async function attachToEcho(
     echo.attachmentUnknown = result.unknown;
   }
   return echo;
+}
+
+async function resolveTaskLabelReference(
+  client: VikunjaApiClient,
+  selector: TaskLabelSelector,
+): Promise<{ id: number; title: string }> {
+  const id = await resolveOrCreateLabel(client, selector);
+  const labels = await listAllLabels(client);
+  const found = labels.find((label: any) => Number(label?.id) === id);
+  if (!found || typeof found.title !== 'string' || found.title.trim() === '') {
+    throw new VikunjaError({
+      status: 502,
+      code: 'INVALID_API_RESPONSE',
+      method: 'GET',
+      path: '/labels',
+      message: `Vikunja did not return a usable label for id ${id}.`,
+      fieldErrors: [],
+    });
+  }
+  return { id, title: found.title.trim() };
+}
+
+async function applyLabelsToTask(
+  client: VikunjaApiClient,
+  taskId: number,
+  beforeLabels: { id: number; title: string }[],
+  selectors: TaskLabelSelector[],
+  dryRun = false,
+): Promise<{ labels: { id: number; title: string }[]; changed: boolean }> {
+  const labels = [...beforeLabels];
+  for (const selector of selectors) {
+    const reference = await resolveTaskLabelReference(client, selector);
+    if (!labels.some((label) => label.id === reference.id)) labels.push(reference);
+  }
+  if (labels.length === beforeLabels.length) return { labels, changed: false };
+  if (!dryRun) {
+    await client.request<any>('PUT', `/tasks/${taskId}/labels/bulk`, {
+      body: { labels },
+    });
+  }
+  return { labels, changed: true };
+}
+
+async function applyLabelsToEcho(
+  client: VikunjaApiClient,
+  echo: WriteEcho,
+  selectors: TaskLabelSelector[] | undefined,
+  idempotencyKey?: string,
+): Promise<
+  WriteEcho & {
+    labels?: { id: number; title: string }[];
+    labelError?: unknown;
+    changed?: string[];
+    outcome?: string;
+  }
+> {
+  if (!selectors?.length) return echo;
+  const operation = async () => {
+    const raw = await client.request<any>('GET', `/tasks/${echo.target.id}`);
+    const beforeLabels = Array.isArray(raw?.labels)
+      ? raw.labels
+          .filter(
+            (label: any) => Number.isInteger(Number(label?.id)) && typeof label?.title === 'string',
+          )
+          .map((label: any) => ({ id: Number(label.id), title: String(label.title).trim() }))
+      : [];
+    return applyLabelsToTask(client, echo.target.id, beforeLabels, selectors);
+  };
+  try {
+    const result = idempotencyKey
+      ? await runDurableOperation(
+          'task-labels',
+          `${idempotencyKey}:labels`,
+          { taskId: echo.target.id, selectors },
+          operation,
+        )
+      : await operation();
+    return {
+      ...echo,
+      labels: result.labels,
+      changed: [...((echo as any).changed ?? []), ...(result.changed ? ['labels'] : [])],
+    };
+  } catch (error: any) {
+    return {
+      ...echo,
+      outcome: 'partial',
+      labelError: toErrorEnvelope(error).error,
+    };
+  }
 }
 
 export interface ListTasksOptions {
@@ -1589,6 +1684,7 @@ export async function createTask(
     done?: boolean;
     priority?: number;
     dueDate?: string | null;
+    labels?: TaskLabelSelector[];
   },
   idempotencyKey?: string,
   attachments?: string[],
@@ -1605,14 +1701,24 @@ export async function createTask(
         fields,
         actor,
       },
-      () => createTask(client, { id: project!.id }, fields, undefined, undefined, actor, false),
+      () =>
+        createTask(
+          client,
+          { id: project!.id },
+          { ...fields, labels: undefined },
+          undefined,
+          undefined,
+          actor,
+          false,
+        ),
       {
         preflight: async () => {
           project = await resolveProject(client, projectSelector);
         },
       },
     );
-    return attachToEcho(client, echo, attachments, idempotencyKey, actor);
+    const labeled = await applyLabelsToEcho(client, echo, fields.labels, idempotencyKey);
+    return attachToEcho(client, labeled, attachments, idempotencyKey, actor);
   }
 
   const project = await resolveProject(client, projectSelector);
@@ -1624,7 +1730,7 @@ export async function createTask(
       target: { project: { id: project.id, title: project.title }, title: fields.title },
       changed: ['task'],
       before: { exists: false },
-      after: { exists: true, title: fields.title },
+      after: { exists: true, title: fields.title, labels: fields.labels ?? [] },
       dryRun: true,
     };
   }
@@ -1670,11 +1776,13 @@ export async function createTask(
     dueDate: task.dueDate,
   };
 
-  // Upload any attachments to the new task, then cache the full echo so a
+  // Apply requested labels and upload any attachments to the new task, then
+  // cache the full echo so a
   // retry with the same idempotencyKey never creates a second task.
-  await attachToEcho(client, echo, attachments, idempotencyKey, actor);
+  const labeled = await applyLabelsToEcho(client, echo, fields.labels, idempotencyKey);
+  await attachToEcho(client, labeled, attachments, idempotencyKey, actor);
 
-  return echo;
+  return labeled;
 }
 
 export async function createIfAbsent(
@@ -1686,6 +1794,7 @@ export async function createIfAbsent(
     done?: boolean;
     priority?: number;
     dueDate?: string | null;
+    labels?: TaskLabelSelector[];
   },
   idempotencyKey?: string,
   attachments?: string[],
@@ -1709,9 +1818,10 @@ export async function createIfAbsent(
         },
       },
     );
-    return echo.action === 'created'
-      ? attachToEcho(client, echo, attachments, idempotencyKey, actor)
-      : echo;
+    const labeled = await applyLabelsToEcho(client, echo, fields.labels, idempotencyKey);
+    return labeled.action === 'created'
+      ? attachToEcho(client, labeled, attachments, idempotencyKey, actor)
+      : labeled;
   }
 
   const project = await resolveProject(client, projectSelector);
@@ -1787,7 +1897,7 @@ export async function createIfAbsent(
     );
   }
 
-  return echo;
+  return applyLabelsToEcho(client, echo, fields.labels, idempotencyKey);
 }
 
 function stableKeyMarker(externalKey: string): string {
@@ -1893,7 +2003,7 @@ function descriptionWithStableKey(
   actor?: string,
 ): string {
   const marker = stableKeyMarker(externalKey);
-  const body = stripTrailingMarker(description ?? '', marker);
+  const body = stripGeneratedAttribution(stripTrailingMarker(description ?? '', marker));
   const attributed = withActorAttribution(body || undefined, actor)?.trimEnd() ?? '';
   return attributed ? `${attributed}\n\n${marker}` : marker;
 }
@@ -1907,6 +2017,7 @@ export async function upsertTask(
     done?: boolean;
     priority?: number;
     dueDate?: string | null;
+    labels?: TaskLabelSelector[];
   },
   externalKey: string,
   expectedUpdatedAt?: string,
@@ -1962,7 +2073,7 @@ export async function upsertTask(
       },
       undefined,
       undefined,
-      actor,
+      undefined,
       dryRun,
     );
     return { ...echo, externalKey, actor };
@@ -2005,7 +2116,8 @@ export async function upsertTask(
     expectedUpdatedAt,
     dryRun,
   );
-  return { ...echo, externalKey, actor };
+  const labeled = await applyLabelsToEcho(client, echo, fields.labels, undefined);
+  return { ...labeled, externalKey, actor };
 }
 
 export interface ConsolidatedTaskDetails {
@@ -3046,7 +3158,7 @@ export async function closeIfVerified(
 export async function transitionWithEvidence(
   client: VikunjaApiClient,
   taskSelector: TaskSelectorInput,
-  statusLabel: string,
+  statusLabel: string | number,
   evidence: VerificationEvidence,
   projectSelector: { id?: number; title?: string },
   idempotencyKey: string,
@@ -3511,19 +3623,23 @@ export interface SetStatusResult extends WriteEcho {
 export async function setTaskStatus(
   client: VikunjaApiClient,
   taskSelector: TaskSelectorInput,
-  statusLabel: string,
+  statusLabel: string | number,
   projectSelector?: { id?: number; title?: string },
   createIfMissing = false,
   dryRun = false,
 ): Promise<any> {
   const prefix = client.getConfig().statusLabelPrefix ?? 'status:';
-  if (!statusLabel.toLowerCase().startsWith(prefix.toLowerCase())) {
+  const numericSelector =
+    typeof statusLabel === 'number' || /^\d+$/.test(String(statusLabel).trim());
+  let requestedLabelId: number | undefined;
+  let resolvedStatusTitle = String(statusLabel).trim();
+  if (!numericSelector && !resolvedStatusTitle.toLowerCase().startsWith(prefix.toLowerCase())) {
     throw new VikunjaError({
       status: 400,
       code: 'INVALID_STATUS_LABEL',
       method: 'TOOLS_CALL',
       path: 'statusLabel',
-      message: `Status label must start with the configured prefix "${prefix}".`,
+      message: `Status label must start with the configured prefix "${prefix}"; pass a matching label title or numeric label ID.`,
       fieldErrors: [],
     });
   }
@@ -3539,11 +3655,68 @@ export async function setTaskStatus(
   const currentStatusLabels = taskRef.labels.filter((label) =>
     label.title.toLowerCase().startsWith(prefix.toLowerCase()),
   );
-  const requestedCurrent = currentStatusLabels.find(
-    (label) => label.title.toLowerCase() === statusLabel.toLowerCase(),
-  );
   const beforeStatus = currentStatusLabels.map((label) => label.title);
-
+  const titleMatch = currentStatusLabels.find(
+    (label) => label.title.toLowerCase() === resolvedStatusTitle.toLowerCase(),
+  );
+  if (!numericSelector && currentStatusLabels.length === 1 && titleMatch) {
+    return {
+      action: 'unchanged',
+      target,
+      statusLabel: titleMatch.title,
+      removedStatusLabels: [],
+      repaired: false,
+      before: { statusLabels: beforeStatus },
+      after: { statusLabels: beforeStatus },
+    };
+  }
+  if (numericSelector) {
+    requestedLabelId = await resolveLabel(client, statusLabel);
+    const label = (await listAllLabels(client)).find(
+      (candidate: any) => Number(candidate?.id) === requestedLabelId,
+    );
+    if (!label || typeof label.title !== 'string' || label.title.trim() === '') {
+      throw new VikunjaError({
+        status: 404,
+        code: 'LABEL_NOT_FOUND',
+        method: 'GET',
+        path: '/labels',
+        message: `Label not found for id ${requestedLabelId}.`,
+        fieldErrors: [],
+      });
+    }
+    resolvedStatusTitle = label.title.trim();
+  } else if (titleMatch) {
+    requestedLabelId = titleMatch.id;
+    resolvedStatusTitle = titleMatch.title;
+  } else {
+    try {
+      requestedLabelId = await resolveLabel(client, resolvedStatusTitle);
+    } catch (error: any) {
+      if (
+        !(error instanceof VikunjaError) ||
+        error.code !== 'LABEL_NOT_FOUND' ||
+        !createIfMissing
+      ) {
+        throw error;
+      }
+    }
+  }
+  if (!resolvedStatusTitle.toLowerCase().startsWith(prefix.toLowerCase())) {
+    throw new VikunjaError({
+      status: 400,
+      code: 'INVALID_STATUS_LABEL',
+      method: 'TOOLS_CALL',
+      path: 'statusLabel',
+      message: `Status label must start with the configured prefix "${prefix}"; pass a matching label title or numeric label ID.`,
+      fieldErrors: [],
+    });
+  }
+  const requestedCurrent = currentStatusLabels.find(
+    (label) =>
+      (requestedLabelId !== undefined && label.id === requestedLabelId) ||
+      label.title.toLowerCase() === resolvedStatusTitle.toLowerCase(),
+  );
   if (currentStatusLabels.length === 1 && requestedCurrent) {
     return {
       action: 'unchanged',
@@ -3556,12 +3729,12 @@ export async function setTaskStatus(
     };
   }
 
-  let labelId = requestedCurrent?.id;
+  let labelId = requestedCurrent?.id ?? requestedLabelId;
   let wouldCreateLabel = false;
   if (!labelId) {
     if (dryRun) {
       try {
-        labelId = await resolveLabel(client, statusLabel);
+        labelId = await resolveLabel(client, resolvedStatusTitle);
       } catch (error: any) {
         if (
           !(error instanceof VikunjaError) ||
@@ -3574,7 +3747,7 @@ export async function setTaskStatus(
         labelId = -1;
       }
     } else {
-      labelId = await resolveOrCreateLabel(client, statusLabel, { createIfMissing });
+      labelId = await resolveOrCreateLabel(client, resolvedStatusTitle, { createIfMissing });
     }
   }
   const retained = taskRef.labels
@@ -3586,7 +3759,7 @@ export async function setTaskStatus(
       action: 'would_update',
       operation: 'set_status',
       target,
-      statusLabel,
+      statusLabel: resolvedStatusTitle,
       removedStatusLabels: currentStatusLabels
         .filter((label) => label.id !== labelId)
         .map((label) => label.title),
@@ -3600,19 +3773,19 @@ export async function setTaskStatus(
   }
 
   await client.request<any>('PUT', `/tasks/${taskRef.id}/labels/bulk`, {
-    body: { labels: [...retained, { id: labelId, title: statusLabel }] },
+    body: { labels: [...retained, { id: labelId, title: resolvedStatusTitle }] },
   });
 
   return {
     action: 'updated',
     target,
-    statusLabel: requestedCurrent?.title ?? statusLabel,
+    statusLabel: requestedCurrent?.title ?? resolvedStatusTitle,
     removedStatusLabels: currentStatusLabels
       .filter((label) => label.id !== labelId)
       .map((label) => label.title),
     repaired: currentStatusLabels.length > 1,
     before: { statusLabels: beforeStatus },
-    after: { statusLabels: [requestedCurrent?.title ?? statusLabel] },
+    after: { statusLabels: [requestedCurrent?.title ?? resolvedStatusTitle] },
   };
 }
 

@@ -558,8 +558,18 @@ labels, removes every label sharing `VIKUNJA_STATUS_LABEL_PREFIX` (default
 `status:`), and sends one bulk-label replacement containing exactly one target
 status label. Zero prior status labels is a normal add; multiple prior status
 labels are repaired and reported. The target must be an existing visible
-Vikunja label unless `createIfMissing: true` is explicit. Vikunja labels are
-server-visible entities rather than project-owned records.
+Vikunja label unless `createIfMissing: true` is explicit. `statusLabel` accepts
+an exact title or numeric label ID; the numeric form is required when a global
+title is ambiguous. Vikunja labels are server-visible entities rather than
+project-owned records. `self_check` detail=full reports duplicate configured
+workflow-label titles and their candidate IDs.
+
+Task create/upsert fields accept bounded `labels` title-or-ID selectors. The
+MCP resolves and applies them through the task-label bulk route, preserves
+existing labels on upsert, and includes the resulting labels in the write
+receipt. Unsupported task-write fields fail strict runtime validation instead
+of being silently discarded. Bulk mutation summaries include up to 100 failed
+row `{row, taskId, code, message, retryable}` error entries.
 
 CSV import has two explicit modes. Native migration is the fast server path
 and is not idempotent. MCP idempotent mode validates and creates rows through

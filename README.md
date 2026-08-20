@@ -262,8 +262,10 @@ time-entry user ID returned by Vikunja rather than a copied user profile.
 Use `upsert` with a stable `externalKey` when a detector or repeated agent run
 must update the same finding instead of creating duplicates. For three or more
 tasks, prefer `vikunja_task_bulk create`; each row can carry its own
-`externalKey`, first comment, and relations, and every mutating batch requires
-an `idempotencyKey`. Bulk
+`externalKey`, labels, first comment, and relations, and every mutating batch
+requires an `idempotencyKey`. `fields.labels` adds resolved labels during
+create/upsert and is returned in the write receipt; it is never silently
+discarded. Bulk
 assign/unassign accept `dryRun: true` and report changed, already-correct, and
 failed counts. Re-run the same payload and key to resume failed rows, or use
 the bulk `status` action with its returned `operationId`.
@@ -290,6 +292,9 @@ Actor names may use the delegated form `Codex (as srana)`; the MCP stores and
 filters the parser-safe equivalent `Codex as srana`. Tool results also expose
 the same `{ok,data}` or `{ok:false,error}` envelope through MCP
 `structuredContent`, while retaining the text envelope for older clients.
+Actor validation trims whitespace and reports the accepted character pattern
+when punctuation is rejected; it does not silently remove unsupported
+characters.
 
 `close_with_evidence` removes labels that match `VIKUNJA_STATUS_LABEL_PREFIX`
 after the task closes and reports the removed labels. Project-title resolution
@@ -314,8 +319,11 @@ targets are rejected before the Vikunja request.
 `set_status` replaces every task label matching `VIKUNJA_STATUS_LABEL_PREFIX`
 with the requested existing visible label in one bulk-label request. It repairs
 tasks that already have multiple matching labels and reports that repair.
-`createIfMissing` is opt-in; labels are global/visible Vikunja entities rather
-than project-owned records, while the task itself remains project-verified.
+`statusLabel` accepts either the exact title or a numeric label ID, which is
+required when duplicate global titles exist. `createIfMissing` is opt-in;
+labels are global/visible Vikunja entities rather than project-owned records,
+while the task itself remains project-verified. Bulk partial receipts include
+bounded per-row error codes and messages instead of only aggregate counts.
 
 Global-ID mutations without `projectSelector` are rejected under the default
 `VIKUNJA_MUTATION_SCOPE_MODE=require`. Set `warn` (log only) or `off` only as a
