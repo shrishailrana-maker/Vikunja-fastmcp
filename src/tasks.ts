@@ -91,13 +91,37 @@ export const TASK_READ_FIELDS = [
   'done',
   'priority',
   'creator',
+  'createdBy',
+  'createdAt',
   'project',
   'labels',
+  'workflowStatus',
   'assignees',
   'dueDate',
   'updated',
+  'updatedAt',
+  'lastEditor',
+  'descriptionVersion',
+  'taskUrl',
 ] as const;
 export type TaskReadField = (typeof TASK_READ_FIELDS)[number];
+
+const DEFAULT_AUDIT_TASK_FIELDS: TaskReadField[] = [
+  'id',
+  'portalRef',
+  'project',
+  'title',
+  'done',
+  'priority',
+  'createdBy',
+  'createdAt',
+  'updatedAt',
+  'lastEditor',
+  'labels',
+  'workflowStatus',
+  'descriptionVersion',
+  'taskUrl',
+];
 
 export interface TaskProjectionOptions {
   fields?: TaskReadField[];
@@ -105,6 +129,7 @@ export interface TaskProjectionOptions {
   titleMaxChars?: number;
   attachmentLimit?: number;
   maxResponseChars?: number;
+  statusLabelPrefix?: string;
 }
 
 export interface Task {
@@ -122,6 +147,12 @@ export interface Task {
   assignees: { id: number; username: string }[];
   taskUrl: string;
   projectUrl: string;
+  createdAt: string | null;
+  createdBy: { id: number; username: string } | null;
+  updatedAt: string | null;
+  lastEditor: { id: number; username: string } | null;
+  descriptionVersion: string | null;
+  workflowStatus: { state: 'absent' | 'single' | 'ambiguous'; label: string | null };
   updated?: string;
 }
 
@@ -136,6 +167,12 @@ export type TaskListItem = Pick<
   | 'priority'
   | 'creator'
   | 'labels'
+  | 'workflowStatus'
+  | 'createdAt'
+  | 'createdBy'
+  | 'updatedAt'
+  | 'lastEditor'
+  | 'descriptionVersion'
   | 'taskUrl'
   | 'projectUrl'
 >;
@@ -164,6 +201,8 @@ export interface WriteEcho {
     identifier?: string;
     project: { id: number; title: string };
     title: string;
+    taskUrl?: string;
+    updatedAt?: string | null;
   };
   // Present only when the caller supplied attachments to create/create_if_absent.
   attachments?: AttachmentInfo[];
@@ -524,7 +563,34 @@ export function isFilterSafeTitle(title: string): boolean {
   return !/[()[\]{}'"`\\=&|<>]/.test(title);
 }
 
-export function normalizeTask(task: any, projectRef: ProjectRef, webUrl: string): Task {
+function auditUser(value: any): { id: number; username: string } | null {
+  const id = Number(value?.id);
+  const username = typeof value?.username === 'string' ? value.username : '';
+  return Number.isInteger(id) && id > 0 && username ? { id, username } : null;
+}
+
+function workflowStatus(
+  labels: { id: number; title: string }[],
+  prefix = 'status:',
+): { state: 'absent' | 'single' | 'ambiguous'; label: string | null } {
+  const matches = labels.filter(
+    (label) =>
+      typeof label.title === 'string' && label.title.toLowerCase().startsWith(prefix.toLowerCase()),
+  );
+  if (matches.length === 0) return { state: 'absent', label: null };
+  if (matches.length > 1) return { state: 'ambiguous', label: null };
+  return {
+    state: 'single',
+    label: matches[0].title.slice(prefix.length).trim() || matches[0].title,
+  };
+}
+
+export function normalizeTask(
+  task: any,
+  projectRef: ProjectRef,
+  webUrl: string,
+  statusLabelPrefix = 'status:',
+): Task {
   const normalized = normalizeDatesAndNulls(task);
 
   const labels = Array.isArray(normalized.labels)
@@ -535,6 +601,8 @@ export function normalizeTask(task: any, projectRef: ProjectRef, webUrl: string)
     ? normalized.assignees.map((a: any) => ({ id: a.id, username: a.username }))
     : [];
 
+  const createdBy = auditUser(normalized.created_by);
+  const updatedAt = normalized.updated || normalized.updatedAt || null;
   return {
     id: normalized.id,
     index: normalized.index,
@@ -545,19 +613,28 @@ export function normalizeTask(task: any, projectRef: ProjectRef, webUrl: string)
     done: !!normalized.done,
     priority: normalized.priority || 0,
     dueDate: normalized.due_date || normalized.dueDate || null,
-    creator: normalized.created_by
-      ? { id: normalized.created_by.id, username: normalized.created_by.username }
-      : null,
+    creator: createdBy,
+    createdBy,
     labels,
     assignees,
     taskUrl: `${webUrl}tasks/${normalized.id}`,
     projectUrl: `${webUrl}projects/${projectRef.id}`,
-    updated: normalized.updated || normalized.updatedAt || undefined,
+    createdAt: normalized.created || normalized.createdAt || null,
+    updatedAt,
+    lastEditor: auditUser(normalized.updated_by ?? normalized.updatedBy),
+    descriptionVersion: updatedAt,
+    workflowStatus: workflowStatus(labels, statusLabelPrefix),
+    updated: updatedAt ?? undefined,
   };
 }
 
-function normalizeTaskListItem(task: any, projectRef: ProjectRef, webUrl: string): TaskListItem {
-  const full = normalizeTask(task, projectRef, webUrl);
+function normalizeTaskListItem(
+  task: any,
+  projectRef: ProjectRef,
+  webUrl: string,
+  statusLabelPrefix = 'status:',
+): TaskListItem {
+  const full = normalizeTask(task, projectRef, webUrl, statusLabelPrefix);
   return {
     id: full.id,
     index: full.index,
@@ -567,13 +644,24 @@ function normalizeTaskListItem(task: any, projectRef: ProjectRef, webUrl: string
     done: full.done,
     priority: full.priority,
     creator: full.creator,
+    createdBy: full.createdBy,
+    createdAt: full.createdAt,
     labels: full.labels,
+    workflowStatus: full.workflowStatus,
+    updatedAt: full.updatedAt,
+    lastEditor: full.lastEditor,
+    descriptionVersion: full.descriptionVersion,
     taskUrl: full.taskUrl,
     projectUrl: full.projectUrl,
   };
 }
 
-function normalizeCompactTask(task: any, projectRef: ProjectRef, webUrl: string): CompactTask {
+function normalizeCompactTask(
+  task: any,
+  projectRef: ProjectRef,
+  webUrl: string,
+  _statusLabelPrefix = 'status:',
+): CompactTask {
   return {
     id: task.id,
     index: task.index,
@@ -695,30 +783,31 @@ function projectTask(
   webUrl: string,
   options: TaskProjectionOptions,
 ): Record<string, unknown> {
-  const requested = new Set<TaskReadField>(
-    options.fields ?? ['portalRef', 'title', 'done', 'priority'],
-  );
+  const requested = new Set<TaskReadField>(options.fields ?? DEFAULT_AUDIT_TASK_FIELDS);
   const result: Record<string, unknown> = {};
-  const portalRef = task.identifier || `#${task.index}`;
+  const full = normalizeTask(task, project, webUrl, options.statusLabelPrefix);
   const values: Record<TaskReadField, unknown> = {
-    id: task.id,
-    portalRef,
-    title: truncateTitle(String(task.title ?? ''), options.titleMaxChars),
-    done: !!task.done,
-    priority: task.priority || 0,
-    creator: task.created_by?.username ?? null,
-    project: { id: project.id, title: project.title },
-    labels: Array.isArray(task.labels)
-      ? task.labels.map((label: any) => ({ id: label.id, title: label.title }))
-      : [],
-    assignees: Array.isArray(task.assignees)
-      ? task.assignees.map((assignee: any) => ({ id: assignee.id, username: assignee.username }))
-      : [],
-    dueDate: normalizeZeroDate(task.due_date ?? task.dueDate ?? null),
-    updated: task.updated ?? task.updatedAt ?? null,
+    id: full.id,
+    portalRef: full.identifier || `#${full.index}`,
+    title: truncateTitle(full.title, options.titleMaxChars),
+    done: full.done,
+    priority: full.priority,
+    creator: full.creator?.username ?? null,
+    createdBy: full.createdBy,
+    createdAt: full.createdAt,
+    project: full.project,
+    labels: full.labels,
+    workflowStatus: full.workflowStatus,
+    assignees: full.assignees,
+    dueDate: full.dueDate,
+    updated: full.updatedAt,
+    updatedAt: full.updatedAt,
+    lastEditor: full.lastEditor,
+    descriptionVersion: full.descriptionVersion,
+    taskUrl: full.taskUrl,
   };
   for (const field of requested) result[field] = values[field];
-  if (options.includeUrl) result.taskUrl = `${webUrl}tasks/${task.id}`;
+  if (options.includeUrl) result.taskUrl = full.taskUrl;
   return result;
 }
 
@@ -1127,6 +1216,7 @@ export async function listTasks(client: VikunjaApiClient, options: ListTasksOpti
             fields: options.fields,
             includeUrl: options.includeUrl,
             titleMaxChars: options.titleMaxChars,
+            statusLabelPrefix: client.getConfig().statusLabelPrefix,
           }),
         );
         minimalPages.push({
@@ -1144,9 +1234,9 @@ export async function listTasks(client: VikunjaApiClient, options: ListTasksOpti
           return normalizeCompactTaskListItem(task);
         }
         if (responseMode === 'full') {
-          return normalizeTask(task, proj, webUrl);
+          return normalizeTask(task, proj, webUrl, client.getConfig().statusLabelPrefix);
         }
-        return normalizeTaskListItem(task, proj, webUrl);
+        return normalizeTaskListItem(task, proj, webUrl, client.getConfig().statusLabelPrefix);
       });
       results.push({
         project: { id: proj.id, title: proj.title },
@@ -1569,7 +1659,19 @@ export async function batchGetTasks(
   for (const identifier of identifiers) {
     try {
       const result = await getTask(client, { identifier }, undefined, 0, 'minimal', options);
-      tasks.push(result.task);
+      const task = result.task as Record<string, unknown>;
+      tasks.push(
+        options.fields
+          ? task
+          : {
+              ...task,
+              lastActivity: {
+                kind: task.updatedAt ? 'task_updated' : 'task_created',
+                at: task.updatedAt ?? task.createdAt ?? null,
+                actor: task.lastEditor ?? task.createdBy ?? null,
+              },
+            },
+      );
     } catch (error: any) {
       failed.push({ identifier, error: String(error?.message ?? error) });
     }
@@ -1580,6 +1682,114 @@ export async function batchGetTasks(
     tasks,
     failed,
     incomplete: failed.length > 0,
+  };
+}
+
+export async function getTaskActivity(
+  client: VikunjaApiClient,
+  taskSelector: TaskSelectorInput,
+  projectSelector?: { id?: number; title?: string },
+  limit = 20,
+) {
+  const taskResult = await getTask(client, taskSelector, projectSelector, 0, 'minimal');
+  const task = taskResult.task as Record<string, any>;
+  const safeLimit = Math.min(100, Math.max(1, limit));
+  const rawComments = await client.request<any>(
+    'GET',
+    `/tasks/${task.id}/comments?sort_by=created&order_by=desc&page=1&per_page=${safeLimit}`,
+  );
+  const pagination = normalizePagination(rawComments);
+  const comments = toItemArray<any>(rawComments).slice(0, safeLimit);
+  const events = [
+    ...(task.createdAt
+      ? [
+          {
+            kind: 'task_created',
+            at: task.createdAt,
+            actor: task.createdBy,
+          },
+        ]
+      : []),
+    ...(task.updatedAt && task.updatedAt !== task.createdAt
+      ? [
+          {
+            kind: 'task_current_state',
+            at: task.updatedAt,
+            actor: task.lastEditor,
+            workflowStatus: task.workflowStatus,
+            labels: task.labels,
+          },
+        ]
+      : []),
+    ...comments.map((comment) => ({
+      kind: 'comment_added',
+      at: comment.created ?? null,
+      actor: auditUser(comment.author),
+      commentId: comment.id,
+    })),
+  ].sort((left, right) => String(right.at ?? '').localeCompare(String(left.at ?? '')));
+
+  return {
+    task,
+    events,
+    returnedCount: events.length,
+    commentsIncomplete: pagination.hasMore,
+    serverHistory: {
+      available: false,
+      unavailable: ['title changes', 'description editor', 'label changes', 'workflow transitions'],
+    },
+  };
+}
+
+export async function searchTaskEvidence(
+  client: VikunjaApiClient,
+  projectSelector: { id?: number; title?: string },
+  evidenceKey: string,
+  options: { maxTasks?: number; includeComments?: boolean } = {},
+) {
+  const project = await resolveProject(client, projectSelector);
+  const key = evidenceKey.trim();
+  const maxTasks = Math.min(100, Math.max(1, options.maxTasks ?? 100));
+  const raw = await client.request<any>(
+    'GET',
+    `/projects/${project.id}/tasks?page=1&per_page=${maxTasks}`,
+  );
+  const pagination = normalizePagination(raw);
+  const matches: Record<string, unknown>[] = [];
+  let commentsIncomplete = false;
+  for (const task of toItemArray<any>(raw).slice(0, maxTasks)) {
+    const fields: string[] = [];
+    if (String(task.title ?? '').includes(key)) fields.push('title');
+    if (htmlToMarkdown(String(task.description ?? '')).includes(key)) fields.push('description');
+    if (options.includeComments !== false && fields.length === 0) {
+      const comments = await client.request<any>(
+        'GET',
+        `/tasks/${task.id}/comments?sort_by=created&order_by=desc&page=1&per_page=100`,
+      );
+      commentsIncomplete ||= normalizePagination(comments).hasMore;
+      if (
+        toItemArray<any>(comments).some((comment) =>
+          htmlToMarkdown(String(comment.comment ?? '')).includes(key),
+        )
+      ) {
+        fields.push('comments');
+      }
+    }
+    if (fields.length === 0) continue;
+    const audit = projectTask(task, project, client.getConfig().vikunjaWebUrl, {
+      statusLabelPrefix: client.getConfig().statusLabelPrefix,
+    });
+    matches.push({ ...audit, matchedFields: fields });
+  }
+  const incomplete = pagination.hasMore || pagination.total > maxTasks || commentsIncomplete;
+  return {
+    evidenceKey: key,
+    project: { id: project.id, title: project.title },
+    matches,
+    scannedTaskCount: Math.min(toItemArray<any>(raw).length, maxTasks),
+    totalTaskCount: pagination.total,
+    incomplete,
+    absenceProven: !incomplete && matches.length === 0,
   };
 }
 
@@ -1766,7 +1976,8 @@ export async function createTask(
       title: task.title,
     },
   };
-  (echo as any).updatedAt = task.updated || new Date().toISOString();
+  (echo as any).updatedAt = task.updatedAt || new Date().toISOString();
+  (echo as any).taskUrl = task.taskUrl;
   (echo as any).before = { exists: false };
   (echo as any).after = {
     exists: true,
@@ -2220,7 +2431,8 @@ export async function getTask(
       {
         task: projectTask(rawTask, taskRef.project, webUrl, {
           ...projectionOptions,
-          fields: projectionOptions.fields ?? ['portalRef', 'project', 'title', 'done', 'priority'],
+          fields: projectionOptions.fields ?? DEFAULT_AUDIT_TASK_FIELDS,
+          statusLabelPrefix: client.getConfig().statusLabelPrefix,
         }),
       },
       projectionOptions.maxResponseChars,
@@ -2229,12 +2441,24 @@ export async function getTask(
 
   if (responseMode === 'compact') {
     return enforceTaskResponseBudget(
-      { task: normalizeCompactTask(rawTask, taskRef.project, webUrl) },
+      {
+        task: normalizeCompactTask(
+          rawTask,
+          taskRef.project,
+          webUrl,
+          client.getConfig().statusLabelPrefix,
+        ),
+      },
       projectionOptions.maxResponseChars,
     );
   }
 
-  const task = normalizeTask(rawTask, taskRef.project, webUrl);
+  const task = normalizeTask(
+    rawTask,
+    taskRef.project,
+    webUrl,
+    client.getConfig().statusLabelPrefix,
+  );
 
   if (responseMode === 'standard') {
     return enforceTaskResponseBudget({ task }, projectionOptions.maxResponseChars);
@@ -2484,6 +2708,8 @@ export async function updateTask(
         dueDate: task.dueDate,
         updatedAt: task.updated || null,
       },
+      taskUrl: task.taskUrl,
+      updatedAt: task.updatedAt,
     };
   }
 
@@ -2498,6 +2724,8 @@ export async function updateTask(
     },
     before: beforeState,
     after: beforeState,
+    taskUrl: currentTask.taskUrl,
+    updatedAt: currentTask.updatedAt,
   };
 }
 

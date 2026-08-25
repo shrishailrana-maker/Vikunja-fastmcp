@@ -525,6 +525,21 @@ Count-only success example:
 
 ## Safe Compound Operations
 
+## Audit-ready reads
+
+Default compact task reads include the human reference, global ID, direct task
+URL, creator, creation/update timestamps, labels, derived workflow status, and
+`descriptionVersion` (the current `updatedAt`). This gives callers the exact
+timestamp required by `expectedUpdatedAt` without an expanded read. Explicit
+`fields` projections remain available when a smaller payload is required.
+
+`activity` composes current task metadata with a bounded recent-comment
+timeline. The current Vikunja API does not expose an authoritative general
+field-history or last-editor route, so the response explicitly identifies that
+unavailable history instead of reconstructing it. `evidence_search` scans a
+bounded project slice of exact title, description, and comment evidence and
+sets `incomplete` whenever it cannot prove absence.
+
 `create_if_absent` performs an exact-title search in one project and creates
 only when no match exists.
 

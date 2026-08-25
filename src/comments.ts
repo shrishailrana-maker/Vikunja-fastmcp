@@ -24,6 +24,23 @@ export interface Comment {
     username: string;
   };
   created: string;
+  task?: {
+    id: number;
+    index: number;
+    identifier?: string;
+    taskUrl: string;
+    updatedAt: string | null;
+  };
+}
+
+function commentTaskReceipt(client: VikunjaApiClient, task: any) {
+  return {
+    id: task.id,
+    index: task.index,
+    identifier: task.identifier,
+    taskUrl: `${client.getConfig().vikunjaWebUrl}tasks/${task.id}`,
+    updatedAt: task.rawTask?.updated ?? task.rawTask?.updatedAt ?? null,
+  };
 }
 
 export interface CommentListOptions {
@@ -55,7 +72,7 @@ export async function createComment(
 ): Promise<Comment> {
   const payload = { taskSelector, projectSelector, comment, actor };
   const execute = async (): Promise<Comment> => {
-    const task = await resolveTask(client, taskSelector, projectSelector);
+    const task = await resolveTask(client, taskSelector, projectSelector, { includeRawTask: true });
     const htmlComment = markdownToHtml(withActorAttribution(comment, actor)!);
     const path = `/tasks/${task.id}/comments`;
     const rawComment = await client.request<any>('POST', path, {
@@ -70,6 +87,7 @@ export async function createComment(
         username: rawComment.author?.username || 'unknown',
       },
       created: rawComment.created,
+      task: commentTaskReceipt(client, task),
     };
   };
 
@@ -218,6 +236,7 @@ export async function getComment(
       username: c.author?.username || 'unknown',
     },
     created: c.created,
+    task: commentTaskReceipt(client, task),
   };
 }
 
@@ -229,7 +248,7 @@ export async function updateComment(
   projectSelector?: { id?: number; title?: string },
   actor?: string,
 ): Promise<Comment> {
-  const task = await resolveTask(client, taskSelector, projectSelector);
+  const task = await resolveTask(client, taskSelector, projectSelector, { includeRawTask: true });
   const htmlComment = markdownToHtml(withActorAttribution(comment, actor)!);
 
   // Prefer PATCH for partial comment updates (OpenAPI also offers PUT).
@@ -246,6 +265,7 @@ export async function updateComment(
       username: c.author?.username || 'unknown',
     },
     created: c.created,
+    task: commentTaskReceipt(client, task),
   };
 }
 
@@ -255,13 +275,19 @@ export async function deleteComment(
   commentId: number,
   projectSelector?: { id?: number; title?: string },
   actor?: string,
-): Promise<{ ok: boolean; commentId: number; actor?: string }> {
-  const task = await resolveTask(client, taskSelector, projectSelector);
+): Promise<{
+  ok: boolean;
+  commentId: number;
+  actor?: string;
+  task: ReturnType<typeof commentTaskReceipt>;
+}> {
+  const task = await resolveTask(client, taskSelector, projectSelector, { includeRawTask: true });
   await client.request<any>('DELETE', `/tasks/${task.id}/comments/${commentId}`);
 
   return {
     ok: true,
     commentId,
     actor,
+    task: commentTaskReceipt(client, task),
   };
 }

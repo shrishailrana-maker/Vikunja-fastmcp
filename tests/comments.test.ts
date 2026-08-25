@@ -76,6 +76,10 @@ describe('Comments and Compound Operations tests', () => {
       const result = await createComment(client, 9005, '**Bold comment**');
       expect(result.id).toBe(2001);
       expect(result.comment).toBe('**Bold comment**');
+      expect(result.task).toMatchObject({
+        id: 9005,
+        taskUrl: 'https://vikunja.example.com/tasks/9005',
+      });
 
       // Verify that markdown was converted to html in body
       const postCall = mockFetch.mock.calls.find((c: any) => c[1]?.method === 'POST');
@@ -320,6 +324,10 @@ describe('Comments and Compound Operations tests', () => {
       expect(res.ok).toBe(true);
       expect(res.commentId).toBe(2001);
       expect(res.actor).toBe('Codex');
+      expect(res.task).toMatchObject({
+        id: 9005,
+        taskUrl: 'https://vikunja.example.com/tasks/9005',
+      });
     });
   });
 

@@ -73,7 +73,7 @@ export function createTypedTaskTools(dispatch: TaskDispatcher): TypedTaskToolDef
     {
       name: 'vikunja_task_read',
       description:
-        'Read, list, count, search, summarize, or inspect bounded task time entries in Vikunja.',
+        'Read audit-ready tasks, bounded activity, evidence keys, lists, summaries, batches, or task time entries in Vikunja.',
       inputSchema: z.object({
         action: z.enum([
           'get',
@@ -87,6 +87,8 @@ export function createTypedTaskTools(dispatch: TaskDispatcher): TypedTaskToolDef
           'lookup_external_key',
           'receipt_lookup',
           'list_time_entries',
+          'activity',
+          'evidence_search',
         ]),
         taskSelector: taskSelectorSchema.optional(),
         projectSelector: projectSelectorSchema.optional(),
@@ -96,6 +98,9 @@ export function createTypedTaskTools(dispatch: TaskDispatcher): TypedTaskToolDef
         perPage: z.number().int().min(1).max(100).optional(),
         commentLimit: z.number().int().min(0).max(100).optional(),
         attachmentLimit: z.number().int().min(0).max(100).optional(),
+        activityLimit: z.number().int().min(1).max(100).optional(),
+        maxTasks: z.number().int().min(1).max(100).optional(),
+        includeComments: z.boolean().optional(),
         done: z.boolean().optional(),
         allStates: z.boolean().optional(),
         priority: z.number().int().min(0).max(5).optional(),
@@ -133,6 +138,7 @@ export function createTypedTaskTools(dispatch: TaskDispatcher): TypedTaskToolDef
         preset: z.enum(['programme', 'mpf']).optional(),
         title: z.string().trim().min(1).optional(),
         externalKey: z.string().regex(EXTERNAL_KEY_PATTERN).optional(),
+        evidenceKey: z.string().trim().min(1).max(120).optional(),
         operation: z
           .enum([
             'task-create',

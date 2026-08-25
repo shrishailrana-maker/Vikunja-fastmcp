@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.5.2 - 2026-08-25
+
+- Make default task reads audit-ready with creator, timestamps, labels,
+  workflow status, direct URLs, and description versions; standardize direct
+  identity/timestamp fields in task-write and comment receipts.
+- Add bounded task activity and exact evidence-key search actions. They report
+  unavailable server field-history and incomplete scans explicitly instead of
+  fabricating audit facts.
+- Raise the compatibility schema ceiling to 94,000 characters for the legacy
+  broad router plus the audit-read contract.
+
 ## 2.5.1 - 2026-08-20
 
 - Apply task-write `fields.labels` through the task-label API and return applied

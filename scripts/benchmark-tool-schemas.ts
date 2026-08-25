@@ -9,8 +9,8 @@ const budgets: Record<(typeof profiles)[number], number> = {
   developer: 63_000,
   full: 63_000,
   // The compatibility router includes the legacy broad schema in addition to
-  // the typed surface; v2.5 added enough guarded actions to require 92k.
-  compatibility: 92_000,
+  // the typed surface; audit-read actions require a bounded 94k ceiling.
+  compatibility: 94_000,
 };
 const handler = (server as any)._requestHandlers.get('tools/list');
 const results: Record<string, { tools: number; chars: number }> = {};

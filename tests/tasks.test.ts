@@ -1467,6 +1467,7 @@ describe('Tasks List and Scoping tests', () => {
         project: { id: 101, title: 'Alpha' },
         title: 'New Bug',
       });
+      expect(echo.taskUrl).toBe('https://vikunja.example.com/tasks/9005');
     });
 
     it('reuses the created task while retrying only failed attachments', async () => {
@@ -1644,8 +1645,10 @@ describe('Tasks List and Scoping tests', () => {
             description: '<p>Large evidence body.</p>',
             done: false,
             priority: 4,
+            created: '2026-08-20T10:00:00Z',
+            updated: '2026-08-21T10:00:00Z',
             created_by: { id: 7, username: 'example-tester' },
-            labels: [{ id: 9, title: 'bug' }],
+            labels: [{ id: 9, title: 'status:review' }],
             assignees: [{ id: 8, username: 'developer' }],
           }),
       } as Response);
@@ -1654,11 +1657,20 @@ describe('Tasks List and Scoping tests', () => {
 
       expect(details).toEqual({
         task: {
+          id: 9005,
           portalRef: 'ALPHA-305',
           project: { id: 101, title: 'Alpha' },
           title: 'Task Title',
           done: false,
           priority: 4,
+          createdBy: { id: 7, username: 'example-tester' },
+          createdAt: '2026-08-20T10:00:00Z',
+          updatedAt: '2026-08-21T10:00:00Z',
+          lastEditor: null,
+          labels: [{ id: 9, title: 'status:review' }],
+          workflowStatus: { state: 'single', label: 'review' },
+          descriptionVersion: '2026-08-21T10:00:00Z',
+          taskUrl: 'https://vikunja.example.com/tasks/9005',
         },
       });
       expect(mockFetch).toHaveBeenCalledTimes(1);

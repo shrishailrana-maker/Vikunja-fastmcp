@@ -3,8 +3,10 @@ import { VikunjaApiClient } from '../src/api.js';
 import { cache } from '../src/identity.js';
 import {
   batchGetTasks,
+  getTaskActivity,
   lookupTaskByExternalKey,
   programmeSnapshot,
+  searchTaskEvidence,
   verifyTaskState,
 } from '../src/tasks.js';
 
@@ -80,6 +82,141 @@ describe('bounded task read workflows', () => {
       incomplete: false,
     });
     expect(mockFetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('returns default batch audit rows with timestamps, status, links, and current activity', async () => {
+    mockFetch
+      .mockResolvedValueOnce(
+        response({
+          items: [{ id: 101, title: 'Alpha', identifier: 'ALPHA' }],
+          page: 1,
+          per_page: 100,
+          total: 1,
+          total_pages: 1,
+        }),
+      )
+      .mockResolvedValueOnce(
+        response({
+          items: [
+            {
+              id: 9001,
+              index: 1,
+              identifier: 'ALPHA-1',
+              project_id: 101,
+              title: 'Audited',
+              done: false,
+              labels: [{ id: 2, title: 'status:review' }],
+              created: '2026-08-20T10:00:00Z',
+              updated: '2026-08-21T10:00:00Z',
+              created_by: { id: 7, username: 'author' },
+            },
+          ],
+          page: 1,
+          per_page: 1,
+          total: 1,
+          total_pages: 1,
+        }),
+      );
+
+    const result = await batchGetTasks(client, ['ALPHA-1']);
+    expect(result.tasks[0]).toMatchObject({
+      id: 9001,
+      portalRef: 'ALPHA-1',
+      createdAt: '2026-08-20T10:00:00Z',
+      updatedAt: '2026-08-21T10:00:00Z',
+      createdBy: { id: 7, username: 'author' },
+      labels: [{ id: 2, title: 'status:review' }],
+      workflowStatus: { state: 'single', label: 'review' },
+      taskUrl: 'https://vikunja.example.com/tasks/9001',
+      lastActivity: { kind: 'task_updated', at: '2026-08-21T10:00:00Z' },
+    });
+  });
+
+  it('returns a bounded activity timeline without inventing server field history', async () => {
+    mockFetch
+      .mockResolvedValueOnce(
+        response({
+          id: 9001,
+          index: 1,
+          identifier: 'ALPHA-1',
+          project_id: 101,
+          project: { title: 'Alpha' },
+          title: 'Audited',
+          created: '2026-08-20T10:00:00Z',
+          updated: '2026-08-21T10:00:00Z',
+          created_by: { id: 7, username: 'author' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        response({
+          items: [
+            {
+              id: 44,
+              comment: '<p>Evidence</p>',
+              author: { id: 8, username: 'reviewer' },
+              created: '2026-08-22T10:00:00Z',
+            },
+          ],
+          page: 1,
+          per_page: 20,
+          total: 1,
+          total_pages: 1,
+        }),
+      );
+
+    const result = await getTaskActivity(client, { globalId: 9001 });
+    expect(result.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'task_created' }),
+        expect.objectContaining({ kind: 'comment_added', commentId: 44 }),
+      ]),
+    );
+    expect(result.serverHistory).toMatchObject({ available: false });
+  });
+
+  it('searches bounded task descriptions and comments for an exact evidence key', async () => {
+    mockFetch
+      .mockResolvedValueOnce(response({ id: 101, title: 'Alpha' }))
+      .mockResolvedValueOnce(
+        response({
+          items: [
+            {
+              id: 9001,
+              index: 1,
+              identifier: 'ALPHA-1',
+              title: 'Audited',
+              description: '<p>No marker in task body</p>',
+              labels: [],
+            },
+          ],
+          page: 1,
+          per_page: 100,
+          total: 1,
+          total_pages: 1,
+        }),
+      )
+      .mockResolvedValueOnce(
+        response({
+          items: [
+            {
+              id: 44,
+              comment: '<p>marker-42</p>',
+              author: { id: 7, username: 'reviewer' },
+              created: '2026-08-22T10:00:00Z',
+            },
+          ],
+          page: 1,
+          per_page: 100,
+          total: 1,
+          total_pages: 1,
+        }),
+      );
+
+    const result = await searchTaskEvidence(client, { id: 101 }, 'marker-42');
+    expect(result).toMatchObject({ absenceProven: false, incomplete: false });
+    expect(result.matches).toEqual([
+      expect.objectContaining({ portalRef: 'ALPHA-1', matchedFields: ['comments'] }),
+    ]);
   });
 
   it('keeps project context when verifying a project-index selector', async () => {

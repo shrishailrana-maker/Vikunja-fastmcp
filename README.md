@@ -272,6 +272,17 @@ the bulk `status` action with its returned `operationId`.
 An external-key row that updates an existing title or description also carries
 that task's `expectedUpdatedAt`.
 
+Default task reads are audit-ready: compact `get`, list/search rows, and
+identifier batches include the human reference, global ID, direct task URL,
+creator, creation/update timestamps, labels, workflow status, and a
+`descriptionVersion` equal to `updatedAt`. Pass an explicit `fields` projection
+only when a smaller response is more important than audit context. Use
+`activity` for a bounded task-created/current-state/recent-comment timeline and
+`evidence_search` for bounded exact title, description, and comment evidence
+checks. The server does not currently expose authoritative field-level edit
+history or a reliable last editor, so those are reported as unavailable rather
+than inferred.
+
 Use `appendDescription` to add evidence without replacing the full task
 description. It is mutually exclusive with `description` and preserves a
 stable-key marker as the final line. Replacing a task title or full description

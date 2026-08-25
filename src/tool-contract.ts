@@ -159,7 +159,8 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
       action: 'batch_get',
       required: ['identifiers'],
       optional: ['fields', 'includeUrl', 'titleMaxChars', 'responseMode'],
-      execution: 'MCP-composed bounded identity resolution and projected task reads',
+      execution:
+        'MCP-composed bounded identity resolution and audit-ready task reads; default rows include current activity metadata',
     },
     {
       action: 'verify_task_state',
@@ -198,6 +199,21 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
       optional: ['page (default 1)', 'perPage (default 50, max 100)', 'q', 'countOnly'],
       execution: 'Project-verified direct GET /tasks/{id}/time-entries',
       note: 'Read-only, bounded pagination. Vikunja exposes time-entry user IDs, not user profiles, on this route.',
+    },
+    {
+      action: 'activity',
+      required: ['taskSelector'],
+      optional: [...taskSelector, 'activityLimit (default 20, max 100)'],
+      execution: 'MCP-composed current task audit metadata plus bounded recent comments',
+      note: 'Field-level server history is reported unavailable when the Vikunja API does not expose it.',
+    },
+    {
+      action: 'evidence_search',
+      required: ['projectSelector', 'evidenceKey'],
+      optional: ['maxTasks (default 100)', 'includeComments (default true)'],
+      execution:
+        'Bounded project scan of exact task title, description, and recent comment evidence',
+      note: 'An incomplete scan never proves evidence-key absence.',
     },
     {
       action: 'update',
@@ -766,6 +782,8 @@ TOOL_OPERATION_DOCS.vikunja_task_read = taskActions([
   'lookup_external_key',
   'receipt_lookup',
   'list_time_entries',
+  'activity',
+  'evidence_search',
 ]);
 TOOL_OPERATION_DOCS.vikunja_task_write = taskActions([
   'create',

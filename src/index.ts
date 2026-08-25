@@ -41,6 +41,7 @@ import {
   upsertTask,
   EXTERNAL_KEY_PATTERN,
   getTask,
+  getTaskActivity,
   updateTask,
   deleteTask,
   duplicateTask,
@@ -65,6 +66,7 @@ import {
   taskDedupe,
   lookupTaskByExternalKey,
   lookupTaskReceipt,
+  searchTaskEvidence,
   appendEvidenceIfChanged,
   closeIfVerified,
   closeWithStructuredEvidence,
@@ -810,7 +812,7 @@ export const TOOLS: McpToolDefinition[] = [
   {
     name: 'vikunja_tasks',
     description:
-      'Create, duplicate, update, delete, mark read, close, assign, label, relate, or attach files to tasks.',
+      'Create, read audit-ready task state, search evidence, duplicate, update, delete, mark read, close, assign, label, relate, or attach files to tasks.',
     inputSchema: z.object({
       action: z.enum([
         'create',
@@ -827,6 +829,8 @@ export const TOOLS: McpToolDefinition[] = [
         'lookup_external_key',
         'receipt_lookup',
         'list_time_entries',
+        'activity',
+        'evidence_search',
         'update',
         'delete',
         'duplicate',
@@ -875,6 +879,9 @@ export const TOOLS: McpToolDefinition[] = [
       perPage: z.number().int().min(1).max(100).optional(),
       commentLimit: z.number().int().min(0).max(100).optional(),
       attachmentLimit: z.number().int().min(0).max(100).optional(),
+      activityLimit: z.number().int().min(1).max(100).optional(),
+      maxTasks: z.number().int().min(1).max(100).optional(),
+      includeComments: z.boolean().optional(),
       done: z.boolean().optional(),
       allStates: z.boolean().optional(),
       priority: z.number().int().min(0).max(5).optional(),
@@ -1003,6 +1010,7 @@ export const TOOLS: McpToolDefinition[] = [
       dryRun: z.boolean().optional(),
       idempotencyKey: z.string().trim().min(1).max(200).optional(),
       externalKey: z.string().regex(EXTERNAL_KEY_PATTERN).optional(),
+      evidenceKey: z.string().trim().min(1).max(120).optional(),
     }),
     handler: async (args, client) => {
       switch (args.action) {
@@ -1250,6 +1258,23 @@ export const TOOLS: McpToolDefinition[] = [
             perPage: args.perPage,
             q: args.q ?? args.search,
             countOnly: args.countOnly,
+          });
+        case 'activity':
+          if (!args.taskSelector) throw badRequest('taskSelector is required for activity.');
+          return getTaskActivity(
+            client,
+            args.taskSelector,
+            args.projectSelector,
+            args.activityLimit,
+          );
+        case 'evidence_search':
+          if (!args.projectSelector) {
+            throw badRequest('projectSelector is required for evidence_search.');
+          }
+          if (!args.evidenceKey) throw badRequest('evidenceKey is required for evidence_search.');
+          return searchTaskEvidence(client, args.projectSelector, args.evidenceKey, {
+            maxTasks: args.maxTasks,
+            includeComments: args.includeComments,
           });
         case 'update':
           if (!args.taskSelector) throw badRequest('taskSelector is required.');

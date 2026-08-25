@@ -95,10 +95,19 @@ requests or legacy tracker scripts while the MCP is available.
 - Prefer `countOnly: true` when only a total is needed.
 - Use `vikunja_task_read` `summary` for one-project counts by done state, priority,
   labels, and configured status labels without listing task bodies.
-- Reads use structured-only `minimal` responses by default. Request only the
-  needed `fields`; leave URLs, descriptions, comments, attachments, relations,
-  and expanded user/label objects out unless the current operation needs them.
-  Use `standard` or `full` only for deliberately expanded detail.
+- Reads use structured-only `minimal` responses by default. They include the
+  bounded audit fields needed for reconciliation; request an explicit `fields`
+  projection to reduce them further. Leave descriptions, comments, attachments,
+  relations, and expanded user objects out unless the current operation needs
+  them. Use `standard` or `full` only for deliberately expanded detail.
+- Default task reads now include audit metadata: creator, createdAt, updatedAt,
+  labels, workflow status, direct task URL, and descriptionVersion. Use the
+  returned updatedAt as expectedUpdatedAt for replacement updates. The server
+  does not expose a reliable last editor or complete field-change history.
+- Use `activity` for current task audit metadata plus bounded recent comments.
+  It reports unavailable server history explicitly. Use `evidence_search` with
+  project scope for bounded exact evidence-key duplicate checks; never treat an
+  incomplete result as proof of absence.
 - Use `batch_get` for several known human identifiers, `verify_task_state` for
   one bounded status/evidence check, and `programme_snapshot` for project
   aggregates. Use `changedSince` for delta reads instead of re-listing an
