@@ -23,9 +23,10 @@ import {
   formatFailureEnvelope,
   fetchAllCollectionItems,
   normalizeDatesAndNulls,
+  normalizePagination,
 } from './format.js';
 import { toErrorEnvelope, VikunjaError, redactSecrets } from './errors.js';
-import { resolveLabel } from './tasks.js';
+import { requireProFeature, resolveLabel } from './tasks.js';
 import { cache, resolveProject, resolveTaskInput as resolveTask } from './identity.js';
 import fs from 'fs';
 import path from 'path';
@@ -1983,6 +1984,141 @@ export const TOOLS: McpToolDefinition[] = [
         await client.request<any>('GET', `/users?q=${encodeURIComponent(args.q || '')}`),
       );
       return results.map((u) => ({ id: u.id, username: u.username }));
+    },
+  },
+  {
+    name: 'vikunja_admin_users',
+    description:
+      'List instance users through Vikunja Pro admin access with agent-safe identity fields only.',
+    inputSchema: z.object({
+      action: z.literal('list'),
+      page: z.number().int().min(1).optional(),
+      perPage: z.number().int().min(1).max(100).optional(),
+      q: z.string().trim().min(1).optional(),
+    }),
+    handler: async (args, client) => {
+      await requireProFeature(client, 'admin_panel', '/admin/users');
+      const query = new URLSearchParams({
+        page: String(args.page ?? 1),
+        per_page: String(args.perPage ?? 50),
+      });
+      if (args.q) query.set('q', args.q);
+      const response = await client.request<any>('GET', `/admin/users?${query.toString()}`);
+      const pagination = normalizePagination(response);
+      return {
+        users: toItemArray<any>(response).map((user) => ({
+          id: user.id,
+          username: user.username,
+          isAdmin: Boolean(user.is_admin),
+          status: user.status ?? null,
+          authProvider: user.auth_provider ?? null,
+          updatedAt: user.updated ?? null,
+        })),
+        pagination,
+        emailRedacted: true,
+      };
+    },
+  },
+  {
+    name: 'vikunja_notifications',
+    description: 'List, mark read, or clear the authenticated user’s notifications.',
+    inputSchema: z.object({
+      action: z.enum(['list', 'mark_all_read', 'clear_all']),
+      page: z.number().int().min(1).optional(),
+      perPage: z.number().int().min(1).max(100).optional(),
+      confirm: z.boolean().optional(),
+      actor: actorSchema,
+      idempotencyKey: z.string().trim().min(1).max(200).optional(),
+      dryRun: z.boolean().optional(),
+    }),
+    handler: async (args, client) => {
+      if (args.action === 'list') {
+        const query = new URLSearchParams({
+          page: String(args.page ?? 1),
+          per_page: String(args.perPage ?? 50),
+        });
+        const response = await client.request<any>('GET', `/notifications?${query.toString()}`);
+        return {
+          notifications: toItemArray<any>(response),
+          pagination: normalizePagination(response),
+        };
+      }
+      if (args.confirm !== true)
+        throw badRequest('confirm=true is required to modify notifications.');
+      requireActor(args.actor, `notification ${args.action}`);
+      const idempotencyKey = requireIdempotencyKey(
+        args.idempotencyKey,
+        `notification ${args.action}`,
+      );
+      const operation =
+        args.action === 'mark_all_read' ? 'notification-mark-all-read' : 'notification-clear-all';
+      if (args.dryRun) {
+        return {
+          action: args.action === 'mark_all_read' ? 'would_mark_all_read' : 'would_clear_all',
+          dryRun: true,
+        };
+      }
+      return runDurableOperation(operation, idempotencyKey, { actor: args.actor }, async () => {
+        await client.request<any>(
+          args.action === 'mark_all_read' ? 'POST' : 'DELETE',
+          '/notifications',
+        );
+        return {
+          action: args.action === 'mark_all_read' ? 'marked_all_read' : 'cleared_all',
+          actor: args.actor,
+        };
+      });
+    },
+  },
+  {
+    name: 'vikunja_account_email',
+    description:
+      'Cancel a pending email change or resend its confirmation without returning email addresses.',
+    inputSchema: z.object({
+      action: z.enum(['cancel_pending', 'resend_confirmation']),
+      confirm: z.boolean().optional(),
+      actor: actorSchema,
+      idempotencyKey: z.string().trim().min(1).max(200).optional(),
+      dryRun: z.boolean().optional(),
+    }),
+    handler: async (args, client) => {
+      if (args.confirm !== true)
+        throw badRequest('confirm=true is required for pending-email actions.');
+      requireActor(args.actor, `pending-email ${args.action}`);
+      const idempotencyKey = requireIdempotencyKey(
+        args.idempotencyKey,
+        `pending-email ${args.action}`,
+      );
+      const operation =
+        args.action === 'cancel_pending' ? 'account-email-cancel-pending' : 'account-email-resend';
+      if (args.dryRun) {
+        return {
+          action:
+            args.action === 'cancel_pending' ? 'would_cancel_pending' : 'would_resend_confirmation',
+          dryRun: true,
+        };
+      }
+      return runDurableOperation(operation, idempotencyKey, { actor: args.actor }, async () => {
+        await client.request<any>(
+          args.action === 'cancel_pending' ? 'DELETE' : 'POST',
+          args.action === 'cancel_pending' ? '/user/settings/email' : '/user/settings/email/resend',
+        );
+        return {
+          action: args.action === 'cancel_pending' ? 'cancelled_pending' : 'resent_confirmation',
+          actor: args.actor,
+        };
+      });
+    },
+  },
+  {
+    name: 'vikunja_external_migration',
+    description:
+      'Inspect a supported external migration without placing source credentials in MCP arguments.',
+    inputSchema: z.object({
+      action: z.literal('planka_status'),
+    }),
+    handler: async (_args, client) => {
+      return client.request<any>('GET', '/migration/planka/status');
     },
   },
   {

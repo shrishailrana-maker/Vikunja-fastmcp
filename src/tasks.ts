@@ -47,8 +47,13 @@ const MAX_AGENT_PAGE_SIZE = 100;
 const MAX_PROJECT_SCOPE = 25;
 const DEFAULT_MINIMAL_RESPONSE_CHARS = 4_000;
 const VIKUNJA_TIME_TRACKING_FEATURE = 'time_tracking';
+const VIKUNJA_PRO_FEATURE_IDS: Record<string, number> = {
+  admin_panel: 1,
+  time_tracking: 2,
+  audit_logs: 3,
+};
 
-async function requireProFeature(
+export async function requireProFeature(
   client: VikunjaApiClient,
   feature: string,
   operationPath: string,
@@ -68,7 +73,7 @@ async function requireProFeature(
   }
   const enabledNames = enabled.flatMap((value: unknown) => {
     if (value === feature) return [feature];
-    if (feature === VIKUNJA_TIME_TRACKING_FEATURE && value === 2) return [feature];
+    if (typeof value === 'number' && value === VIKUNJA_PRO_FEATURE_IDS[feature]) return [feature];
     return [];
   });
   if (enabledNames.length === 0) {

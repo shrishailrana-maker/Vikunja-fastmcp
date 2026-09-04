@@ -2,12 +2,12 @@ import { server } from '../src/index.js';
 
 const profiles = ['core', 'qa', 'developer', 'full', 'compatibility'] as const;
 const budgets: Record<(typeof profiles)[number], number> = {
-  // v2.5.1 adds bounded label selectors, numeric status IDs, and diagnostic
-  // fields; keep a bounded 63k ceiling across the named typed profiles.
-  core: 63_000,
-  qa: 63_000,
-  developer: 63_000,
-  full: 63_000,
+  // v2.6 adds four typed account/admin/migration tools; keep a bounded 66k
+  // ceiling across the named typed profiles.
+  core: 66_000,
+  qa: 66_000,
+  developer: 66_000,
+  full: 66_000,
   // The compatibility router includes the legacy broad schema in addition to
   // the typed surface; audit-read actions require a bounded 94k ceiling.
   compatibility: 94_000,

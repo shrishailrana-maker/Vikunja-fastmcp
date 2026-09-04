@@ -23,8 +23,8 @@ profile, response, ledger, and migration decisions are recorded in
 ## Requirements
 
 - Node.js 24 LTS+
-- Vikunja 2.4.0+ with `/api/v2` (the checked-in contract is refreshed and
-  validated against a Vikunja v2.5.0 service)
+- Vikunja 2.6.0+ with `/api/v2` (the checked-in contract is refreshed and
+  validated against a Vikunja v2.6.0 service)
 - Vikunja API token with access to the projects you need
 
 ## Install
@@ -352,14 +352,13 @@ Vikunja Pro currently gates three server capabilities: `admin_panel`,
 time-entry read checks `time_tracking` first and returns `FEATURE_NOT_LICENSED`
 with the license remediation instead of exposing Vikunja's intentional opaque
 404. It accepts both the string and integer enum encodings seen in v2.5
-`/info` responses. The MCP does not claim admin-panel or audit-log operations
-that it has not implemented.
-If Vikunja 2.4 returns `subscription.entity: expected integer` while reading a
-write response, the MCP reports `VIKUNJA_SUBSCRIPTION_SCHEMA_BUG` with the
-[upstream issue](https://github.com/go-vikunja/vikunja/issues/3316). It does
-not silently unsubscribe the user or claim that the token is invalid. For task
-updates, it first reads the task back and reports success only when every
-requested field is visibly applied.
+`/info` responses. Vikunja 2.6 additionally exposes a PII-minimized,
+Pro-gated admin-user list; notification clear/mark-read and pending-email
+actions use explicit confirmation, attribution, and durable receipts. Planka
+migration status is readable, while credential-bearing migration start remains
+unavailable so third-party secrets never enter MCP arguments. The 2.6 contract
+fixes `subscription.entity` as a string enum; the defensive response mapping
+remains for any misconfigured server.
 
 See generated `MCP_API.md` for inputs. Responses contain a Markdown summary
 plus one JSON envelope in `compact`, `standard`, and `full` modes. The default

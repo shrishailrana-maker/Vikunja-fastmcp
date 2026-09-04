@@ -26,6 +26,11 @@ export const UNSUPPORTED_OPERATIONS: { operation: string; reason: string }[] = [
     operation: 'vikunja_filters:list',
     reason: 'The Vikunja v2 API has no collection GET /filters route.',
   },
+  {
+    operation: 'vikunja_external_migration:planka_migrate',
+    reason:
+      'The v2.6 route requires source credentials. This MCP never accepts third-party tokens or passwords in tool arguments; configure a secure credential handoff before exposing it.',
+  },
 ];
 
 export const OPERATIONAL_NOTES: string[] = [
@@ -39,6 +44,7 @@ export const OPERATIONAL_NOTES: string[] = [
   'Task label operations require the caller to have the corresponding label and project permissions.',
   'Vikunja Pro gates admin_panel, time_tracking, and audit_logs. self_check reports the enabled server entitlements; time-entry reads fail clearly when time_tracking is disabled.',
   'self_check detail=full reports duplicate configured workflow-label titles; use a numeric label ID with set_status when titles are ambiguous.',
+  'Vikunja 2.6 adds notification clearing, pending-email controls, admin-user listing, and Planka migration status. Planka migration run remains unavailable because its source credentials must not enter MCP arguments.',
 ];
 
 export const VIKUNJA_PRO_FEATURES = ['admin_panel', 'time_tracking', 'audit_logs'] as const;

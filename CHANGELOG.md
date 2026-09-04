@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.6.0 - 2026-09-04
+
+- Refresh the checked-in v2 OpenAPI snapshot and generated route reference from
+  a live Vikunja 2.6.0 service; Vikunja 2.6.0 is now the minimum supported
+  server release.
+- Expose PII-minimized, Pro-gated admin user listing; bounded notification
+  list/mark-all-read/clear actions; confirmed pending-email cancel/resend; and
+  credential-free Planka migration status.
+- Keep credential-bearing Planka migration start outside MCP arguments, with
+  explicit diagnostics explaining the required secure handoff.
+- Record the live 2.6 `subscription.entity` string-enum contract correction
+  while retaining defensive handling for misconfigured servers.
+- Raise the typed schema ceiling to 66,000 characters for the v2.6 typed tool
+  additions without removing fields or reducing scope.
+
 ## 2.5.2 - 2026-08-25
 
 - Make default task reads audit-ready with creator, timestamps, labels,

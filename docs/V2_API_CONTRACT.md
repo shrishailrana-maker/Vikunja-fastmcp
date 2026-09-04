@@ -12,9 +12,9 @@ Local API references for agents:
 - [`VIKUNJA_V2_API_REFERENCE.md`](VIKUNJA_V2_API_REFERENCE.md): generated method,
   path, operation, and schema index.
 
-The minimum supported server remains the official Vikunja
-[`v2.4.0`](https://github.com/go-vikunja/vikunja/releases/tag/v2.4.0). The
-checked-in JSON snapshot was refreshed from a live Vikunja `v2.5.0` service and
+The minimum supported server is the official Vikunja
+[`v2.6.0`](https://github.com/go-vikunja/vikunja/releases/tag/v2.6.0). The
+checked-in JSON snapshot was refreshed from a live Vikunja `v2.6.0` service and
 is the local HTTP authority for the routes used here. Re-download and review it
 when the service is upgraded; never substitute the old SDK or v1 docs.
 
@@ -74,6 +74,9 @@ bulk replacement body.
 | ----------------------- | ------------------------------------------------------------------------------------- | -------------------------------------------- |
 | Server gate             | `GET /info`, live `GET /openapi.json`                                                 | Direct                                       |
 | Current/search users    | `GET /user`, `GET /users`                                                             | Direct                                       |
+| Admin user list         | `GET /admin/users`                                                                     | Pro-gated; email-redacted MCP response      |
+| Notifications           | `GET`/`POST`/`DELETE /notifications`                                                   | List plus confirmed durable actions          |
+| Pending email           | `DELETE /user/settings/email`, `POST /user/settings/email/resend`                     | Confirmed durable actions; no email output   |
 | Projects                | `GET /projects`, `GET /projects/{id}`                                                 | Direct                                       |
 | Task list               | `GET /projects/{project}/tasks`, `GET /tasks`                                         | Direct                                       |
 | Task get/create         | `GET /tasks/{projecttask}`, `POST /projects/{project}/tasks`                          | Direct                                       |
@@ -93,6 +96,7 @@ bulk replacement body.
 | Bulk task create/delete | Existing task create/delete routes                                                    | MCP-composed, bounded, non-atomic            |
 | Task reminders          | Embedded `reminders` task field                                                       | MCP-composed read/update                     |
 | CSV import              | `/migration/csv/detect`, `/preview`, `/migrate`, `/status`                            | Direct multipart/status routes               |
+| Planka migration status | `GET /migration/planka/status`                                                         | Direct                                        |
 | Project export          | Paginated project task list                                                           | MCP-composed local JSON/CSV file             |
 | User export             | `/user/export`, `/request`, `/download`                                               | Direct; download streams to disk             |
 | Webhooks                | Project/user webhook routes and `/webhooks/events`                                    | Direct                                       |
@@ -131,6 +135,22 @@ current client intentionally exposes JSON results without response headers or
 304 metadata. Server-side uniqueness, optimistic concurrency, and collection
 version guarantees remain open upstream concerns.
 
+### v2.6 migration notes
+
+The v2.6 snapshot adds admin user listing, notification deletion, pending-email
+cancel/resend, and Planka migration status/run routes. The MCP exposes admin
+listing only after an `admin_panel` entitlement preflight and redacts email
+fields. Notification and pending-email mutations require explicit confirmation,
+actor attribution, durable idempotency, and support dry-run previews.
+
+Planka migration status is exposed. Its run route requires credentials for an
+external service, so it remains intentionally unavailable until those
+credentials can be passed through an operator-controlled secure mechanism
+rather than MCP tool arguments. The subscribed-user task-write schema defect
+is fixed in the live v2.6 contract: `subscription.entity` is now the string
+enum `project | task`; the older defensive error mapping remains fail-safe for
+misconfigured servers.
+
 ## Typed Tool Surface And Profiles
 
 The default `core` profile exposes small typed schemas:
@@ -144,6 +164,10 @@ The default `core` profile exposes small typed schemas:
 | `vikunja_task_workflow`       | Mark-read, evidence, and verified-close workflows                           |
 | `vikunja_task_comments`       | CRUD plus bounded page/delta/count reads                                    |
 | `vikunja_task_attachments`    | Upload, bounded list, download, and ownership-safe delete                   |
+| `vikunja_admin_users`         | PII-minimized Pro-gated instance user listing                                |
+| `vikunja_notifications`       | Notification list, mark-all-read, and confirmed clear                        |
+| `vikunja_account_email`       | Confirmed pending-email cancel/resend without email output                   |
+| `vikunja_external_migration`  | Credential-free external migration status                                    |
 
 ### Pro feature gates
 
@@ -156,8 +180,8 @@ intentionally answers those routes with `404 Not Found` in community mode.
 Some v2.5 OpenAPI generators describe `enabled_pro_features` as integer enum
 values even though Vikunja's runtime JSON marshals them as string keys. The
 MCP accepts both encodings (`1/2/3` and `admin_panel/time_tracking/audit_logs`).
-Admin-panel and audit-log operations remain unexposed until this MCP has a
-typed, scope-safe contract for them.
+Admin user listing is exposed with PII minimization. Audit-log operations
+remain unexposed until this MCP has a typed, scope-safe contract for them.
 
 Profiles add only the tools needed by the client:
 

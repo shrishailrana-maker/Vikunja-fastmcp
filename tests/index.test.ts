@@ -68,7 +68,7 @@ describe('MCP Server Registration and Dispatching tests', () => {
     const response = await handler({
       method: 'tools/list',
     });
-    expect(response.tools.length).toBe(23);
+    expect(response.tools.length).toBe(27);
 
     for (const name of [
       'vikunja_task_bulk',
@@ -80,6 +80,10 @@ describe('MCP Server Registration and Dispatching tests', () => {
       'vikunja_webhooks',
       'vikunja_task_reminders',
       'vikunja_project_migration',
+      'vikunja_admin_users',
+      'vikunja_notifications',
+      'vikunja_account_email',
+      'vikunja_external_migration',
     ]) {
       expect(response.tools.some((tool: any) => tool.name === name)).toBe(true);
     }
@@ -443,6 +447,91 @@ describe('MCP Server Registration and Dispatching tests', () => {
     for (const tool of response.tools) {
       expect(tool.annotations).toMatchObject({ destructiveHint: false });
     }
+  });
+
+  it('exposes v2.6 routes with PII minimization and durable confirmations', async () => {
+    const requests = jest.fn(async (method: string, requestPath: string) => {
+      if (method === 'GET' && requestPath === '/info') {
+        return { enabled_pro_features: ['admin_panel'] };
+      }
+      if (method === 'GET' && requestPath.startsWith('/admin/users?')) {
+        return {
+          items: [
+            {
+              id: 9,
+              username: 'operator',
+              email: 'private@example.com',
+              is_admin: true,
+              status: 0,
+              auth_provider: 'local',
+            },
+          ],
+          page: 1,
+          per_page: 50,
+          total: 1,
+          total_pages: 1,
+        };
+      }
+      if (method === 'GET' && requestPath === '/migration/planka/status') {
+        return { state: 'idle' };
+      }
+      return {};
+    });
+    const client = {
+      request: requests,
+      getConfig: () => ({ vikunjaToken: 'tk_token' }),
+    } as any;
+    const adminUsers = TOOLS.find((tool) => tool.name === 'vikunja_admin_users')!;
+    const notifications = TOOLS.find((tool) => tool.name === 'vikunja_notifications')!;
+    const email = TOOLS.find((tool) => tool.name === 'vikunja_account_email')!;
+    const migration = TOOLS.find((tool) => tool.name === 'vikunja_external_migration')!;
+
+    await expect(adminUsers.handler({ action: 'list' }, client)).resolves.toEqual(
+      expect.objectContaining({
+        users: [
+          {
+            id: 9,
+            username: 'operator',
+            isAdmin: true,
+            status: 0,
+            authProvider: 'local',
+            updatedAt: null,
+          },
+        ],
+        emailRedacted: true,
+      }),
+    );
+    await expect(
+      notifications.handler(
+        { action: 'clear_all', confirm: true, actor: 'Codex', idempotencyKey: 'notifications-v26' },
+        client,
+      ),
+    ).resolves.toMatchObject({ action: 'cleared_all' });
+    await expect(
+      email.handler(
+        {
+          action: 'resend_confirmation',
+          confirm: true,
+          actor: 'Codex',
+          idempotencyKey: 'email-v26',
+        },
+        client,
+      ),
+    ).resolves.toMatchObject({ action: 'resent_confirmation' });
+    await expect(migration.handler({ action: 'planka_status' }, client)).resolves.toEqual({
+      state: 'idle',
+    });
+    expect(
+      requests.mock.calls.some(
+        ([method, requestPath]: any[]) => method === 'DELETE' && requestPath === '/notifications',
+      ),
+    ).toBe(true);
+    expect(
+      requests.mock.calls.some(
+        ([method, requestPath]: any[]) =>
+          method === 'POST' && requestPath === '/user/settings/email/resend',
+      ),
+    ).toBe(true);
   });
 
   it('exposes every typed tool in all non-compatibility profiles', async () => {

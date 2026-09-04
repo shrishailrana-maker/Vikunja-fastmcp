@@ -254,6 +254,66 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 | `current` | none | none | Direct GET /user |
 | `search` | none | q | Direct GET /users?q= |
 
+### `vikunja_admin_users`
+* **Description**: List instance users through Vikunja Pro admin access with agent-safe identity fields only.
+* **Parameters**:
+  * `action`: string (required)
+  * `page`: number (optional); integer, min 1
+  * `perPage`: number (optional); integer, min 1, max 100
+  * `q`: string (optional); min 1
+
+#### Operations
+
+| Action | Required | Optional | Execution |
+| --- | --- | --- | --- |
+| `list` | none | page (default 1), perPage (default 50, max 100), q | Pro-gated direct GET /admin/users with email redaction. Requires Vikunja admin_panel entitlement and instance-admin permission. |
+
+### `vikunja_notifications`
+* **Description**: List, mark read, or clear the authenticated user’s notifications.
+* **Parameters**:
+  * `action`: enum ["list", "mark_all_read", "clear_all"] (required)
+  * `page`: number (optional); integer, min 1
+  * `perPage`: number (optional); integer, min 1, max 100
+  * `confirm`: boolean (optional)
+  * `actor`: string (optional); min 1, max 80
+  * `idempotencyKey`: string (optional); min 1, max 200
+  * `dryRun`: boolean (optional)
+
+#### Operations
+
+| Action | Required | Optional | Execution |
+| --- | --- | --- | --- |
+| `list` | none | page (default 1), perPage (default 50, max 100) | Direct GET /notifications |
+| `mark_all_read` | confirm, actor, idempotencyKey | dryRun | Durable direct POST /notifications |
+| `clear_all` | confirm, actor, idempotencyKey | dryRun | Durable direct DELETE /notifications |
+
+### `vikunja_account_email`
+* **Description**: Cancel a pending email change or resend its confirmation without returning email addresses.
+* **Parameters**:
+  * `action`: enum ["cancel_pending", "resend_confirmation"] (required)
+  * `confirm`: boolean (optional)
+  * `actor`: string (optional); min 1, max 80
+  * `idempotencyKey`: string (optional); min 1, max 200
+  * `dryRun`: boolean (optional)
+
+#### Operations
+
+| Action | Required | Optional | Execution |
+| --- | --- | --- | --- |
+| `cancel_pending` | confirm, actor, idempotencyKey | dryRun | Durable direct DELETE /user/settings/email; never returns email addresses |
+| `resend_confirmation` | confirm, actor, idempotencyKey | dryRun | Durable direct POST /user/settings/email/resend; never returns email addresses |
+
+### `vikunja_external_migration`
+* **Description**: Inspect a supported external migration without placing source credentials in MCP arguments.
+* **Parameters**:
+  * `action`: string (required)
+
+#### Operations
+
+| Action | Required | Optional | Execution |
+| --- | --- | --- | --- |
+| `planka_status` | none | none | Direct GET /migration/planka/status. Credential-bearing migration run is intentionally unavailable to keep third-party secrets out of MCP arguments. |
+
 ### `vikunja_teams`
 * **Description**: Manage teams and team members.
 * **Parameters**:

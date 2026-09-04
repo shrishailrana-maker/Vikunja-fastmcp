@@ -496,6 +496,54 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     { action: 'current', execution: 'Direct GET /user' },
     { action: 'search', optional: ['q'], execution: 'Direct GET /users?q=' },
   ],
+  vikunja_admin_users: [
+    {
+      action: 'list',
+      optional: ['page (default 1)', 'perPage (default 50, max 100)', 'q'],
+      execution: 'Pro-gated direct GET /admin/users with email redaction',
+      note: 'Requires Vikunja admin_panel entitlement and instance-admin permission.',
+    },
+  ],
+  vikunja_notifications: [
+    {
+      action: 'list',
+      optional: ['page (default 1)', 'perPage (default 50, max 100)'],
+      execution: 'Direct GET /notifications',
+    },
+    {
+      action: 'mark_all_read',
+      required: ['confirm', 'actor', 'idempotencyKey'],
+      optional: ['dryRun'],
+      execution: 'Durable direct POST /notifications',
+    },
+    {
+      action: 'clear_all',
+      required: ['confirm', 'actor', 'idempotencyKey'],
+      optional: ['dryRun'],
+      execution: 'Durable direct DELETE /notifications',
+    },
+  ],
+  vikunja_account_email: [
+    {
+      action: 'cancel_pending',
+      required: ['confirm', 'actor', 'idempotencyKey'],
+      optional: ['dryRun'],
+      execution: 'Durable direct DELETE /user/settings/email; never returns email addresses',
+    },
+    {
+      action: 'resend_confirmation',
+      required: ['confirm', 'actor', 'idempotencyKey'],
+      optional: ['dryRun'],
+      execution: 'Durable direct POST /user/settings/email/resend; never returns email addresses',
+    },
+  ],
+  vikunja_external_migration: [
+    {
+      action: 'planka_status',
+      execution: 'Direct GET /migration/planka/status',
+      note: 'Credential-bearing migration run is intentionally unavailable to keep third-party secrets out of MCP arguments.',
+    },
+  ],
   vikunja_teams: [
     { action: 'list', execution: 'Direct paginated GET /teams' },
     { action: 'get', required: ['teamId'], execution: 'Direct GET /teams/{id}' },

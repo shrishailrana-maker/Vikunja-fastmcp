@@ -23,8 +23,8 @@ describe('V2 OpenAPI Capability Gate', () => {
     openapi = JSON.parse(content);
   });
 
-  it('pins the sanitized contract to the live Vikunja v2.5.0 snapshot', () => {
-    expect(openapi.info?.version).toBe('v2.5.0');
+  it('pins the sanitized contract to the live Vikunja v2.6.0 snapshot', () => {
+    expect(openapi.info?.version).toBe('v2.6.0');
     expect(openapi.openapi).toBe('3.1.0');
     expect(openapi.servers).toEqual([{ url: '/api/v2' }]);
     expect(openapi.components?.schemas?.FormFile).toBeUndefined();
@@ -48,6 +48,7 @@ describe('V2 OpenAPI Capability Gate', () => {
     { method: 'get', path: '/info' },
     { method: 'get', path: '/user' },
     { method: 'get', path: '/users' },
+    { method: 'get', path: '/admin/users' },
     { method: 'get', path: '/projects' },
     { method: 'get', path: '/projects/{id}' },
     { method: 'get', path: '/projects/{project}/tasks' },
@@ -105,6 +106,13 @@ describe('V2 OpenAPI Capability Gate', () => {
     { method: 'post', path: '/migration/csv/preview' },
     { method: 'post', path: '/migration/csv/migrate' },
     { method: 'get', path: '/migration/csv/status' },
+    { method: 'get', path: '/migration/planka/status' },
+    { method: 'post', path: '/migration/planka/migrate' },
+    { method: 'get', path: '/notifications' },
+    { method: 'post', path: '/notifications' },
+    { method: 'delete', path: '/notifications' },
+    { method: 'delete', path: '/user/settings/email' },
+    { method: 'post', path: '/user/settings/email/resend' },
     { method: 'get', path: '/user/export' },
     { method: 'post', path: '/user/export/request' },
     { method: 'post', path: '/user/export/download' },

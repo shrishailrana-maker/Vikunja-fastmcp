@@ -117,7 +117,7 @@ requests or legacy tracker scripts while the MCP is available.
   with the same ordered project scope.
 - Comment lists default to 20 items. Use `since`, `countOnly`, and
   `includeLatest` to avoid loading old comment bodies.
-- On Vikunja v2.5, use `vikunja_task_read` with `action: "list_time_entries"`
+- On Vikunja v2.6, use `vikunja_task_read` with `action: "list_time_entries"`
   for one project-verified, bounded task time-entry page. Set `countOnly: true`
   when only the total is needed; the route returns server-provided numeric
   user IDs and does not infer user profiles.
@@ -137,7 +137,7 @@ requests or legacy tracker scripts while the MCP is available.
   task-write fields must fail validation rather than being silently ignored.
 - Prefer `create_if_absent` for duplicate-sensitive creation, while remembering
   it is best-effort rather than a distributed lock.
-- To copy a task on Vikunja v2.5, use `vikunja_task_write` with
+- To copy a task on Vikunja v2.6, use `vikunja_task_write` with
   `action: "duplicate"`, explicit task/project selectors, `confirm: true`, an
   actor, and a stable idempotency key. The native duplicate route does not
   promise attachment or relation copying in its contract; inspect the returned
@@ -146,6 +146,12 @@ requests or legacy tracker scripts while the MCP is available.
   user's unread state. It is an idempotent server no-op when already read, but
   still requires explicit selectors, actor attribution, and a stable receipt
   key in this MCP.
+- Vikunja 2.6 adds `vikunja_notifications` for bounded list and confirmed
+  mark-all-read/clear actions, `vikunja_account_email` for confirmed pending
+  email cancellation or resend without returning email addresses, and
+  `vikunja_admin_users` for PII-minimized Pro-gated admin listing. Use
+  `vikunja_external_migration` only for credential-free Planka status; never
+  place third-party migration credentials in MCP tool arguments.
 - Add verification evidence before closing work. Use `close_with_evidence` when appropriate.
 - Use `append_evidence_if_changed` with a stable evidence key when repeated
   builds may produce the same proof. Use `close_if_verified` when closure must
