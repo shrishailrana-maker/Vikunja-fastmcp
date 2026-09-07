@@ -438,7 +438,7 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     {
       action: 'create',
       required: ['taskSelector', 'comment', 'actor', 'idempotencyKey'],
-      optional: taskSelector,
+      optional: [...taskSelector, 'format (markdown default or plain)'],
       execution: 'Direct POST after identity resolution',
     },
     {
@@ -465,7 +465,7 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
     {
       action: 'update',
       required: ['taskSelector', 'commentId', 'comment', 'actor'],
-      optional: taskSelector,
+      optional: [...taskSelector, 'format (markdown default or plain)'],
       execution: 'Direct PATCH after identity resolution',
     },
     {
@@ -833,6 +833,26 @@ TOOL_OPERATION_DOCS.vikunja_task_read = taskActions([
   'activity',
   'evidence_search',
 ]);
+TOOL_OPERATION_DOCS.vikunja_task_read.push(
+  {
+    action: 'get_basic',
+    required: ['taskSelector'],
+    optional: taskSelector,
+    execution: 'Read identity, title, completion, updatedAt, and URL without expansion',
+  },
+  {
+    action: 'get_audit',
+    required: ['taskSelector'],
+    optional: taskSelector,
+    execution: 'Read the default audit fields without comments or attachments',
+  },
+  {
+    action: 'get_full',
+    required: ['taskSelector'],
+    optional: [...taskSelector, 'commentLimit', 'attachmentLimit', 'maxResponseChars'],
+    execution: 'Read task details with bounded comments and attachments',
+  },
+);
 TOOL_OPERATION_DOCS.vikunja_task_write = taskActions([
   'create',
   'create_if_absent',

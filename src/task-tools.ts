@@ -77,6 +77,9 @@ export function createTypedTaskTools(dispatch: TaskDispatcher): TypedTaskToolDef
       inputSchema: z.object({
         action: z.enum([
           'get',
+          'get_basic',
+          'get_audit',
+          'get_full',
           'list',
           'my_tasks',
           'summary',
@@ -147,11 +150,39 @@ export function createTypedTaskTools(dispatch: TaskDispatcher): TypedTaskToolDef
             'comment-create',
             'attachment-upload',
             'attachment-delete',
+            'task_create',
+            'task_create_absent',
+            'close_with_evidence',
+            'comment_create',
+            'attachment_upload',
+            'attachment_delete',
           ])
           .optional(),
         idempotencyKey: z.string().trim().min(1).max(200).optional(),
       }),
-      handler: dispatch,
+      handler: (args, client) => {
+        if (args.action === 'get_basic') {
+          return dispatch(
+            {
+              ...args,
+              action: 'get',
+              responseMode: 'minimal',
+              fields: ['id', 'portalRef', 'title', 'done', 'updatedAt', 'taskUrl'],
+            },
+            client,
+          );
+        }
+        if (args.action === 'get_audit') {
+          return dispatch(
+            { ...args, action: 'get', responseMode: 'minimal', fields: undefined },
+            client,
+          );
+        }
+        if (args.action === 'get_full') {
+          return dispatch({ ...args, action: 'get', responseMode: 'full' }, client);
+        }
+        return dispatch(args, client);
+      },
     },
     {
       name: 'vikunja_task_write',

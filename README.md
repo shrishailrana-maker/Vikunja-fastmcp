@@ -22,6 +22,13 @@ profile, response, ledger, and migration decisions are recorded in
 
 ## Requirements
 
+Comments preserve line breaks and underscores within identifiers. Use
+`format: "plain"` on comment create/update for literal punctuation and escaped
+HTML; the default `markdown` format retains headings, lists, and code blocks.
+Receipt lookup accepts underscore names such as `close_with_evidence` as well
+as legacy dash names. For simple reads, use `get_basic` (identity and update
+timestamp), `get_audit` (audit metadata), or `get_full` (bounded child details).
+
 - Node.js 24 LTS+
 - Vikunja 2.6.0+ with `/api/v2` (the checked-in contract is refreshed and
   validated against a Vikunja v2.6.0 service)

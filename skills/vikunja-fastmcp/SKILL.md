@@ -82,6 +82,12 @@ requests or legacy tracker scripts while the MCP is available.
 
 ## Lists And Searches
 
+- Use `get_basic` for identity/title/done/updatedAt/link, `get_audit` for audit
+  metadata, and `get_full` for bounded comments and attachments. These named
+  actions avoid choosing response modes and projections manually.
+- Receipt lookup accepts `close_with_evidence` and other underscore operation
+  aliases; existing dash spellings remain valid.
+
 - Lists default to open tasks. Use `allStates: true` for open and closed tasks.
 - Use `q` for ordinary free-text task search; `search` is an equivalent alias.
   Use `filter` only for an explicitly requested Vikunja filter expression. Do
@@ -124,6 +130,11 @@ requests or legacy tracker scripts while the MCP is available.
 - Keep searches scoped. Avoid `allProjects` when a project subset is known.
 
 ## Writes
+
+- Comment create/update supports `format: "plain"` for literal text, including
+  code names. Markdown is the default; intraword underscores and visible line
+  breaks are preserved in both modes. Retrying comment creation must retain
+  the same text, format, actor, project, and idempotency key.
 
 - Prefer `vikunja_task_bulk` `create` (or `upsert` with `externalKey`) when
   filing 3 or more tasks.

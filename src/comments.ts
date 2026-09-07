@@ -50,6 +50,11 @@ export interface CommentListOptions {
   maxScanPages?: number;
 }
 
+export function formatComment(text: string, format: 'markdown' | 'plain' = 'markdown'): string {
+  if (format === 'markdown') return markdownToHtml(text, true);
+  return `<p>${text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\r\n?/g, '\n').replace(/\n/g, '<br>')}</p>`;
+}
+
 function normalizeComment(comment: any): Comment {
   return {
     id: comment.id,
@@ -69,11 +74,18 @@ export async function createComment(
   projectSelector?: { id?: number; title?: string },
   idempotencyKey?: string,
   actor?: string,
+  format: 'markdown' | 'plain' = 'markdown',
 ): Promise<Comment> {
-  const payload = { taskSelector, projectSelector, comment, actor };
+  const payload = {
+    taskSelector,
+    projectSelector,
+    comment,
+    actor,
+    ...(format === 'plain' ? { format } : {}),
+  };
   const execute = async (): Promise<Comment> => {
     const task = await resolveTask(client, taskSelector, projectSelector, { includeRawTask: true });
-    const htmlComment = markdownToHtml(withActorAttribution(comment, actor)!);
+    const htmlComment = formatComment(withActorAttribution(comment, actor)!, format);
     const path = `/tasks/${task.id}/comments`;
     const rawComment = await client.request<any>('POST', path, {
       body: { comment: htmlComment },
@@ -247,9 +259,10 @@ export async function updateComment(
   comment: string,
   projectSelector?: { id?: number; title?: string },
   actor?: string,
+  format: 'markdown' | 'plain' = 'markdown',
 ): Promise<Comment> {
   const task = await resolveTask(client, taskSelector, projectSelector, { includeRawTask: true });
-  const htmlComment = markdownToHtml(withActorAttribution(comment, actor)!);
+  const htmlComment = formatComment(withActorAttribution(comment, actor)!, format);
 
   // Prefer PATCH for partial comment updates (OpenAPI also offers PUT).
   const c = await client.request<any>('PATCH', `/tasks/${task.id}/comments/${commentId}`, {

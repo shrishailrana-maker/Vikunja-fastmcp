@@ -958,6 +958,12 @@ export const TOOLS: McpToolDefinition[] = [
           'comment-create',
           'attachment-upload',
           'attachment-delete',
+          'task_create',
+          'task_create_absent',
+          'close_with_evidence',
+          'comment_create',
+          'attachment_upload',
+          'attachment_delete',
         ])
         .optional(),
       expectedUpdatedAt: z.string().optional(),
@@ -1809,6 +1815,7 @@ export const TOOLS: McpToolDefinition[] = [
         .optional(),
       commentId: z.number().int().positive().optional(),
       comment: z.string().trim().min(1).optional(),
+      format: z.enum(['markdown', 'plain']).optional(),
       idempotencyKey: z.string().trim().min(1).max(200).optional(),
       actor: actorSchema,
       page: z.number().int().positive().optional(),
@@ -1831,6 +1838,7 @@ export const TOOLS: McpToolDefinition[] = [
             args.projectSelector,
             args.idempotencyKey,
             args.actor,
+            args.format,
           );
         case 'list':
           return listComments(
@@ -1860,6 +1868,7 @@ export const TOOLS: McpToolDefinition[] = [
             args.comment,
             args.projectSelector,
             args.actor,
+            args.format,
           );
         case 'delete':
           requireActor(args.actor, 'comment deletion');

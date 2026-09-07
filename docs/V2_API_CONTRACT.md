@@ -20,6 +20,14 @@ when the service is upgraded; never substitute the old SDK or v1 docs.
 
 ## Design Rules
 
+Comment create/update accepts `format: markdown | plain` (default markdown).
+Both preserve visible line breaks. Plain text is HTML-escaped; Markdown keeps
+intraword underscores literal. Plain format participates in creation receipt
+identity; existing Markdown receipt keys retain their payload shape.
+Receipt lookup accepts underscore aliases for its legacy dash namespaces.
+The read actions `get_basic`, `get_audit`, and `get_full` expose fixed parameter
+sets, while existing `get` and its projections remain compatible.
+
 1. Support Vikunja `/api/v2` only. Reject `/api/v1` configuration clearly.
 2. Keep runtime source flat and minimal: merge trivial pass-through files, but
    split a file when it contains distinct responsibilities or becomes hard to

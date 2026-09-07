@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.6.1 - 2026-09-07
+
+- Preserve intraword underscores in Markdown and visible line breaks in comments.
+- Add an HTML-escaped plain-text comment format with format-aware idempotency.
+- Accept underscore receipt-operation aliases while retaining legacy spellings.
+- Add fixed `get_basic`, `get_audit`, and `get_full` read actions.
+- Update vulnerable transitive fast-uri and qs dependencies to patched releases.
+
 ## 2.6.0 - 2026-09-04
 
 - Refresh the checked-in v2 OpenAPI snapshot and generated route reference from

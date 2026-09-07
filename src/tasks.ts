@@ -2202,7 +2202,7 @@ export async function taskDedupe(
 }
 
 export function lookupTaskReceipt(operation: string, idempotencyKey: string) {
-  return lookupDurableOperationReceipt(operation, idempotencyKey);
+  return lookupDurableOperationReceipt(operation.replace(/_/g, '-'), idempotencyKey);
 }
 
 function stripTrailingMarker(description: string, marker: string): string {

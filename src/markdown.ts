@@ -72,7 +72,7 @@ export function validateUrlScheme(urlStr: string): string {
   throw err;
 }
 
-export function markdownToHtml(md: string): string {
+export function markdownToHtml(md: string, preserveLineBreaks = false): string {
   if (!md) return '';
 
   const rawLines = md.replace(/\r\n/g, '\n').split('\n');
@@ -98,9 +98,9 @@ export function markdownToHtml(md: string): string {
   function emphasis(text: string): string {
     return text
       .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-      .replace(/__([^_]+)__/g, '<strong>$1</strong>')
+      .replace(/(?<![\p{L}\p{N}_])__([^_]+)__(?![\p{L}\p{N}_])/gu, '<strong>$1</strong>')
       .replace(/\*([^*]+)\*/g, '<em>$1</em>')
-      .replace(/_([^_]+)_/g, '<em>$1</em>');
+      .replace(/(?<![\p{L}\p{N}_])_([^_]+)_(?![\p{L}\p{N}_])/gu, '<em>$1</em>');
   }
 
   function extractLinks(text: string, prefix: string): { text: string; links: string[] } {
@@ -158,7 +158,9 @@ export function markdownToHtml(md: string): string {
       const listItems = currentBlockLines.map((line) => `<li>${parseInline(line)}</li>`).join('\n');
       blocks.push(`<ol>\n${listItems}\n</ol>`);
     } else if (currentBlockType === 'p') {
-      const pContent = currentBlockLines.map((line) => parseInline(line)).join('\n');
+      const pContent = currentBlockLines
+        .map((line) => parseInline(line))
+        .join(preserveLineBreaks ? '<br>' : '\n');
       blocks.push(`<p>${pContent}</p>`);
     }
 

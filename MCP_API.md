@@ -88,7 +88,7 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
   * `changedLimit`: number (optional); integer, min 1, max 100
   * `preset`: enum ["programme", "mpf"] (optional)
   * `title`: string (optional); min 1
-  * `operation`: enum ["task-create", "task-create-absent", "close-with-evidence", "comment-create", "attachment-upload", "attachment-delete"] (optional)
+  * `operation`: enum ["task-create", "task-create-absent", "close-with-evidence", "comment-create", "attachment-upload", "attachment-delete", "task_create", "task_create_absent", "close_with_evidence", "comment_create", "attachment_upload", "attachment_delete"] (optional)
   * `expectedUpdatedAt`: string (optional)
   * `evidenceComment`: string (optional); min 1
   * `evidence`: object (optional)
@@ -203,6 +203,7 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
   * `projectSelector`: object (optional)
   * `commentId`: number (optional); integer, min 0
   * `comment`: string (optional); min 1
+  * `format`: enum ["markdown", "plain"] (optional)
   * `idempotencyKey`: string (optional); min 1, max 200
   * `actor`: string (optional); min 1, max 80
   * `page`: number (optional); integer, min 0
@@ -216,10 +217,10 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 
 | Action | Required | Optional | Execution |
 | --- | --- | --- | --- |
-| `create` | taskSelector, comment, actor, idempotencyKey | projectSelector (required with taskSelector.projectIndex; optional guard otherwise) | Direct POST after identity resolution |
+| `create` | taskSelector, comment, actor, idempotencyKey | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), format (markdown default or plain) | Direct POST after identity resolution |
 | `list` | taskSelector | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), page (default 1), perPage (default 20, max 100), since, countOnly, includeLatest, maxScanPages (default 20, max 50) | Direct paginated GET or bounded newest-first MCP-side since scan. A capped since scan reports incomplete=true rather than silently truncating. |
 | `get` | taskSelector, commentId | projectSelector (required with taskSelector.projectIndex; optional guard otherwise) | Direct GET after identity resolution |
-| `update` | taskSelector, commentId, comment, actor | projectSelector (required with taskSelector.projectIndex; optional guard otherwise) | Direct PATCH after identity resolution |
+| `update` | taskSelector, commentId, comment, actor | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), format (markdown default or plain) | Direct PATCH after identity resolution |
 | `delete` | taskSelector, commentId, actor | projectSelector (required with taskSelector.projectIndex; optional guard otherwise) | Direct DELETE after identity resolution |
 
 ### `vikunja_labels`
@@ -548,7 +549,7 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 ### `vikunja_task_read`
 * **Description**: Read audit-ready tasks, bounded activity, evidence keys, lists, summaries, batches, or task time entries in Vikunja.
 * **Parameters**:
-  * `action`: enum ["get", "list", "my_tasks", "summary", "batch_get", "verify_task_state", "programme_snapshot", "task_dedupe", "lookup_external_key", "receipt_lookup", "list_time_entries", "activity", "evidence_search"] (required)
+  * `action`: enum ["get", "get_basic", "get_audit", "get_full", "list", "my_tasks", "summary", "batch_get", "verify_task_state", "programme_snapshot", "task_dedupe", "lookup_external_key", "receipt_lookup", "list_time_entries", "activity", "evidence_search"] (required)
   * `taskSelector`: object (optional)
   * `projectSelector`: object (optional)
   * `projects`: array (optional)
@@ -589,7 +590,7 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
   * `title`: string (optional); min 1
   * `externalKey`: string (optional)
   * `evidenceKey`: string (optional); min 1, max 120
-  * `operation`: enum ["task-create", "task-create-absent", "close-with-evidence", "comment-create", "attachment-upload", "attachment-delete"] (optional)
+  * `operation`: enum ["task-create", "task-create-absent", "close-with-evidence", "comment-create", "attachment-upload", "attachment-delete", "task_create", "task_create_absent", "close_with_evidence", "comment_create", "attachment_upload", "attachment_delete"] (optional)
   * `idempotencyKey`: string (optional); min 1, max 200
 
 #### Operations
@@ -609,6 +610,9 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 | `list_time_entries` | taskSelector, projectSelector | page (default 1), perPage (default 50, max 100), q, countOnly | Project-verified direct GET /tasks/{id}/time-entries. Read-only, bounded pagination. Vikunja exposes time-entry user IDs, not user profiles, on this route. |
 | `activity` | taskSelector | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), activityLimit (default 20, max 100) | MCP-composed current task audit metadata plus bounded recent comments. Field-level server history is reported unavailable when the Vikunja API does not expose it. |
 | `evidence_search` | projectSelector, evidenceKey | maxTasks (default 100), includeComments (default true) | Bounded project scan of exact task title, description, and recent comment evidence. An incomplete scan never proves evidence-key absence. |
+| `get_basic` | taskSelector | projectSelector (required with taskSelector.projectIndex; optional guard otherwise) | Read identity, title, completion, updatedAt, and URL without expansion |
+| `get_audit` | taskSelector | projectSelector (required with taskSelector.projectIndex; optional guard otherwise) | Read the default audit fields without comments or attachments |
+| `get_full` | taskSelector | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), commentLimit, attachmentLimit, maxResponseChars | Read task details with bounded comments and attachments |
 
 ### `vikunja_task_write`
 * **Description**: Create, duplicate, upsert, update, or delete Vikunja tasks with identity and write guards.
