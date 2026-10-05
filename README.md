@@ -23,7 +23,7 @@ Codex / Claude -> vikunja-mcp -> /api/v2/mcp
 ```
 
 Clients need only the npm package and the command `vikunja-mcp`. In Vikunja
-Settings > MCP, create a token with MCP access and the action permissions you
+Settings > MCP, create a token with MCP access (`mcp:access`) and the action permissions you
 need. Set it as `VIKUNJA_API_TOKEN` in the environment that launches the client.
 Files, exports, and webhooks also need their REST permissions on that same token.
 No second MCP installation or client connection is required.
@@ -61,7 +61,8 @@ timestamp), `get_audit` (audit metadata), or `get_full` (bounded child details).
 
 - Node.js 24 LTS+
 - Vikunja 2.7.0+ with native `/api/v2/mcp`, or explicit REST mode for older servers
-- Vikunja API token with access to the projects you need
+- Vikunja token with `mcp:access`, the required action permissions, and project access
+  for native mode. Project access or REST permissions alone are not enough.
 
 ## Install
 
@@ -102,15 +103,20 @@ Install or update the Vikunja MCP server for the current user:
 3. Keep or create a stdio MCP server named `vikunja` whose command is
    `vikunja-mcp` with no arguments. Never use a checkout, junction, tarball,
    release download, or `dist` path.
-4. Preserve existing `VIKUNJA_URL` and `VIKUNJA_API_TOKEN` values without
-   printing them. Ask for missing values through a secret-safe input method.
-5. Run `npm root -g` and locate the packaged `skills/vikunja-fastmcp` folder.
+4. Preserve existing `VIKUNJA_URL`, `VIKUNJA_API_TOKEN`, and
+   `VIKUNJA_API_TOKEN_FILE` settings without printing secrets. A protected token
+   file can replace the environment token. Use secret-safe input for missing credentials.
+5. Native mode requires Vikunja 2.7+ and a token with MCP access (`mcp:access`)
+   plus permission for every action used. Ask the user to create it in
+   Settings > MCP if needed. REST permissions alone do not grant MCP access.
+   Never switch to REST just to bypass a missing MCP permission.
+6. Run `npm root -g` and locate the packaged `skills/vikunja-fastmcp` folder.
    If the client supports skills, install it when missing; otherwise refresh
    the existing copy in place. Reuse one user-wide copy and remove no other
    skill unless it is an exact duplicate of this packaged skill.
-6. If the client has no skill-folder support, merge `SKILL.md` into its
+7. If the client has no skill-folder support, merge `SKILL.md` into its
    persistent agent instructions. Do not create a second conflicting copy.
-7. Restart the MCP client. Report the installed package version, resolved
+8. Restart the MCP client. Report the installed package version, resolved
    command path, MCP config path, and active skill path without showing secrets.
 ```
 
@@ -141,6 +147,7 @@ Required:
 
 - `VIKUNJA_URL`: server root or `/api/v2` URL.
 - `VIKUNJA_API_TOKEN`: bearer token; required unless `VIKUNJA_API_TOKEN_FILE` is used.
+  Native mode requires `mcp:access` plus the required action permissions.
 
 Optional:
 
@@ -209,9 +216,32 @@ and receipt safeguards remain active.
 }
 ```
 
-Create an API token in Vikunja under **Settings -> API Tokens**. Use the
-`/api/v2` URL for your own Vikunja server. Store the token only in local MCP
-configuration or a secret store.
+For native mode, create a token under **Settings -> MCP** with MCP access
+(`mcp:access`) and permissions for the actions you need. Use your server's
+`/api/v2` URL. Store the token only in local MCP configuration or a secret store.
+Transfers and excluded REST utilities also need their permissions on the same token.
+
+## FAQ
+
+### Does my existing REST API token work with native MCP?
+
+Only if it also has MCP access (`mcp:access`) and the required action permissions.
+A token that works for REST task reads can still be rejected by `/api/v2/mcp`.
+In Vikunja 2.7+, create the token under **Settings -> MCP** with those permissions.
+The encrypted DPAPI file stores the token; it does not add permissions to it.
+
+### Why does native MCP return 403?
+
+Check that the token has `mcp:access`, permission for the requested action, and
+access to the target project. MCP access alone does not grant every action.
+Use a correctly scoped token, update its local secret storage, and restart the
+client. Never print the token or switch to REST to bypass the permission check.
+
+### What if my server is older than Vikunja 2.7?
+
+Set `VIKUNJA_MCP_BACKEND=rest` explicitly and use a token with the necessary
+REST permissions. This compatibility mode does not need `mcp:access` because
+it does not connect to native MCP. In the default native mode, MCP access is required.
 
 ## Local Development
 
