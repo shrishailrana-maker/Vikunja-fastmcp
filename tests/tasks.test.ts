@@ -1618,15 +1618,13 @@ describe('Tasks List and Scoping tests', () => {
       expect(details.attachments[0].fileName).toBe('log.txt');
       expect(details.composedCalls).toEqual([
         'GET /tasks/9005',
-        'GET /tasks/9005/comments?sort_by=created&order_by=desc&page=1&per_page=5',
+        'GET /tasks/9005/comments?order_by=desc&page=1&per_page=5',
         'GET /tasks/9005/attachments?page=1&per_page=20',
       ]);
       const urls = mockFetch.mock.calls.map((c: any) => c[0]);
       expect(urls.some((u: string) => u.includes('expand=comments'))).toBe(false);
       expect(
-        urls.some((u: string) =>
-          u.includes('/comments?sort_by=created&order_by=desc&page=1&per_page=5'),
-        ),
+        urls.some((u: string) => u.includes('/comments?order_by=desc&page=1&per_page=5')),
       ).toBe(true);
     });
 
@@ -1709,7 +1707,7 @@ describe('Tasks List and Scoping tests', () => {
       expect(details.comments.length).toBe(1);
       expect(details.comments[0].comment).toBe('hi');
       expect(details.composedCalls).toContain(
-        'GET /tasks/9005/comments?sort_by=created&order_by=desc&page=1&per_page=5',
+        'GET /tasks/9005/comments?order_by=desc&page=1&per_page=5',
       );
     });
 

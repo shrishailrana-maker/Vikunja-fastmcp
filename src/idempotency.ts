@@ -237,7 +237,7 @@ export async function runDurableOperation<T>(
   }
 }
 
-function defaultDatabasePath(): string {
+export function defaultDatabasePath(): string {
   if (process.env.JEST_WORKER_ID) return ':memory:';
   if (process.env.VIKUNJA_IDEMPOTENCY_DB_PATH?.trim()) {
     return process.env.VIKUNJA_IDEMPOTENCY_DB_PATH.trim();
@@ -246,12 +246,6 @@ function defaultDatabasePath(): string {
     process.env.LOCALAPPDATA ?? process.env.XDG_STATE_HOME ?? join(homedir(), '.local', 'state');
   const instanceHash = createHash('sha256')
     .update(process.env.VIKUNJA_URL?.trim() || 'default-instance')
-    .update('\0')
-    .update(
-      createHash('sha256')
-        .update(process.env.VIKUNJA_API_TOKEN?.trim() || 'default-credential')
-        .digest('hex'),
-    )
     .digest('hex')
     .slice(0, 16);
   return join(stateRoot, 'vikunja-fastmcp', `idempotency-${instanceHash}.sqlite`);
@@ -653,6 +647,6 @@ export function lookupDurableOperationReceipt(namespace: string, callerKey: stri
     operation: namespace,
     status: entry.value?.status ?? 'completed',
     result: entry.value?.result ?? entry.value,
-    updatedAt: new Date(entry.updatedAt).toISOString(),
+    recordedAt: new Date(entry.updatedAt).toISOString(),
   };
 }

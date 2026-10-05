@@ -2,6 +2,17 @@
 
 ## Unreleased - 2.7.0
 
+**BREAKING:** the default backend is now Vikunja 2.7 native MCP. Servers older than 2.7 must set VIKUNJA_MCP_BACKEND=rest.
+
+- Fix native comment queries and nullable OpenAPI query types; recover an expired
+  session once without REST replay. Keep tool discovery available offline.
+- Distinguish absent native MCP, expired sessions, tool errors, and successful
+  text results. Normalize backend selection and reject unknown tool names.
+- Keep server `updatedAt` nullable and use `recordedAt` for local receipt time,
+  including receipt lookup. Keep ledger paths stable across token storage modes.
+- Support Windows PowerShell fallback for DPAPI with fixed, secret-safe errors;
+  clarify credential requirements and the native profile's actual tool surface.
+
 - Default to a local stdio shell around Vikunja 2.7's native MCP, using one
   token and one client configuration. Forward authorized native tools and
   action discovery alongside campaign wrappers.

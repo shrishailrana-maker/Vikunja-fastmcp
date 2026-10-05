@@ -18,7 +18,8 @@ Use our `vikunja_task_write`, comments, workflow, and bulk tools for writes that
 need actor attribution, stable retry keys, evidence, or durable row receipts.
 Raw native tools retain the server's semantics and do not add local receipts.
 
-`VIKUNJA_API_TOKEN` must have MCP access and permissions for the actions used.
+`VIKUNJA_API_TOKEN` is required unless `VIKUNJA_API_TOKEN_FILE` is used.
+The token must have MCP access and permissions for the actions used.
 Create it in Settings > MCP; REST utilities such as exports/files also need
 their permissions on this token. `self_check` reports backend and native
 connection status. For an older server, explicitly select
@@ -27,8 +28,37 @@ repeating the write through another backend can create duplicates.
 
 On Windows, prefer the user-bound DPAPI token file configured through
 `VIKUNJA_API_TOKEN_FILE`. The default file is under LOCALAPPDATA in the
-vikunja-fastmcp directory. It takes precedence over a plaintext environment
-token. Never display or copy the decrypted token into source or logs.
+vikunja-fastmcp directory (`%LOCALAPPDATA%\vikunja-fastmcp\native-api-token.dpapi`).
+It takes precedence over `VIKUNJA_API_TOKEN`; an empty value disables the default.
+It requires Windows and PowerShell: `pwsh` (PowerShell 7) or `powershell.exe`.
+Never display or copy the decrypted token into source or logs.
+
+### Native profile tools
+
+- `self_check`
+- `vikunja_task_read`
+- `vikunja_task_write`
+- `vikunja_task_workflow`
+- `vikunja_task_comments`
+- `vikunja_task_organize`
+- `vikunja_task_attachments`
+- `vikunja_task_bulk`
+- `vikunja_export_project`
+- `vikunja_project_migration`
+- `vikunja_batch_import`
+- `vikunja_download_user_export`
+- `vikunja_request_user_export`
+- `vikunja_templates`
+- `vikunja_webhooks`
+- `find_action`
+- `do_action`
+
+These typed tools are non-native profiles only; in native mode use `find_action` / `do_action`:
+`vikunja_notifications`, `vikunja_account_email`, `vikunja_admin_users`,
+`vikunja_external_migration`, `vikunja_projects`, `vikunja_labels`, `vikunja_users`,
+`vikunja_teams`, `vikunja_filters`, `vikunja_task_reminders`, and `vikunja_auth`.
+Only actions exposed by the server and token are available; excluded account,
+admin, or migration operations may have no native equivalent.
 
 ## Start
 
@@ -109,6 +139,9 @@ token. Never display or copy the decrypted token into source or logs.
   actions avoid choosing response modes and projections manually.
 - Receipt lookup accepts `close_with_evidence` and other underscore operation
   aliases; existing dash spellings remain valid.
+- `receipt_lookup.recordedAt` is local ledger time, not a server update timestamp.
+  A missing server `updatedAt` remains `null`; do not pass `recordedAt` as
+  `expectedUpdatedAt`.
 
 - Lists default to open tasks. Use `allStates: true` for open and closed tasks.
 - Use `q` for ordinary free-text task search; `search` is an equivalent alias.
@@ -179,7 +212,8 @@ token. Never display or copy the decrypted token into source or logs.
   user's unread state. It is an idempotent server no-op when already read, but
   still requires explicit selectors, actor attribution, and a stable receipt
   key in this MCP.
-- Vikunja 2.6 adds `vikunja_notifications` for bounded list and confirmed
+- Non-native profiles only; in native mode use `find_action` / `do_action`.
+  Vikunja 2.6 adds `vikunja_notifications` for bounded list and confirmed
   mark-all-read/clear actions, `vikunja_account_email` for confirmed pending
   email cancellation or resend without returning email addresses, and
   `vikunja_admin_users` for PII-minimized Pro-gated admin listing. Use

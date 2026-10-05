@@ -140,10 +140,14 @@ versioned or project-local copies. Restart the client after refreshing it.
 Required:
 
 - `VIKUNJA_URL`: server root or `/api/v2` URL.
-- `VIKUNJA_API_TOKEN`: bearer token created in Vikunja.
+- `VIKUNJA_API_TOKEN`: bearer token; required unless `VIKUNJA_API_TOKEN_FILE` is used.
 
 Optional:
 
+- `VIKUNJA_API_TOKEN_FILE`: Windows DPAPI token file. Defaults to
+  `%LOCALAPPDATA%\vikunja-fastmcp\native-api-token.dpapi` when that file exists.
+  Takes precedence over `VIKUNJA_API_TOKEN`; an empty value disables the default.
+  Works on Windows with PowerShell only: `pwsh` (PowerShell 7), or `powershell.exe`.
 - `VIKUNJA_WEB_URL`: browser base for task and project links.
 - `VIKUNJA_ATTACHMENT_DOWNLOAD_ROOT`: sandboxed download root. Defaults under
   the operating-system temp directory.
@@ -159,7 +163,7 @@ Optional:
   `standard`, or `full`. `minimal` and `receipt` return structured JSON only.
 - `VIKUNJA_MCP_BACKEND`: `native` (default) or explicit `rest` compatibility.
 - `VIKUNJA_MCP_TOOL_PROFILE`: `native` (default), `core`, `qa`, `developer`, `full`, or
-  `compatibility`. The first four profiles expose the complete typed tool set;
+  `compatibility`. `core`, `qa`, `developer`, and `full` expose the complete typed set;
   `compatibility` also exposes the legacy broad `vikunja_tasks` router.
 - `VIKUNJA_REQUEST_TIMEOUT_MS`: ordinary request timeout. Defaults to 30000.
 - `VIKUNJA_TRANSFER_TIMEOUT_MS`: streamed and multipart inactivity timeout.
@@ -230,6 +234,35 @@ tests. See [`fallback/README.md`](fallback/README.md) for the archive policy.
 
 ## Tools
 
+### Native profile tools
+
+The default native profile exposes these campaign tools plus `find_action` and `do_action`:
+
+- `self_check`
+- `vikunja_task_read`
+- `vikunja_task_write`
+- `vikunja_task_workflow`
+- `vikunja_task_comments`
+- `vikunja_task_organize`
+- `vikunja_task_attachments`
+- `vikunja_task_bulk`
+- `vikunja_export_project`
+- `vikunja_project_migration`
+- `vikunja_batch_import`
+- `vikunja_download_user_export`
+- `vikunja_request_user_export`
+- `vikunja_templates`
+- `vikunja_webhooks`
+
+These typed tools are non-native profiles only; in native mode use `find_action` / `do_action`:
+`vikunja_notifications`, `vikunja_account_email`, `vikunja_admin_users`,
+`vikunja_external_migration`, `vikunja_projects`, `vikunja_labels`, `vikunja_users`,
+`vikunja_teams`, `vikunja_filters`, `vikunja_task_reminders`, and `vikunja_auth`.
+Discovery only returns actions exposed by the server and token; it does not
+promise a native equivalent for an excluded account/admin/migration operation.
+
+### Non-native profile reference
+
 The compatibility `core`, `qa`, `developer`, and `full` profiles expose the complete typed
 tool set instead of the broad compatibility router:
 
@@ -282,8 +315,11 @@ Task updates, assignment changes, and label removal return `unchanged` when the
 requested state already exists. Task create, create-if-absent, comment create,
 attachment upload/deletion, evidence-close, and every mutating bulk call require a
 stable `idempotencyKey`. Reusing one key with a different payload is rejected.
-Receipts survive MCP restarts and concurrent local agent processes. They are
-protected by an atomic local execution lease, but are not a distributed lock
+Receipts survive MCP restarts and concurrent local agent processes.
+`updatedAt` is the server task timestamp, or `null` when unavailable; never use
+local time as `expectedUpdatedAt`. `recordedAt` is local receipt time, including
+`receipt_lookup`, and is not an update precondition.
+Receipts are protected by an atomic local execution lease, but are not a distributed lock
 across different machines. The ledger directory is private to the current user
 where the operating system supports POSIX permissions.
 

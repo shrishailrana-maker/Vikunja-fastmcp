@@ -254,7 +254,8 @@ describe('Comments and Compound Operations tests', () => {
         since: '2026-07-11T00:00:00Z',
       });
       expect(mockFetch.mock.calls[1][0]).toContain('order_by=desc&page=1&per_page=100');
-      expect(mockFetch.mock.calls[1][0]).toContain('sort_by=created');
+      expect(mockFetch.mock.calls[1][0]).toContain('order_by=desc');
+      expect(mockFetch.mock.calls[1][0]).not.toContain('sort_by');
     });
 
     it('should get comment details', async () => {

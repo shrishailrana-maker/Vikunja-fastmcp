@@ -604,7 +604,8 @@ function finalizeTaskMutationReceipt(
             target,
           }
         : null),
-    updatedAt: contextualResult?.updatedAt ?? new Date().toISOString(),
+    updatedAt: contextualResult?.updatedAt ?? null,
+    recordedAt: contextualResult?.recordedAt ?? new Date().toISOString(),
     verification:
       contextualResult?.verification ??
       ({ verdict: dryRun ? 'PREVIEW' : partial ? 'PARTIAL' : 'NOT_REQUESTED' } as const),
@@ -966,7 +967,8 @@ export const TOOLS: McpToolDefinition[] = [
           'attachment_upload',
           'attachment_delete',
         ])
-        .optional(),
+        .optional()
+        .describe('Receipt lookup returns recordedAt (local ledger time), not a server updatedAt.'),
       expectedUpdatedAt: z.string().optional(),
       evidenceComment: z.string().trim().min(1).optional(),
       evidence: z
@@ -2791,14 +2793,14 @@ function getActiveTools(): McpToolDefinition[] {
   const profile = loadToolProfile();
   return selectToolsForProfile(
     TOOLS,
-    profile === 'native' && process.env.VIKUNJA_MCP_BACKEND === 'rest' ? 'core' : profile,
+    profile === 'native' && loadConfig().backend === 'rest' ? 'core' : profile,
   );
 }
 
 // Register Stdio Handlers
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   const nativeTools =
-    loadToolProfile() === 'native' && process.env.VIKUNJA_MCP_BACKEND !== 'rest'
+    loadToolProfile() === 'native' && loadConfig().backend !== 'rest'
       ? await getNativeMcp(loadConfig()).listShellTools()
       : [];
   return {
@@ -2954,11 +2956,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const tool = getActiveTools().find((t) => t.name === name);
 
   if (!tool) {
-    if (loadToolProfile() === 'native' && process.env.VIKUNJA_MCP_BACKEND !== 'rest') {
+    if (loadToolProfile() === 'native' && loadConfig().backend !== 'rest') {
       try {
         const config = loadConfig();
-        const result = await getNativeMcp(config).callShellTool(name, args ?? {});
-        return JSON.parse(redactSecrets(JSON.stringify(result), config.vikunjaToken));
+        const native = getNativeMcp(config);
+        if (
+          ['find_action', 'do_action'].includes(name) ||
+          (await native.listTools()).some((entry) => entry.name === name)
+        ) {
+          const result = await native.callShellTool(name, args ?? {});
+          return JSON.parse(redactSecrets(JSON.stringify(result), config.vikunjaToken));
+        }
       } catch (error) {
         return failureToolResult(
           'Native MCP call failed.',

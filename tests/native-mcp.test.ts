@@ -1,14 +1,20 @@
-import { beforeEach, afterEach, describe, expect, it } from '@jest/globals';
+import { beforeEach, afterEach, describe, expect, it, jest } from '@jest/globals';
 import { createServer, type Server as HttpServer } from 'node:http';
+import fs from 'node:fs';
 import { VikunjaApiClient } from '../src/api.js';
-import { closeNativeConnections, getNativeMcp } from '../src/native-mcp.js';
+import { closeNativeConnections, getNativeMcp, nativeResultData } from '../src/native-mcp.js';
 import { nativeArguments, nativeRoutes, NATIVE_ACTIONS } from '../src/native-routes.js';
-import { createComment } from '../src/comments.js';
+import { createComment, listComments } from '../src/comments.js';
 import { idempotency } from '../src/idempotency.js';
 import { cache } from '../src/identity.js';
 import { loadConfig, type Config } from '../src/config.js';
 import { server as shellServer } from '../src/index.js';
-import { closeWithStructuredEvidence } from '../src/tasks.js';
+import { closeWithStructuredEvidence, createTask, getTask } from '../src/tasks.js';
+import { toErrorEnvelope } from '../src/errors.js';
+
+const realSpec = JSON.parse(
+  fs.readFileSync(new URL('../docs/vikunja-v2-openapi.json', import.meta.url), 'utf8'),
+);
 
 const schema = (name: string, location = 'path', type = 'integer') => ({
   name,
@@ -46,6 +52,15 @@ describe('native MCP shell transport', () => {
   let writeFailure: boolean;
   let noOp: boolean;
   let deniedAction: boolean;
+  let spec: any;
+  let nativeHttpStatus: number;
+  let sessions: boolean;
+  let expireSession: boolean;
+  let persistExpiry: boolean;
+  let initializations: number;
+  let successfulText: string | undefined;
+  let toolError: string | undefined;
+  let missingUpdated: boolean;
   let oldNativeEnv: Record<string, string | undefined>;
   const task = {
     id: 12,
@@ -73,6 +88,15 @@ describe('native MCP shell transport', () => {
     writeFailure = false;
     noOp = false;
     deniedAction = false;
+    spec = openapi;
+    nativeHttpStatus = 0;
+    sessions = false;
+    expireSession = false;
+    persistExpiry = false;
+    initializations = 0;
+    successfulText = undefined;
+    toolError = undefined;
+    missingUpdated = false;
     idempotency.clear();
     cache.clearProjects();
     http = createServer(async (request, response) => {
@@ -83,7 +107,7 @@ describe('native MCP shell transport', () => {
       calls.push({ method: request.method ?? '', path, rpc });
       response.setHeader('Content-Type', 'application/json');
       if (path === '/api/v2/openapi.json') {
-        response.end(JSON.stringify(openapi));
+        response.end(JSON.stringify(spec));
         return;
       }
       if (path === '/api/v2/user') {
@@ -100,6 +124,11 @@ describe('native MCP shell transport', () => {
         response.end(JSON.stringify({ detail: 'Missing mcp:access' }));
         return;
       }
+      if (nativeHttpStatus) {
+        response.statusCode = nativeHttpStatus;
+        response.end('{}');
+        return;
+      }
       if (request.method !== 'POST') {
         response.statusCode = 405;
         response.end('{}');
@@ -112,6 +141,8 @@ describe('native MCP shell transport', () => {
       }
       let result: any;
       if (rpc.method === 'initialize') {
+        initializations += 1;
+        if (sessions) response.setHeader('Mcp-Session-Id', `session-${initializations}`);
         result = {
           protocolVersion: '2025-06-18',
           capabilities: { tools: {} },
@@ -132,6 +163,9 @@ describe('native MCP shell transport', () => {
             { name: 'task_comments_create', inputSchema: { type: 'object' } },
             { name: 'task_comments_list', inputSchema: { type: 'object' } },
             { name: 'projects_read', inputSchema: { type: 'object' } },
+            { name: 'project_tasks_list', inputSchema: { type: 'object' } },
+            { name: 'task_attachments_list', inputSchema: { type: 'object' } },
+            { name: 'tasks_create', inputSchema: { type: 'object' } },
             { name: 'find_action', inputSchema: { type: 'object' } },
             { name: 'do_action', inputSchema: { type: 'object' } },
           ],
@@ -142,6 +176,19 @@ describe('native MCP shell transport', () => {
             { type: 'text', text: JSON.stringify({ actions: [{ name: 'tasks_read_by_index' }] }) },
           ],
         };
+      } else if (
+        expireSession &&
+        rpc.method === 'tools/call' &&
+        rpc.params.name === 'tasks_read' &&
+        (persistExpiry || request.headers['mcp-session-id'] === 'session-1')
+      ) {
+        response.statusCode = 404;
+        response.end('{}');
+        return;
+      } else if (rpc.params.name === 'tasks_update' && successfulText !== undefined) {
+        result = { isError: false, content: [{ type: 'text', text: successfulText }] };
+      } else if (rpc.params.name === 'tasks_update' && toolError !== undefined) {
+        result = { isError: true, content: [{ type: 'text', text: toolError }] };
       } else if (rpc.params.name === 'tasks_update' && writeFailure) {
         result = {
           isError: true,
@@ -164,10 +211,25 @@ describe('native MCP shell transport', () => {
           content: [],
           structuredContent: { items: [], page: 1, per_page: 100, total: 0, total_pages: 0 },
         };
+      } else if (
+        rpc.params.name === 'task_attachments_list' ||
+        rpc.params.name === 'project_tasks_list'
+      ) {
+        result = {
+          content: [],
+          structuredContent: { items: [], page: 1, per_page: 100, total: 0, total_pages: 0 },
+        };
       } else if (rpc.params.name === 'projects_read') {
         result = { content: [], structuredContent: { id: 7, title: 'Alpha' } };
       } else {
-        result = { content: [{ type: 'text', text: JSON.stringify(task) }] };
+        result = {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ ...task, ...(missingUpdated ? { updated: undefined } : {}) }),
+            },
+          ],
+        };
       }
       response.end(JSON.stringify({ jsonrpc: '2.0', id: rpc.id, result }));
     });
@@ -205,6 +267,201 @@ describe('native MCP shell transport', () => {
     expect(calls.filter((call) => call.rpc?.method === 'initialize')).toHaveLength(1);
     expect(calls.filter((call) => call.path === '/api/v2/tasks/12')).toHaveLength(0);
     expect(calls.filter((call) => call.rpc?.params?.name === 'tasks_read')).toHaveLength(2);
+  });
+
+  it('reads default five comments and since/includeLatest lists through the real 2.7 spec', async () => {
+    spec = realSpec;
+    const details = await getTask(client, { globalId: 12 }, undefined, undefined, 'full');
+    expect(details).toHaveProperty('comments', []);
+    await expect(
+      listComments(client, { globalId: 12 }, undefined, 1, 20, {
+        since: '2026-10-01T00:00:00Z',
+        includeLatest: true,
+      }),
+    ).resolves.toHaveProperty('comments', []);
+    await expect(
+      listComments(client, { globalId: 12 }, undefined, 1, 20, {
+        includeLatest: true,
+      }),
+    ).resolves.toHaveProperty('comments', []);
+    const commentCalls = calls.filter((call) => call.rpc?.params?.name === 'task_comments_list');
+    expect(commentCalls.map((call) => call.rpc.params.arguments)).toEqual(
+      expect.arrayContaining([
+        { task: 12, order_by: 'desc', page: 1, per_page: 5 },
+        { task: 12, order_by: 'desc', page: 1, per_page: 100 },
+        { task: 12, order_by: 'desc', page: 1, per_page: 1 },
+      ]),
+    );
+    for (const call of commentCalls)
+      expect(call.rpc.params.arguments).not.toHaveProperty('sort_by');
+  });
+
+  it('passes both nullable-array sort keys and orders from the real spec to native', async () => {
+    spec = realSpec;
+    await client.request(
+      'GET',
+      '/projects/7/tasks?sort_by=updated&sort_by=id&order_by=desc&order_by=asc',
+    );
+    expect(
+      calls.find((call) => call.rpc?.params?.name === 'project_tasks_list')?.rpc.params.arguments,
+    ).toEqual({ project: 7, sort_by: ['updated', 'id'], order_by: ['desc', 'asc'] });
+  });
+
+  it('reconnects exactly once when an established native session expires', async () => {
+    sessions = true;
+    expireSession = true;
+    await expect(client.request('GET', '/tasks/12')).resolves.toEqual(task);
+    expect(initializations).toBe(2);
+    expect(calls.filter((call) => call.rpc?.params?.name === 'tasks_read')).toHaveLength(2);
+  });
+
+  it('reports persistent session expiry as 503 rather than task not found', async () => {
+    sessions = true;
+    expireSession = true;
+    persistExpiry = true;
+    await expect(client.request('GET', '/tasks/12')).rejects.toMatchObject({
+      status: 503,
+      code: 'NATIVE_SESSION_EXPIRED',
+    });
+    expect(initializations).toBe(2);
+    expect(calls.filter((call) => call.rpc?.params?.name === 'tasks_read')).toHaveLength(2);
+  });
+
+  it.each([404, 405])(
+    'explains missing native MCP HTTP %i with explicit REST remediation',
+    async (status) => {
+      nativeHttpStatus = status;
+      await expect(client.request('GET', '/tasks/12')).rejects.toMatchObject({
+        status: 503,
+        code: 'NATIVE_MCP_UNAVAILABLE',
+        message: 'Vikunja 2.7+ native MCP not found at /api/v2/mcp; set VIKUNJA_MCP_BACKEND=rest',
+      });
+    },
+  );
+
+  it.each(['', 'Write completed'])(
+    'keeps successful text %j as a successful single write',
+    async (text) => {
+      successfulText = text;
+      await expect(client.request('PATCH', '/tasks/12', { body: { done: true } })).resolves.toEqual(
+        text ? { message: text } : {},
+      );
+      expect(calls.filter((call) => call.rpc?.params?.name === 'tasks_update')).toHaveLength(1);
+    },
+  );
+
+  it.each([
+    ['Label 412 missing', 422, 'NATIVE_TOOL_ERROR', false],
+    ['403 forbidden', 403, 'PERMISSION_DENIED', false],
+    ['Timeout mentioned by a tool is not an SDK timeout', 422, 'NATIVE_TOOL_ERROR', false],
+  ])(
+    'maps native error %s without parsing embedded numbers or timeout prose',
+    async (text, status, code, retryable) => {
+      toolError = String(text);
+      try {
+        await client.request('PATCH', '/tasks/12', { body: { done: true } });
+        throw new Error('Expected native error');
+      } catch (error) {
+        expect(toErrorEnvelope(error).error).toMatchObject({ status, code, retryable });
+      }
+    },
+  );
+
+  it('keeps missing server updatedAt null in creation and shell mutation receipts', async () => {
+    spec = realSpec;
+    missingUpdated = true;
+    const receipt = await createTask(
+      client,
+      { id: 7 },
+      { title: 'Evidence task' },
+      'native-no-time',
+      undefined,
+      'Codex',
+    );
+    expect(receipt).toMatchObject({ updatedAt: null, recordedAt: expect.any(String) });
+    process.env.VIKUNJA_URL = config.vikunjaUrl;
+    process.env.VIKUNJA_API_TOKEN = config.vikunjaToken;
+    process.env.VIKUNJA_API_TOKEN_FILE = '';
+    process.env.VIKUNJA_MCP_BACKEND = 'native';
+    process.env.VIKUNJA_MCP_TOOL_PROFILE = 'native';
+    const call = (shellServer as any)._requestHandlers.get('tools/call');
+    const result = await call({
+      method: 'tools/call',
+      params: {
+        name: 'vikunja_task_write',
+        arguments: {
+          action: 'create',
+          projectSelector: { id: 7 },
+          fields: { title: 'Evidence task' },
+          idempotencyKey: 'native-shell-no-time',
+          actor: 'Codex',
+        },
+      },
+    });
+    expect(result.isError).toBeUndefined();
+    expect(result.structuredContent.data).toMatchObject({
+      updatedAt: null,
+      recordedAt: expect.any(String),
+    });
+  });
+
+  it('lists static shell tools including self_check while native fetch fails', async () => {
+    process.env.VIKUNJA_URL = config.vikunjaUrl;
+    process.env.VIKUNJA_API_TOKEN = config.vikunjaToken;
+    process.env.VIKUNJA_API_TOKEN_FILE = '';
+    process.env.VIKUNJA_MCP_BACKEND = 'native';
+    process.env.VIKUNJA_MCP_TOOL_PROFILE = 'native';
+    const fetchMock = jest.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('fetch failed'));
+    try {
+      const list = (shellServer as any)._requestHandlers.get('tools/list');
+      const result = await list({ method: 'tools/list' });
+      expect(result.tools.map((tool: any) => tool.name)).toEqual(
+        expect.arrayContaining(['self_check', 'find_action', 'do_action']),
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  it('normalizes REST with trailing whitespace for all shell backend decisions', async () => {
+    process.env.VIKUNJA_URL = config.vikunjaUrl;
+    process.env.VIKUNJA_API_TOKEN = config.vikunjaToken;
+    process.env.VIKUNJA_API_TOKEN_FILE = '';
+    process.env.VIKUNJA_MCP_BACKEND = 'REST ';
+    process.env.VIKUNJA_MCP_TOOL_PROFILE = 'native';
+    const list = (shellServer as any)._requestHandlers.get('tools/list');
+    const result = await list({ method: 'tools/list' });
+    expect(result.tools.map((tool: any) => tool.name)).toContain('vikunja_projects');
+    expect(result.tools.map((tool: any) => tool.name)).not.toContain('find_action');
+    const call = (shellServer as any)._requestHandlers.get('tools/call');
+    const unknown = await call({
+      method: 'tools/call',
+      params: { name: 'tasks_read', arguments: {} },
+    });
+    expect(unknown.structuredContent.error.message).toBe('Tool not found: tasks_read');
+    expect(initializations).toBe(0);
+  });
+
+  it('rejects a hidden local tool rather than forwarding it as a native permission error', async () => {
+    process.env.VIKUNJA_URL = config.vikunjaUrl;
+    process.env.VIKUNJA_API_TOKEN = config.vikunjaToken;
+    process.env.VIKUNJA_API_TOKEN_FILE = '';
+    process.env.VIKUNJA_MCP_BACKEND = 'native';
+    process.env.VIKUNJA_MCP_TOOL_PROFILE = 'native';
+    const call = (shellServer as any)._requestHandlers.get('tools/call');
+    const result = await call({
+      method: 'tools/call',
+      params: { name: 'vikunja_projects', arguments: {} },
+    });
+    expect(result.structuredContent.error).toMatchObject({
+      status: 400,
+      message: 'Tool not found: vikunja_projects',
+    });
+    await expect(getNativeMcp(config).callShellTool('vikunja_projects', {})).rejects.toMatchObject({
+      status: 400,
+    });
+    expect(calls.filter((entry) => entry.rpc?.params?.name === 'vikunja_projects')).toHaveLength(0);
   });
 
   it('calls catalog actions through do_action and retains the native tool schemas', async () => {
@@ -364,6 +621,34 @@ describe('native MCP shell transport', () => {
 });
 
 describe('native route conversion', () => {
+  it('accepts empty success content without inventing an API failure', () => {
+    expect(nativeResultData({ isError: false, content: [] })).toEqual({});
+  });
+
+  it('normalizes nullable numeric and boolean scalar types', () => {
+    const routes = nativeRoutes(
+      {
+        paths: {
+          '/tasks/{task}': {
+            get: {
+              operationId: 'tasks-read',
+              parameters: [
+                { name: 'task', in: 'path', schema: { type: ['integer', 'null'] } },
+                { name: 'flag', in: 'query', schema: { type: ['boolean', 'null'] } },
+                { name: 'value', in: 'query', schema: { type: ['number', 'null'] } },
+              ],
+            },
+          },
+        },
+      },
+      NATIVE_ACTIONS,
+    );
+    expect(nativeArguments(routes[0], '/tasks/12?flag=true&value=1.5')).toEqual({
+      task: 12,
+      flag: true,
+      value: 1.5,
+    });
+  });
   it('rejects nested JSON Patch rather than silently changing its meaning', () => {
     const route = nativeRoutes(openapi, NATIVE_ACTIONS).find((item) => item.method === 'PATCH')!;
     expect(() =>

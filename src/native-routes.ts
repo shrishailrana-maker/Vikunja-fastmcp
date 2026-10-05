@@ -86,12 +86,13 @@ function argumentError(message: string): VikunjaError {
 }
 
 function scalar(value: string, schema: any): unknown {
-  if (schema?.type === 'integer' || schema?.type === 'number') {
+  const types = [schema?.type].flat();
+  if (types.includes('integer') || types.includes('number')) {
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) throw argumentError('Invalid numeric native argument.');
     return numeric;
   }
-  if (schema?.type === 'boolean') {
+  if (types.includes('boolean')) {
     if (value !== 'true' && value !== 'false')
       throw argumentError('Invalid boolean native argument.');
     return value === 'true';
@@ -116,12 +117,12 @@ export function nativeArguments(
     const parameter = route.parameters.find((p) => p.in === 'query' && p.name === name);
     if (!parameter) throw argumentError(`The native API does not support query argument ${name}.`);
     const values = url.searchParams.getAll(name);
-    args[name] =
-      parameter.schema?.type === 'array'
-        ? values
-            .flatMap((value) => (parameter.explode ? [value] : value.split(',')))
-            .map((value) => scalar(value, parameter.schema.items))
-        : scalar(values[0], parameter.schema);
+    const types = [parameter.schema?.type].flat();
+    args[name] = types.includes('array')
+      ? values
+          .flatMap((value) => (parameter.explode ? [value] : value.split(',')))
+          .map((value) => scalar(value, parameter.schema.items))
+      : scalar(values[0], parameter.schema);
   }
   if (Array.isArray(body)) {
     if (route.method !== 'PATCH') throw argumentError('Native request bodies must be objects.');

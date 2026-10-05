@@ -781,7 +781,8 @@ describe('MCP Server Registration and Dispatching tests', () => {
         idempotency: { state: 'recorded' },
         before: { exists: false },
         after: expect.objectContaining({ exists: true, title: 'Composed task' }),
-        updatedAt: expect.any(String),
+        updatedAt: null,
+        recordedAt: expect.any(String),
         verification: { verdict: 'NOT_REQUESTED' },
         firstComment: { status: 'created', id: 7001, created: '2026-08-02T10:00:00Z' },
         relations: [

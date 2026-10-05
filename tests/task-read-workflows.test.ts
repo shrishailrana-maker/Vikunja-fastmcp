@@ -297,7 +297,8 @@ describe('bounded task read workflows', () => {
       latestVerification: { id: 44, verdict: 'PASS', actor: 'tester' },
     });
     expect(mockFetch).toHaveBeenCalledTimes(3);
-    expect(mockFetch.mock.calls[1][0]).toContain('sort_by=created');
+    expect(mockFetch.mock.calls[1][0]).toContain('order_by=desc');
+    expect(mockFetch.mock.calls[1][0]).not.toContain('sort_by');
   });
 
   it('builds one programme snapshot with assignee, blocked, stale, and changed counts', async () => {

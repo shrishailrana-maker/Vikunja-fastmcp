@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { jest } from '@jest/globals';
 import {
   configureIdempotencyScope,
+  defaultDatabasePath,
   claimDurableOperation,
   durableOperationKey,
   idempotency,
@@ -13,6 +14,34 @@ import {
 } from '../src/idempotency.js';
 
 describe('durable idempotency ledger', () => {
+  it('uses the same URL ledger path for environment and DPAPI token storage', () => {
+    const names = [
+      'JEST_WORKER_ID',
+      'VIKUNJA_IDEMPOTENCY_DB_PATH',
+      'VIKUNJA_URL',
+      'VIKUNJA_API_TOKEN',
+      'VIKUNJA_API_TOKEN_FILE',
+    ];
+    const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+    try {
+      delete process.env.JEST_WORKER_ID;
+      delete process.env.VIKUNJA_IDEMPOTENCY_DB_PATH;
+      process.env.VIKUNJA_URL = 'https://vikunja.example.com/api/v2';
+      process.env.VIKUNJA_API_TOKEN = 'neutral-env-token';
+      process.env.VIKUNJA_API_TOKEN_FILE = '';
+      const envPath = defaultDatabasePath();
+      delete process.env.VIKUNJA_API_TOKEN;
+      process.env.VIKUNJA_API_TOKEN_FILE = 'neutral.dpapi';
+      expect(defaultDatabasePath()).toBe(envPath);
+      process.env.VIKUNJA_URL = 'https://another.example.com/api/v2';
+      expect(defaultDatabasePath()).not.toBe(envPath);
+    } finally {
+      for (const [name, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
   it('isolates durable operation keys by configured credential', () => {
     configureIdempotencyScope('neutral-token-a');
     const first = durableOperationKey('task-update', 'same-key', { taskId: 1 });
@@ -255,8 +284,11 @@ describe('durable idempotency ledger', () => {
       operation: 'task-create',
       status: 'completed',
       result: { action: 'created', target: { portalRef: 'ALPHA-5' } },
-      updatedAt: expect.any(String),
+      recordedAt: expect.any(String),
     });
+    expect(lookupDurableOperationReceipt('task-create', 'human-retry-key')).not.toHaveProperty(
+      'updatedAt',
+    );
   });
 
   it('does not cache a partial workflow receipt as completed', async () => {

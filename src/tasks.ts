@@ -199,6 +199,8 @@ export interface CompactTask extends CompactTaskListItem {
 }
 
 export interface WriteEcho {
+  updatedAt?: string | null;
+  recordedAt?: string;
   action: 'created' | 'exists' | 'updated' | 'unchanged' | 'deleted' | 'closed' | 'reopened';
   target: {
     id: number;
@@ -1701,7 +1703,7 @@ export async function getTaskActivity(
   const safeLimit = Math.min(100, Math.max(1, limit));
   const rawComments = await client.request<any>(
     'GET',
-    `/tasks/${task.id}/comments?sort_by=created&order_by=desc&page=1&per_page=${safeLimit}`,
+    `/tasks/${task.id}/comments?order_by=desc&page=1&per_page=${safeLimit}`,
   );
   const pagination = normalizePagination(rawComments);
   const comments = toItemArray<any>(rawComments).slice(0, safeLimit);
@@ -1769,7 +1771,7 @@ export async function searchTaskEvidence(
     if (options.includeComments !== false && fields.length === 0) {
       const comments = await client.request<any>(
         'GET',
-        `/tasks/${task.id}/comments?sort_by=created&order_by=desc&page=1&per_page=100`,
+        `/tasks/${task.id}/comments?order_by=desc&page=1&per_page=100`,
       );
       commentsIncomplete ||= normalizePagination(comments).hasMore;
       if (
@@ -1836,7 +1838,7 @@ export async function verifyTaskState(
   const rawTask = taskRef.rawTask ?? {};
   const commentsRaw = await client.request<any>(
     'GET',
-    `/tasks/${taskRef.id}/comments?sort_by=created&order_by=desc&page=1&per_page=5`,
+    `/tasks/${taskRef.id}/comments?order_by=desc&page=1&per_page=5`,
   );
   const attachmentRaw = await client.request<any>(
     'GET',
@@ -1981,7 +1983,8 @@ export async function createTask(
       title: task.title,
     },
   };
-  (echo as any).updatedAt = task.updatedAt || new Date().toISOString();
+  echo.updatedAt = task.updatedAt ?? null;
+  echo.recordedAt = new Date().toISOString();
   (echo as any).taskUrl = task.taskUrl;
   (echo as any).before = { exists: false };
   (echo as any).after = {
@@ -2486,7 +2489,7 @@ export async function getTask(
   };
 
   if (commentLimit > 0) {
-    const commentPath = `/tasks/${task.id}/comments?sort_by=created&order_by=desc&page=1&per_page=${commentLimit}`;
+    const commentPath = `/tasks/${task.id}/comments?order_by=desc&page=1&per_page=${commentLimit}`;
     composedCalls.push(`GET ${commentPath}`);
     const rawComments = await client.request<any>('GET', commentPath);
     const pagination = normalizePagination(rawComments);

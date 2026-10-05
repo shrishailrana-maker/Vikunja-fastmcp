@@ -1,7 +1,10 @@
 /** One authenticated, non-replaying upstream MCP connection shared by campaign calls. */
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import {
+  StreamableHTTPClientTransport,
+  StreamableHTTPError,
+} from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { createHash } from 'node:crypto';
 import type { Config } from './config.js';
 import { VikunjaError, mapStatusToCode, redactSecrets, registerSecret } from './errors.js';
@@ -18,11 +21,9 @@ function nativeError(error: any, config: Config, path = '/mcp'): VikunjaError {
   if (error instanceof VikunjaError) return error;
   const message = redactSecrets(String(error?.message ?? error), config.vikunjaToken);
   const httpCode = Number(error?.code);
-  const status =
-    httpCode >= 400 && httpCode <= 599
-      ? httpCode
-      : /\b(400|401|403|404|405|409|412|413|422|429|500|502|503|504)\b/.exec(message)?.[1];
-  const timeout = error?.code === -32001 || /timeout|timed out|aborted/i.test(message);
+  const status = httpCode >= 400 && httpCode <= 599 ? httpCode : /^(\d{3})\b/.exec(message)?.[1];
+  const timeout =
+    error?.code === -32001 || error?.name === 'AbortError' || error?.name === 'TimeoutError';
   const effectiveStatus = timeout
     ? 504
     : Number(status ?? (/invalid arguments/i.test(message) ? 400 : 502));
@@ -45,27 +46,37 @@ function nativeError(error: any, config: Config, path = '/mcp'): VikunjaError {
 
 export function nativeResultData(result: CallToolResult): any {
   if (result.isError) {
-    throw new Error(
+    const message =
       result.content
         .filter((item) => item.type === 'text')
         .map((item) => item.text)
-        .join('\n') || 'Native MCP operation failed.',
-    );
+        .join('\n') || 'Native MCP operation failed.';
+    const status = Number(/^(\d{3})\b/.exec(message)?.[1] ?? 422);
+    throw new VikunjaError({
+      status,
+      code: /^(\d{3})\b/.test(message) ? mapStatusToCode(status) : 'NATIVE_TOOL_ERROR',
+      method: 'TOOLS_CALL',
+      path: '/mcp',
+      message,
+      fieldErrors: [],
+    });
   }
   if (result.structuredContent !== undefined) return result.structuredContent;
   const text = result.content
     .filter((item) => item.type === 'text')
     .map((item) => item.text)
     .join('\n');
+  if (!text.trim()) return {};
   try {
     return JSON.parse(text);
   } catch {
-    throw new Error('Native MCP returned a non-JSON result for an API operation.');
+    return { message: text };
   }
 }
 
 export class NativeMcpConnection {
-  private readonly client = new Client({ name: 'vikunja-fastmcp-adapter', version: '2.7.0' });
+  private client = new Client({ name: 'vikunja-fastmcp-adapter', version: '2.7.0' });
+  private transport?: StreamableHTTPClientTransport;
   private ready?: Promise<void>;
   private routeMap?: Promise<NativeRoute[]>;
   private tools: Tool[] = [];
@@ -73,6 +84,16 @@ export class NativeMcpConnection {
 
   constructor(private readonly config: Config) {
     registerSecret(config.vikunjaToken);
+  }
+
+  private async reset(): Promise<void> {
+    await this.client.close().catch(() => {});
+    this.client = new Client({ name: 'vikunja-fastmcp-adapter', version: '2.7.0' });
+    this.transport = undefined;
+    this.ready = undefined;
+    this.tools = [];
+    this.actions.clear();
+    this.routeMap = undefined;
   }
 
   private async connect(): Promise<void> {
@@ -102,6 +123,7 @@ export class NativeMcpConnection {
               }),
           },
         );
+        this.transport = transport;
         await this.client.connect(transport);
         let cursor: string | undefined;
         const seen = new Set<string>();
@@ -130,12 +152,19 @@ export class NativeMcpConnection {
           }
         }
       })().catch(async (error) => {
-        await this.client.close().catch(() => {});
         // Initialization is read-only, so a later request may safely try it again.
-        this.ready = undefined;
-        this.tools = [];
-        this.actions.clear();
-        this.routeMap = undefined;
+        await this.reset();
+        if (error instanceof StreamableHTTPError && (error.code === 404 || error.code === 405)) {
+          throw new VikunjaError({
+            status: 503,
+            code: 'NATIVE_MCP_UNAVAILABLE',
+            method: 'TOOLS_CALL',
+            path: '/mcp',
+            message:
+              'Vikunja 2.7+ native MCP not found at /api/v2/mcp; set VIKUNJA_MCP_BACKEND=rest',
+            fieldErrors: [],
+          });
+        }
         throw nativeError(error, this.config);
       });
     }
@@ -148,7 +177,6 @@ export class NativeMcpConnection {
   }
 
   async listShellTools(): Promise<Tool[]> {
-    await this.connect();
     return [
       {
         name: 'find_action',
@@ -254,6 +282,16 @@ export class NativeMcpConnection {
         ? this.callTool(args.action, (args.arguments ?? {}) as Record<string, unknown>)
         : this.callTool('do_action', args);
     }
+    if (!this.tools.some((tool) => tool.name === name)) {
+      throw new VikunjaError({
+        status: 400,
+        code: 'VALIDATION_ERROR',
+        method: 'TOOLS_CALL',
+        path: name,
+        message: `Tool not found: ${name}`,
+        fieldErrors: [],
+      });
+    }
     return this.callTool(name, args);
   }
 
@@ -269,15 +307,37 @@ export class NativeMcpConnection {
         fieldErrors: [],
       });
     }
-    try {
-      return CallToolResultSchema.parse(
-        await this.client.callTool({ name, arguments: args }, undefined, {
-          timeout: this.config.requestTimeoutMs ?? 30_000,
-        }),
-      );
-    } catch (error) {
-      throw nativeError(error, this.config, name);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        return CallToolResultSchema.parse(
+          await this.client.callTool({ name, arguments: args }, undefined, {
+            timeout: this.config.requestTimeoutMs ?? 30_000,
+          }),
+        );
+      } catch (error) {
+        if (
+          error instanceof StreamableHTTPError &&
+          error.code === 404 &&
+          (this.transport?.sessionId || attempt === 1)
+        ) {
+          if (attempt === 0) {
+            await this.reset();
+            await this.connect();
+            continue;
+          }
+          throw new VikunjaError({
+            status: 503,
+            code: 'NATIVE_SESSION_EXPIRED',
+            method: 'TOOLS_CALL',
+            path: name,
+            message: 'The native MCP session expired after one reconnect.',
+            fieldErrors: [],
+          });
+        }
+        throw nativeError(error, this.config, name);
+      }
     }
+    throw new Error('Native call retry exhausted.');
   }
 
   async request<T>(
