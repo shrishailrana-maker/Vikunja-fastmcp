@@ -14,6 +14,36 @@ wrappers from the original implementation remain in the current tree.
 
 ## Architecture
 
+The default native profile is a stdio adapter for Vikunja 2.7's built-in MCP.
+
+```text
+Codex / Claude -> vikunja-mcp -> /api/v2/mcp
+                     |
+             campaign receipts, evidence, files
+```
+
+Clients need only the npm package and the command `vikunja-mcp`. In Vikunja
+Settings > MCP, create a token with MCP access and the action permissions you
+need. Set it as `VIKUNJA_API_TOKEN` in the environment that launches the client.
+Files, exports, and webhooks also need their REST permissions on that same token.
+No second MCP installation or client connection is required.
+
+On Windows, the adapter can read a token encrypted by `ConvertFrom-SecureString`
+without a key (Windows DPAPI). Set `VIKUNJA_API_TOKEN_FILE` to that encrypted
+file, or use the default protected file under
+`%LOCALAPPDATA%/vikunja-fastmcp/native-api-token.dpapi`. The protected file takes
+precedence over `VIKUNJA_API_TOKEN`. Only the Windows account that encrypted it
+can decrypt it. Use an explicit empty file setting to disable the default store.
+
+The native profile exposes `find_action`/`do_action` and our campaign tools.
+All authorized native actions, including direct server tools, are discoverable
+on demand. Raw native writes use the server's own semantics. Use
+our guarded write/comment/workflow tools when retries, attribution, evidence,
+or durable receipts are needed. Native failures never replay a write via REST.
+Binary transfer and routes excluded from native MCP use authenticated REST.
+Set `VIKUNJA_MCP_BACKEND=rest` explicitly for an older server. The existing core,
+qa, developer, full, and compatibility tool profiles remain available.
+
 The public contract is in [`docs/V2_API_CONTRACT.md`](docs/V2_API_CONTRACT.md).
 The implementation roadmap and measured token budgets are in
 [`docs/VMCP_IMPLEMENTATION_PLAN.md`](docs/VMCP_IMPLEMENTATION_PLAN.md). The
@@ -30,8 +60,7 @@ as legacy dash names. For simple reads, use `get_basic` (identity and update
 timestamp), `get_audit` (audit metadata), or `get_full` (bounded child details).
 
 - Node.js 24 LTS+
-- Vikunja 2.6.0+ with `/api/v2` (the checked-in contract is refreshed and
-  validated against a Vikunja v2.6.0 service)
+- Vikunja 2.7.0+ with native `/api/v2/mcp`, or explicit REST mode for older servers
 - Vikunja API token with access to the projects you need
 
 ## Install
@@ -128,7 +157,8 @@ Optional:
   the user home directory.
 - `VIKUNJA_MCP_RESPONSE_MODE`: `minimal` (default), `receipt`, `compact`,
   `standard`, or `full`. `minimal` and `receipt` return structured JSON only.
-- `VIKUNJA_MCP_TOOL_PROFILE`: `core` (default), `qa`, `developer`, `full`, or
+- `VIKUNJA_MCP_BACKEND`: `native` (default) or explicit `rest` compatibility.
+- `VIKUNJA_MCP_TOOL_PROFILE`: `native` (default), `core`, `qa`, `developer`, `full`, or
   `compatibility`. The first four profiles expose the complete typed tool set;
   `compatibility` also exposes the legacy broad `vikunja_tasks` router.
 - `VIKUNJA_REQUEST_TIMEOUT_MS`: ordinary request timeout. Defaults to 30000.
@@ -200,7 +230,7 @@ tests. See [`fallback/README.md`](fallback/README.md) for the archive policy.
 
 ## Tools
 
-The `core`, `qa`, `developer`, and `full` profiles expose the complete typed
+The compatibility `core`, `qa`, `developer`, and `full` profiles expose the complete typed
 tool set instead of the broad compatibility router:
 
 - `self_check` / `vikunja_auth` — compact diagnostics and current user. Use

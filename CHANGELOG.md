@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased - 2.7.0
+
+- Default to a local stdio shell around Vikunja 2.7's native MCP, using one
+  token and one client configuration. Forward authorized native tools and
+  action discovery alongside campaign wrappers.
+- Route supported campaign reads/writes through native MCP using the live
+  OpenAPI contract, retaining local durable receipts, actor attribution,
+  evidence closure, compact reads, and resumable batches.
+- Keep files and excluded REST utilities in the adapter. A denied native action
+  or failed native write never falls back to a second REST write.
+- Add explicit REST compatibility mode, native connection diagnostics, guarded
+  JSON Patch translation, and authoritative no-op readback.
+- Refresh the sanitized server contract to live v2.7.0 and add a reusable
+  server-reference refresh command.
+- Load native action schemas on demand, reducing the default combined schema
+  to 57,058 characters. Reconcile legacy profile budgets with their measured
+  67,088/98,285-character surfaces.
+- Read the API token from an optional Windows user-bound DPAPI store without
+  writing plaintext credentials to package files or logs.
+
 ## 2.6.1 - 2026-09-07
 
 - Preserve intraword underscores in Markdown and visible line breaks in comments.

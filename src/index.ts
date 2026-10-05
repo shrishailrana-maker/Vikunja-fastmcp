@@ -16,6 +16,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import { z } from 'zod';
 import { loadConfig } from './config.js';
 import { VikunjaApiClient } from './api.js';
+import { getNativeMcp } from './native-mcp.js';
 import { runSelfCheck } from './diagnostics.js';
 import {
   toItemArray,
@@ -2787,18 +2788,32 @@ if (!legacyTaskTool) throw new Error('Internal task router is not registered.');
 TOOLS.push(...createTypedTaskTools((args, client) => legacyTaskTool.handler(args, client)));
 
 function getActiveTools(): McpToolDefinition[] {
-  return selectToolsForProfile(TOOLS, loadToolProfile());
+  const profile = loadToolProfile();
+  return selectToolsForProfile(
+    TOOLS,
+    profile === 'native' && process.env.VIKUNJA_MCP_BACKEND === 'rest' ? 'core' : profile,
+  );
 }
 
 // Register Stdio Handlers
 server.setRequestHandler(ListToolsRequestSchema, async () => {
+  const nativeTools =
+    loadToolProfile() === 'native' && process.env.VIKUNJA_MCP_BACKEND !== 'rest'
+      ? await getNativeMcp(loadConfig()).listShellTools()
+      : [];
   return {
-    tools: getActiveTools().map((t) => ({
-      name: t.name,
-      description: toolDescription(t),
-      inputSchema: addActionRequirements(t.name, zodToMcpSchema(t.inputSchema)),
-      annotations: TOOL_ANNOTATIONS,
-    })),
+    tools: [
+      ...getActiveTools().map((t) => ({
+        name: t.name,
+        description: toolDescription(t),
+        inputSchema: addActionRequirements(t.name, zodToMcpSchema(t.inputSchema)),
+        annotations: TOOL_ANNOTATIONS,
+      })),
+      ...nativeTools.map((tool) => ({
+        ...tool,
+        annotations: { ...tool.annotations, ...TOOL_ANNOTATIONS },
+      })),
+    ],
   };
 });
 
@@ -2939,6 +2954,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const tool = getActiveTools().find((t) => t.name === name);
 
   if (!tool) {
+    if (loadToolProfile() === 'native' && process.env.VIKUNJA_MCP_BACKEND !== 'rest') {
+      try {
+        const config = loadConfig();
+        const result = await getNativeMcp(config).callShellTool(name, args ?? {});
+        return JSON.parse(redactSecrets(JSON.stringify(result), config.vikunjaToken));
+      } catch (error) {
+        return failureToolResult(
+          'Native MCP call failed.',
+          toErrorEnvelope(error).error,
+          requestedResponseMode(args),
+        );
+      }
+    }
     return failureToolResult(
       'Unknown tool.',
       toErrorEnvelope(badRequest(`Tool not found: ${name}`)).error,

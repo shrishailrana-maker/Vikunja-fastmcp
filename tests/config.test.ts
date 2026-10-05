@@ -76,7 +76,8 @@ describe('Config tests', () => {
       expect(config.vikunjaToken).toBe(TEST_TOKEN);
       expect(config.vikunjaWebUrl).toBe('https://vikunja-web.example.com/');
       expect(config.responseMode).toBe('minimal');
-      expect(config.toolProfile).toBe('core');
+      expect(config.toolProfile).toBe('native');
+      expect(config.backend).toBe('native');
       expect(config.requestTimeoutMs).toBe(30_000);
       expect(config.transferTimeoutMs).toBe(60_000);
       expect(config.attachmentSourceRoots).toEqual(

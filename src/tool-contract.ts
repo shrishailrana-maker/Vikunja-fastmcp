@@ -14,6 +14,14 @@ export interface OperationDoc {
   note?: string;
 }
 
+export const NATIVE_ADAPTER_CONTRACT = {
+  backend: 'native',
+  profile: 'native',
+  endpoint: '/api/v2/mcp',
+  discoveryTools: ['find_action', 'do_action'],
+  compatibilityBackend: 'rest',
+} as const;
+
 const taskSelector = [
   'projectSelector (required with taskSelector.projectIndex; optional guard otherwise)',
 ];

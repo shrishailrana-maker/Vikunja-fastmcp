@@ -8,6 +8,28 @@ description: Use for every task, bug, project, comment, label, assignee, relatio
 Use the configured `vikunja` MCP server. Do not call Vikunja with ad hoc HTTP
 requests or legacy tracker scripts while the MCP is available.
 
+## Native adapter
+
+The npm executable is the only local installation. Its default native profile
+connects to Vikunja 2.7's `/api/v2/mcp` and exposes native action discovery plus
+campaign wrappers. Use `find_action` and `do_action` for ordinary server actions;
+discovery includes both direct native tools and additional catalog actions.
+Use our `vikunja_task_write`, comments, workflow, and bulk tools for writes that
+need actor attribution, stable retry keys, evidence, or durable row receipts.
+Raw native tools retain the server's semantics and do not add local receipts.
+
+`VIKUNJA_API_TOKEN` must have MCP access and permissions for the actions used.
+Create it in Settings > MCP; REST utilities such as exports/files also need
+their permissions on this token. `self_check` reports backend and native
+connection status. For an older server, explicitly select
+`VIKUNJA_MCP_BACKEND=rest`. A native failure requires resolving that error;
+repeating the write through another backend can create duplicates.
+
+On Windows, prefer the user-bound DPAPI token file configured through
+`VIKUNJA_API_TOKEN_FILE`. The default file is under LOCALAPPDATA in the
+vikunja-fastmcp directory. It takes precedence over a plaintext environment
+token. Never display or copy the decrypted token into source or logs.
+
 ## Start
 
 1. Do not run `self_check` as a routine session warm-up. Use the compact default

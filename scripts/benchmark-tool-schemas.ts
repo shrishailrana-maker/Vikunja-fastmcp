@@ -2,15 +2,15 @@ import { server } from '../src/index.js';
 
 const profiles = ['core', 'qa', 'developer', 'full', 'compatibility'] as const;
 const budgets: Record<(typeof profiles)[number], number> = {
-  // v2.6 adds four typed account/admin/migration tools; keep a bounded 66k
-  // ceiling across the named typed profiles.
-  core: 66_000,
-  qa: 66_000,
-  developer: 66_000,
-  full: 66_000,
+  // Legacy profiles measure 67,088 characters with the named read actions.
+  // The default native profile loads native schemas on demand instead.
+  core: 68_000,
+  qa: 68_000,
+  developer: 68_000,
+  full: 68_000,
   // The compatibility router includes the legacy broad schema in addition to
-  // the typed surface; audit-read actions require a bounded 94k ceiling.
-  compatibility: 94_000,
+  // the typed surface; its measured 98,285 characters require a 99k ceiling.
+  compatibility: 99_000,
 };
 const handler = (server as any)._requestHandlers.get('tools/list');
 const results: Record<string, { tools: number; chars: number }> = {};

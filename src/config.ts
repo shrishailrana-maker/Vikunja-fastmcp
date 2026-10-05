@@ -12,6 +12,7 @@
 import os from 'os';
 import path from 'path';
 import { loadToolProfile, type ToolProfile } from './tool-profiles.js';
+import { loadProtectedToken } from './credential.js';
 
 export type ResponseMode = 'minimal' | 'receipt' | 'compact' | 'standard' | 'full';
 export type MutationScopeMode = 'off' | 'warn' | 'require';
@@ -38,6 +39,8 @@ export interface Config {
   mutationScopeMode?: MutationScopeMode;
   // Labels with this prefix form the mutually exclusive task-status group.
   statusLabelPrefix?: string;
+  // The CLI defaults to native; explicit rest supports older servers.
+  backend?: 'native' | 'rest';
 }
 
 // Default single-attachment size ceiling (100 MiB) when the env var is unset.
@@ -114,17 +117,23 @@ export function normalizeUrl(urlStr: string): { apiUrl: string; webUrl: string }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const rawUrl = env.VIKUNJA_URL || '';
-  const token = env.VIKUNJA_API_TOKEN || '';
+  const token = loadProtectedToken(env) || env.VIKUNJA_API_TOKEN || '';
   const rawWebUrl = env.VIKUNJA_WEB_URL || '';
   const rawResponseMode = env.VIKUNJA_MCP_RESPONSE_MODE?.trim();
   const rawMutationScopeMode = env.VIKUNJA_MUTATION_SCOPE_MODE?.trim().toLowerCase();
   const statusLabelPrefix = env.VIKUNJA_STATUS_LABEL_PREFIX?.trim() || 'status:';
+  const backend = env.VIKUNJA_MCP_BACKEND?.trim().toLowerCase() || 'native';
+  if (backend !== 'native' && backend !== 'rest') {
+    throw new Error('VIKUNJA_MCP_BACKEND must be native or rest.');
+  }
 
   if (!rawUrl) {
     throw new Error('VIKUNJA_URL environment variable is not set.');
   }
   if (!token) {
-    throw new Error('VIKUNJA_API_TOKEN environment variable is not set.');
+    throw new Error(
+      'VIKUNJA_API_TOKEN environment variable is not set. No protected token is configured.',
+    );
   }
 
   const { apiUrl, webUrl } = normalizeUrl(rawUrl);
@@ -205,5 +214,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     transferTimeoutMs,
     mutationScopeMode,
     statusLabelPrefix,
+    backend,
   };
 }

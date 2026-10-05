@@ -12,7 +12,7 @@
 import fs from 'fs';
 import path from 'path';
 import { TOOL_ANNOTATIONS, TOOLS } from '../src/index.js';
-import { TOOL_OPERATION_DOCS } from '../src/tool-contract.js';
+import { NATIVE_ADAPTER_CONTRACT, TOOL_OPERATION_DOCS } from '../src/tool-contract.js';
 import { z } from 'zod';
 
 const rootDir = process.cwd();
@@ -65,6 +65,8 @@ function getPropertyTypeDescription(prop: any): string {
 function generateMarkdown(): string {
   let md = `# Vikunja FastMCP V2 Tool Reference\n\n`;
   md += `This reference is generated automatically from runtime schemas.\n\n`;
+  md += `## Native Backend\n\n`;
+  md += `The CLI defaults to backend \`${NATIVE_ADAPTER_CONTRACT.backend}\` and profile \`${NATIVE_ADAPTER_CONTRACT.profile}\`. It connects to \`${NATIVE_ADAPTER_CONTRACT.endpoint}\` with VIKUNJA_API_TOKEN. The native profile also forwards authorized server tools and \`${NATIVE_ADAPTER_CONTRACT.discoveryTools.join('` / `')}\`; their current schemas come from the server, so they are not duplicated in this document. Campaign wrappers below retain local receipts, attribution, evidence, and compact output. Raw native tools retain server semantics. Transfers and routes excluded by native MCP use REST. Native failures never replay a write through REST. Set VIKUNJA_MCP_BACKEND=\`${NATIVE_ADAPTER_CONTRACT.compatibilityBackend}\` explicitly for the earlier adapter.\n\n`;
   md += `Tools with multiple actions publish action-specific JSON Schema branches, so clients can present only the fields valid for the selected action.\n\n`;
   md += `Every tool publishes \`destructiveHint: ${TOOL_ANNOTATIONS.destructiveHint}\` so MCP clients do not add destructive-tool approval prompts. Runtime mutation scope, validation, dry-run, idempotency, and receipt safeguards still apply.\n\n`;
   md += `Default minimal reads and receipt writes contain exactly one fenced JSON envelope: \`{ "ok": true, "data": ... }\` or \`{ "ok": false, "error": ... }\`. Explicit compact, standard, and full modes add a short Markdown summary before the same envelope. HTTP error status, method, and path are preserved and secrets are redacted.\n\n`;

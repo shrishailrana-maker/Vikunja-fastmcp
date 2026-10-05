@@ -12,13 +12,24 @@ Local API references for agents:
 - [`VIKUNJA_V2_API_REFERENCE.md`](VIKUNJA_V2_API_REFERENCE.md): generated method,
   path, operation, and schema index.
 
-The minimum supported server is the official Vikunja
-[`v2.6.0`](https://github.com/go-vikunja/vikunja/releases/tag/v2.6.0). The
-checked-in JSON snapshot was refreshed from a live Vikunja `v2.6.0` service and
+The native backend requires official Vikunja
+[`v2.7.0`](https://github.com/go-vikunja/vikunja/releases/tag/v2.7.0). Explicit
+REST mode retains the earlier server adapter. The checked-in JSON snapshot was
+refreshed from a live Vikunja `v2.7.0` service and
 is the local HTTP authority for the routes used here. Re-download and review it
 when the service is upgraded; never substitute the old SDK or v1 docs.
 
 ## Design Rules
+
+The default CLI backend connects to native MCP at `/api/v2/mcp`.
+The default native profile forwards authorized native tools and action discovery
+alongside campaign wrappers. The wrappers translate operations from live OpenAPI
+to native tools, preserving their existing scope/idempotency/evidence contracts.
+Raw native tools do not inherit those local campaign contracts. Transfers and
+unexposed REST routes use the same authenticated token via REST. Denied native
+actions and failed native writes never fall back or replay via REST. Arbitrary
+HTTP headers and nested JSON Patch return explicit unsupported-argument errors.
+See [ADR-0003](ADR-0003-native-mcp-adapter.md) for the transport decision.
 
 Comment create/update accepts `format: markdown | plain` (default markdown).
 Both preserve visible line breaks. Plain text is HTML-escaped; Markdown keeps
@@ -161,7 +172,8 @@ misconfigured servers.
 
 ## Typed Tool Surface And Profiles
 
-The default `core` profile exposes small typed schemas:
+The default `native` profile forwards server tools and keeps campaign wrappers.
+The compatibility `core` profile exposes the existing typed schemas:
 
 | Tool                          | Purpose                                                                     |
 | ----------------------------- | --------------------------------------------------------------------------- |

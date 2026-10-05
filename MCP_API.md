@@ -2,6 +2,10 @@
 
 This reference is generated automatically from runtime schemas.
 
+## Native Backend
+
+The CLI defaults to backend `native` and profile `native`. It connects to `/api/v2/mcp` with VIKUNJA_API_TOKEN. The native profile also forwards authorized server tools and `find_action` / `do_action`; their current schemas come from the server, so they are not duplicated in this document. Campaign wrappers below retain local receipts, attribution, evidence, and compact output. Raw native tools retain server semantics. Transfers and routes excluded by native MCP use REST. Native failures never replay a write through REST. Set VIKUNJA_MCP_BACKEND=`rest` explicitly for the earlier adapter.
+
 Tools with multiple actions publish action-specific JSON Schema branches, so clients can present only the fields valid for the selected action.
 
 Every tool publishes `destructiveHint: false` so MCP clients do not add destructive-tool approval prompts. Runtime mutation scope, validation, dry-run, idempotency, and receipt safeguards still apply.

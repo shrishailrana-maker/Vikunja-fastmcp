@@ -139,6 +139,8 @@ export interface DiagnosticResult {
       mcpSurface: 'time_entries' | null;
     }[];
     proFeatureError?: string;
+    backend?: 'native' | 'rest';
+    nativeMcpStatus?: 'connected' | 'unavailable' | 'not-selected';
     duplicateWorkflowLabels?: { title: string; ids: number[] }[];
     workflowLabelError?: string;
   };
@@ -203,6 +205,8 @@ export async function runSelfCheck(
   try {
     config = loadConfig();
     diagnostics.vikunjaUrl = config.vikunjaUrl;
+    diagnostics.backend = config.backend ?? 'rest';
+    diagnostics.nativeMcpStatus = config.backend === 'native' ? 'unavailable' : 'not-selected';
     if (detail === 'full') {
       diagnostics.tokenPresent = !!config.vikunjaToken;
       diagnostics.attachmentDownloadRoot = config.attachmentDownloadRoot;
@@ -237,6 +241,7 @@ export async function runSelfCheck(
   const client = new VikunjaApiClient(config);
   try {
     const user = await client.request<any>('GET', '/user');
+    if (config.backend === 'native') diagnostics.nativeMcpStatus = 'connected';
     diagnostics.currentUser = { id: user.id, username: user.username };
     diagnostics.authenticationState = 'authenticated';
     diagnostics.connectionStatus = 'online';

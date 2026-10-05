@@ -12,6 +12,7 @@
 import { Config, DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_TRANSFER_TIMEOUT_MS } from './config.js';
 import { VikunjaError, mapStatusToCode, redactSecrets, registerSecret } from './errors.js';
 import { configureIdempotencyScope } from './idempotency.js';
+import { getNativeMcp } from './native-mcp.js';
 
 export class VikunjaApiClient {
   private readonly config: Config;
@@ -27,6 +28,35 @@ export class VikunjaApiClient {
   }
 
   async request<T>(
+    method: string,
+    path: string,
+    options: {
+      body?: any;
+      headers?: Record<string, string>;
+      isMultipart?: boolean;
+      isStreamResponse?: boolean;
+    } = {},
+  ): Promise<T> {
+    if (
+      this.config.backend === 'native' &&
+      !options.isMultipart &&
+      !options.isStreamResponse &&
+      path !== '/openapi.json'
+    ) {
+      // Native errors are final: never retry a failed mutation through REST.
+      const native = await getNativeMcp(this.config).request<T>(
+        method,
+        path,
+        options.body,
+        () => this.requestRest<any>('GET', '/openapi.json'),
+        options.headers,
+      );
+      if (native.handled) return native.data as T;
+    }
+    return this.requestRest<T>(method, path, options);
+  }
+
+  private async requestRest<T>(
     method: string,
     path: string,
     options: {

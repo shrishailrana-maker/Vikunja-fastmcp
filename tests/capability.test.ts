@@ -23,8 +23,8 @@ describe('V2 OpenAPI Capability Gate', () => {
     openapi = JSON.parse(content);
   });
 
-  it('pins the sanitized contract to the live Vikunja v2.6.0 snapshot', () => {
-    expect(openapi.info?.version).toBe('v2.6.0');
+  it('pins the sanitized contract to the live Vikunja v2.7.0 snapshot', () => {
+    expect(openapi.info?.version).toBe('v2.7.0');
     expect(openapi.openapi).toBe('3.1.0');
     expect(openapi.servers).toEqual([{ url: '/api/v2' }]);
     expect(openapi.components?.schemas?.FormFile).toBeUndefined();
@@ -38,13 +38,14 @@ describe('V2 OpenAPI Capability Gate', () => {
       'task',
     ]);
     expect(
-      openapi.paths?.['/tasks/{projecttask}']?.patch?.requestBody?.content?.[
+      openapi.paths?.['/tasks/{task}']?.patch?.requestBody?.content?.[
         'application/json-patch+json'
       ],
     ).toBeDefined();
   });
 
   const expectedRoutes = [
+    { method: 'get', path: '/mcp/info' },
     { method: 'get', path: '/info' },
     { method: 'get', path: '/user' },
     { method: 'get', path: '/users' },
@@ -56,21 +57,21 @@ describe('V2 OpenAPI Capability Gate', () => {
     { method: 'get', path: '/projects/{project}/tasks/by-index/{index}' },
     { method: 'get', path: '/tasks' },
     { method: 'put', path: '/tasks/bulk' },
-    { method: 'get', path: '/tasks/{projecttask}' },
+    { method: 'get', path: '/tasks/{task}' },
     { method: 'post', path: '/projects/{project}/tasks' },
-    { method: 'patch', path: '/tasks/{projecttask}' },
-    { method: 'delete', path: '/tasks/{projecttask}' },
-    { method: 'post', path: '/tasks/{projecttask}/duplicate' },
-    { method: 'put', path: '/tasks/{projecttask}/read' },
+    { method: 'patch', path: '/tasks/{task}' },
+    { method: 'delete', path: '/tasks/{task}' },
+    { method: 'post', path: '/tasks/{task}/duplicate' },
+    { method: 'put', path: '/tasks/{task}/read' },
     { method: 'get', path: '/tasks/{task_id}/time-entries' },
-    { method: 'get', path: '/tasks/{projecttask}/assignees' },
-    { method: 'post', path: '/tasks/{projecttask}/assignees' },
-    { method: 'delete', path: '/tasks/{projecttask}/assignees/{user}' },
-    { method: 'put', path: '/tasks/{projecttask}/assignees/bulk' },
-    { method: 'get', path: '/tasks/{projecttask}/labels' },
-    { method: 'post', path: '/tasks/{projecttask}/labels' },
-    { method: 'delete', path: '/tasks/{projecttask}/labels/{label}' },
-    { method: 'put', path: '/tasks/{projecttask}/labels/bulk' },
+    { method: 'get', path: '/tasks/{task}/assignees' },
+    { method: 'post', path: '/tasks/{task}/assignees' },
+    { method: 'delete', path: '/tasks/{task}/assignees/{user}' },
+    { method: 'put', path: '/tasks/{task}/assignees/bulk' },
+    { method: 'get', path: '/tasks/{task}/labels' },
+    { method: 'post', path: '/tasks/{task}/labels' },
+    { method: 'delete', path: '/tasks/{task}/labels/{label}' },
+    { method: 'put', path: '/tasks/{task}/labels/bulk' },
     { method: 'get', path: '/tasks/{task}/comments' },
     { method: 'post', path: '/tasks/{task}/comments' },
     { method: 'get', path: '/tasks/{task}/comments/{commentid}' },

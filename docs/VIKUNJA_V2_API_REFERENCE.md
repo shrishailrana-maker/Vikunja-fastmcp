@@ -4,17 +4,10 @@ This file is generated from the sanitized local OpenAPI snapshot.
 
 - Raw specification: [`vikunja-v2-openapi.json`](vikunja-v2-openapi.json)
 - Upstream API documentation: https://vikunja.io/docs/api-documentation/
-- Minimum supported official release: https://github.com/go-vikunja/vikunja/releases/tag/v2.6.0
-- API generation: live Vikunja 2.6.0 service
-- Snapshot date: 2026-09-04
+- Minimum supported official release: https://github.com/go-vikunja/vikunja/releases/tag/v2.7.0
+- API version: v2.7.0
 - OpenAPI version: 3.1.0
-- API title: Vikunja API
-- API version: v2.6.0
-
-Vikunja generates this OpenAPI document at runtime. The checked-in copy is
-the latest-only HTTP authority for this MCP and must be refreshed when the
-minimum supported Vikunja release changes. Instance URLs are replaced with
-`https://vikunja.example.com`; no credential is stored.
+- Instance URLs are sanitized; no credentials are stored.
 
 ## Operations
 
@@ -23,9 +16,13 @@ minimum supported Vikunja release changes. Instance URLs are replaced with
 | GET | `/{entitykind}/{entityid}/reactions` | `reactions-list` | List reactions for an entity |
 | POST | `/{entitykind}/{entityid}/reactions` | `reactions-create` | React to an entity |
 | POST | `/{entitykind}/{entityid}/reactions/delete` | `reactions-delete` | Remove a reaction from an entity |
+| GET | `/admin/invite-links` | `admin-invite-links-list` | List invite links |
+| POST | `/admin/invite-links` | `admin-invite-links-create` | Create an invite link |
+| DELETE | `/admin/invite-links/{id}` | `admin-invite-links-delete` | Delete an invite link |
 | GET | `/admin/overview` | `admin-overview` | Admin overview |
 | GET | `/admin/projects` | `admin-projects-list` | List all projects (admin) |
 | PATCH | `/admin/projects/{id}/owner` | `admin-projects-patch-owner` | Reassign a project's owner (admin) |
+| GET | `/admin/teams` | `admin-teams-list` | List local teams for invitations |
 | GET | `/admin/users` | `admin-users-list` | List users (admin) |
 | POST | `/admin/users` | `admin-users-create` | Create a user (admin) |
 | DELETE | `/admin/users/{id}` | `admin-users-delete` | Delete a user (admin) |
@@ -41,6 +38,7 @@ minimum supported Vikunja release changes. Instance URLs are replaced with
 | PUT | `/filters/{filter}` | `filters-update` | Update a saved filter |
 | GET | `/health` | `health` | Healthcheck |
 | GET | `/info` | `info` | Instance info |
+| POST | `/invite-links/check` | `invite-links-check` | Check an invitation |
 | GET | `/labels` | `labels-list` | List labels |
 | POST | `/labels` | `labels-create` | Create a label |
 | DELETE | `/labels/{id}` | `labels-delete` | Delete a label |
@@ -49,6 +47,7 @@ minimum supported Vikunja release changes. Instance URLs are replaced with
 | PUT | `/labels/{id}` | `labels-update` | Update a label |
 | POST | `/login` | `auth-login` | Login |
 | POST | `/logout` | `auth-logout` | Logout |
+| GET | `/mcp/info` | `mcp-info` | Get MCP connection settings |
 | POST | `/migration/csv/detect` | `migration-csv-detect` | Detect a CSV file's structure |
 | POST | `/migration/csv/migrate` | `migration-csv-migrate` | Import a CSV file |
 | POST | `/migration/csv/preview` | `migration-csv-preview` | Preview a CSV import |
@@ -119,21 +118,15 @@ minimum supported Vikunja release changes. Instance URLs are replaced with
 | DELETE | `/subscriptions/{entity}/{entityID}` | `subscriptions-delete` | Unsubscribe from an entity |
 | POST | `/subscriptions/{entity}/{entityID}` | `subscriptions-create` | Subscribe to an entity |
 | GET | `/tasks` | `tasks-list` | List tasks across all projects |
-| DELETE | `/tasks/{projecttask}` | `tasks-delete` | Delete a task |
-| GET | `/tasks/{projecttask}` | `tasks-read` | Get a task |
-| PATCH | `/tasks/{projecttask}` | `patch-tasks-read` | Update a task (partial) |
-| PUT | `/tasks/{projecttask}` | `tasks-update` | Update a task |
-| GET | `/tasks/{projecttask}/assignees` | `task-assignees-list` | List the assignees of a task |
-| POST | `/tasks/{projecttask}/assignees` | `task-assignees-create` | Assign a user to a task |
-| DELETE | `/tasks/{projecttask}/assignees/{user}` | `task-assignees-delete` | Remove an assignee from a task |
-| PUT | `/tasks/{projecttask}/assignees/bulk` | `task-assignees-bulk` | Replace all assignees of a task |
-| POST | `/tasks/{projecttask}/duplicate` | `tasks-duplicate` | Duplicate a task |
-| GET | `/tasks/{projecttask}/labels` | `task-labels-list` | List the labels on a task |
-| POST | `/tasks/{projecttask}/labels` | `task-labels-create` | Add a label to a task |
-| DELETE | `/tasks/{projecttask}/labels/{label}` | `task-labels-delete` | Remove a label from a task |
-| PUT | `/tasks/{projecttask}/labels/bulk` | `task-labels-bulk-replace` | Replace all labels on a task |
-| PUT | `/tasks/{projecttask}/read` | `tasks-mark-read` | Mark a task as read |
 | GET | `/tasks/{task_id}/time-entries` | `task-time-entries-list` | List a task's time entries |
+| DELETE | `/tasks/{task}` | `tasks-delete` | Delete a task |
+| GET | `/tasks/{task}` | `tasks-read` | Get a task |
+| PATCH | `/tasks/{task}` | `patch-tasks-read` | Update a task (partial) |
+| PUT | `/tasks/{task}` | `tasks-update` | Update a task |
+| GET | `/tasks/{task}/assignees` | `task-assignees-list` | List the assignees of a task |
+| POST | `/tasks/{task}/assignees` | `task-assignees-create` | Assign a user to a task |
+| DELETE | `/tasks/{task}/assignees/{user}` | `task-assignees-delete` | Remove an assignee from a task |
+| PUT | `/tasks/{task}/assignees/bulk` | `task-assignees-bulk` | Replace all assignees of a task |
 | GET | `/tasks/{task}/attachments` | `task-attachments-list` | List a task's attachments |
 | POST | `/tasks/{task}/attachments` | `task-attachments-upload` | Upload task attachments |
 | DELETE | `/tasks/{task}/attachments/{attachment}` | `task-attachments-delete` | Delete a task attachment |
@@ -144,7 +137,13 @@ minimum supported Vikunja release changes. Instance URLs are replaced with
 | GET | `/tasks/{task}/comments/{commentid}` | `task-comments-read` | Get a single comment of a task |
 | PATCH | `/tasks/{task}/comments/{commentid}` | `patch-task-comments-read` | Update a comment of a task (partial) |
 | PUT | `/tasks/{task}/comments/{commentid}` | `task-comments-update` | Update a comment of a task |
+| POST | `/tasks/{task}/duplicate` | `tasks-duplicate` | Duplicate a task |
+| GET | `/tasks/{task}/labels` | `task-labels-list` | List the labels on a task |
+| POST | `/tasks/{task}/labels` | `task-labels-create` | Add a label to a task |
+| DELETE | `/tasks/{task}/labels/{label}` | `task-labels-delete` | Remove a label from a task |
+| PUT | `/tasks/{task}/labels/bulk` | `task-labels-bulk-replace` | Replace all labels on a task |
 | PUT | `/tasks/{task}/position` | `tasks-position-update` | Set a task's position in a view |
+| PUT | `/tasks/{task}/read` | `tasks-mark-read` | Mark a task as read |
 | POST | `/tasks/{task}/relations` | `tasks-relations-create` | Create a task relation |
 | DELETE | `/tasks/{task}/relations/{relationKind}/{otherTask}` | `tasks-relations-delete` | Delete a task relation |
 | PUT | `/tasks/bulk` | `tasks-bulk-update` | Bulk update tasks |
@@ -195,6 +194,8 @@ minimum supported Vikunja release changes. Instance URLs are replaced with
 | DELETE | `/user/settings/email` | `user-cancel-email-update` | Cancel a pending email change |
 | PUT | `/user/settings/email` | `user-update-email` | Update the current user's email address |
 | POST | `/user/settings/email/resend` | `user-resend-email-confirmation` | Resend the confirmation mail for a pending email change |
+| GET | `/user/settings/general` | `user-settings-read` | Get the current user's general settings |
+| PATCH | `/user/settings/general` | `patch-user-settings-read` | Update the current user's general settings (partial) |
 | PUT | `/user/settings/general` | `user-update-settings` | Update the current user's general settings |
 | GET | `/user/settings/token/caldav` | `caldav-tokens-list` | List CalDAV tokens |
 | POST | `/user/settings/token/caldav` | `caldav-tokens-create` | Generate a CalDAV token |
@@ -234,12 +235,15 @@ minimum supported Vikunja release changes. Instance URLs are replaced with
 | `AuthTokenBodyBody` | $schema, token |
 | `BotUser` | $schema, bot_owner_id, created, email, id, name, status, updated, username |
 | `BotUserReadBody` | $schema, bot_owner_id, created, email, id, max_permission, name, status, updated, username |
+| `BotUserUpdateBody` | $schema, bot_owner_id, created, email, id, max_permission, name, status, updated, username |
 | `Bucket` | $schema, count, created, created_by, id, limit, position, project_view_id, tasks, title, updated |
 | `BucketsWithTasksBodyBody` | $schema, items, total |
 | `BulkAssignees` | $schema, assignees |
 | `BulkTask` | $schema, fields, task_ids, tasks, values |
 | `BulkTaskCreation` | $schema, tasks |
 | `ColumnMapping` | attribute, column_index, column_name |
+| `ConnectionSettings` | $schema, endpoint, presets, routes |
+| `CreateInviteLinkBody` | $schema, expires_at, max_uses, name, skip_email_confirm, team_ids |
 | `CreateUserBody` | $schema, email, is_admin, language, name, password, skip_email_confirm, username |
 | `DatabaseNotification` | created, id, name, notification, read_at |
 | `DatabaseNotifications` | $schema, created, id, name, notification, read, read_at |
@@ -249,6 +253,8 @@ minimum supported Vikunja release changes. Instance URLs are replaced with
 | `File` | created, id, mime, name, size |
 | `HealthBodyBody` | $schema, openid_providers, status |
 | `Info` | expires_at, features, instance_id, last_check_failed, licensed, max_users, validated_at |
+| `InviteLinkCheckBody` | $schema, token |
+| `InviteLinkTeam` | id, name |
 | `JsonPatchOp` | from, op, path, value |
 | `Label` | $schema, created, created_by, description, hex_color, id, title, updated |
 | `LabelReadBody` | $schema, created, created_by, description, hex_color, id, max_permission, title, updated |
@@ -275,6 +281,7 @@ minimum supported Vikunja release changes. Instance URLs are replaced with
 | `PaginatedBotUser` | $schema, items, page, per_page, total, total_pages |
 | `PaginatedBucket` | $schema, items, page, per_page, total, total_pages |
 | `PaginatedDatabaseNotification` | $schema, items, page, per_page, total, total_pages |
+| `PaginatedInviteLinkTeam` | $schema, items, page, per_page, total, total_pages |
 | `PaginatedLabelWithTaskID` | $schema, items, page, per_page, total, total_pages |
 | `PaginatedLinkSharing` | $schema, items, page, per_page, total, total_pages |
 | `PaginatedProject` | $schema, items, page, per_page, total, total_pages |
@@ -288,6 +295,7 @@ minimum supported Vikunja release changes. Instance URLs are replaced with
 | `PaginatedTimeEntry` | $schema, items, page, per_page, total, total_pages |
 | `PaginatedToken` | $schema, items, page, per_page, total, total_pages |
 | `PaginatedUser` | $schema, items, page, per_page, total, total_pages |
+| `PaginatedUserInviteLink` | $schema, items, page, per_page, total, total_pages |
 | `PaginatedUserWithPermission` | $schema, items, page, per_page, total, total_pages |
 | `PaginatedWebhook` | $schema, items, page, per_page, total, total_pages |
 | `PasswordReset` | $schema, new_password, token |
@@ -303,14 +311,16 @@ minimum supported Vikunja release changes. Instance URLs are replaced with
 | `ProjectViewReadBody` | $schema, bucket_configuration, bucket_configuration_mode, created, default_bucket_id, done_bucket_id, filter, id, max_permission, position, project_id, title, updated, view_kind |
 | `Provider` | auth_url, client_id, email_fallback, force_user_info, key, logout_url, name, scope, username_fallback |
 | `ProviderStatus` | available, key |
+| `PublicInviteLink` | $schema, name, skip_email_confirm, teams |
 | `Reaction` | $schema, created, user, value |
+| `RegisterUserRequest` | $schema, email, invite_token, language, password, username |
 | `RenewTokenBodyBody` | $schema, token |
 | `RouteDetail` | method, path |
 | `SavedFilter` | $schema, created, description, filters, id, is_favorite, owner, title, updated |
 | `SavedFilterReadBody` | $schema, created, description, filters, id, is_favorite, max_permission, owner, title, updated |
 | `Session` | created, device_info, id, ip_address, last_active, refresh_token |
 | `ShareCounts` | link_shares, team_shares, user_shares |
-| `Status` | $schema, finished_at, id, migrator_name, started_at |
+| `Status` | $schema, error_kind, error_message, finished_at, id, migrator_name, started_at |
 | `Subscription` | $schema, created, entity, entity_id, id |
 | `Task` | $schema, assignees, attachments, bucket_id, buckets, comment_count, comments, cover_image_attachment_id, created, created_by, deleted_at, description, done, done_at, due_date, end_date, hex_color, id, identifier, index, is_favorite, is_unread, labels, percent_done, position, priority, project_id, reactions, related_tasks, reminders, repeat_after, repeat_mode, start_date, subscription, time_entries_count, title, updated |
 | `TaskAssginee` | $schema, created, user_id |
@@ -334,6 +344,7 @@ minimum supported Vikunja release changes. Instance URLs are replaced with
 | `TimeEntry` | $schema, comment, created, end_time, id, project_id, start_time, task_id, updated, user_id |
 | `TimeEntryReadBody` | $schema, comment, created, end_time, id, max_permission, project_id, start_time, task_id, updated, user_id |
 | `Token` | $schema, created, id, token |
+| `TokenPresets` | full, read_only, typed |
 | `TokenRequest` | $schema, client_id, code, code_verifier, grant_type, redirect_uri, refresh_token |
 | `TokenResponse` | $schema, access_token, expires_in, refresh_token, token_type |
 | `TokenTestBodyBody` | $schema, message |
@@ -351,7 +362,7 @@ minimum supported Vikunja release changes. Instance URLs are replaced with
 | `UserExportStatus` | $schema, created, expires, id, size |
 | `UserGeneralSettings` | $schema, default_project_id, discoverable_by_email, discoverable_by_name, email_reminders_enabled, extra_settings_links, frontend_settings, language, name, overdue_tasks_reminders_enabled, overdue_tasks_reminders_time, timezone, week_start |
 | `UserInfoBody` | $schema, auth_provider, bot_owner_id, created, deletion_scheduled_at, email, id, is_admin, is_local_user, name, pending_email, settings, updated, username |
-| `UserRegister` | $schema, email, language, password, username |
+| `UserInviteLink` | $schema, created, created_by, expires_at, id, max_uses, name, skip_email_confirm, teams, token, updated, uses |
 | `UserWithPermission` | bot_owner_id, created, email, id, name, permission, updated, username |
 | `VikunjaErrorModel` | $schema, code, detail, errors, i18n_params, instance, status, title, type |
 | `VikunjaInfos` | $schema, allow_icon_changes, auth, available_migrators, caldav_enabled, concurrent_writes, demo_mode_enabled, email_reminders_enabled, enabled_background_providers, enabled_pro_features, frontend_url, legal, link_sharing_enabled, max_file_size, max_items_per_page, motd, public_teams_enabled, task_attachments_enabled, task_comments_enabled, totp_enabled, user_deletion_enabled, version, webhooks_enabled |
