@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased - 2.7.0
+## 2.7.0 - 2026-10-05
 
 **BREAKING:** the default backend is now Vikunja 2.7 native MCP. Servers older than 2.7 must set VIKUNJA_MCP_BACKEND=rest.
 
