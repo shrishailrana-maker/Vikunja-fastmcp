@@ -6,9 +6,9 @@ import { TOOLS } from '../src/index.js';
 const read = (file: string) => fs.readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
 
 describe('native adapter audit documentation', () => {
-  it('places the exact breaking backend warning at the top of the unreleased entry', () => {
-    expect(read('CHANGELOG.md')).toContain(
-      '## Unreleased - 2.7.0\n\n**BREAKING:** the default backend is now Vikunja 2.7 native MCP. Servers older than 2.7 must set VIKUNJA_MCP_BACKEND=rest.',
+  it('places the exact breaking backend warning at the top of the 2.7.0 entry', () => {
+    expect(read('CHANGELOG.md')).toMatch(
+      /## (?:Unreleased - 2\.7\.0|2\.7\.0 - \d{4}-\d{2}-\d{2})\r?\n\r?\n\*\*BREAKING:\*\* the default backend is now Vikunja 2\.7 native MCP\. Servers older than 2\.7 must set VIKUNJA_MCP_BACKEND=rest\./,
     );
   });
 
