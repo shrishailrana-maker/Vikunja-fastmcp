@@ -15,7 +15,7 @@ Local API references for agents:
 The native backend requires official Vikunja
 [`v2.7.0`](https://github.com/go-vikunja/vikunja/releases/tag/v2.7.0). Explicit
 REST mode retains the earlier server adapter. The checked-in JSON snapshot was
-refreshed from a live Vikunja `v2.7.0` service and
+refreshed from a live Vikunja `v2.8.0` service and
 is the local HTTP authority for the routes used here. Re-download and review it
 when the service is upgraded; never substitute the old SDK or v1 docs.
 

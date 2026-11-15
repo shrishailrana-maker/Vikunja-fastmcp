@@ -110,7 +110,7 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
   * `attachments`: array (optional)
   * `firstComment`: string (optional); min 1
   * `relations`: array (optional)
-  * `attachmentId`: number (optional); integer, min 0
+  * `attachmentId`: number (optional); integer
   * `destinationPath`: string (optional)
   * `overwrite`: boolean (optional)
   * `filenamePrefix`: string (optional); max 255
@@ -143,7 +143,7 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 | `activity` | taskSelector | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), activityLimit (default 20, max 100) | MCP-composed current task audit metadata plus bounded recent comments. Field-level server history is reported unavailable when the Vikunja API does not expose it. |
 | `evidence_search` | projectSelector, evidenceKey | maxTasks (default 100), includeComments (default true) | Bounded project scan of exact task title, description, and recent comment evidence. An incomplete scan never proves evidence-key absence. |
 | `update` | taskSelector, fields, projectSelector, actor, idempotencyKey | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), expectedUpdatedAt, fields.appendDescription (mutually exclusive with fields.description), dryRun, responseMode | Identity/read preflight followed by RFC 6902 PATCH. Replacing title or description requires expectedUpdatedAt. |
-| `delete` | taskSelector, projectSelector, actor, idempotencyKey | dryRun, responseMode | Identity preflight then DELETE /tasks/{id} |
+| `delete` | taskSelector, projectSelector, actor, idempotencyKey | dryRun, responseMode | Identity preflight then DELETE /tasks/{id}. Vikunja 2.8 moves the task to server trash; older servers may delete immediately. The adapter does not expose permanent purge. |
 | `duplicate` | taskSelector, projectSelector, confirm, actor, idempotencyKey | dryRun, responseMode | Project-verified direct POST /tasks/{id}/duplicate. confirm must be true. The durable receipt protects same-installation retries only; it is not server-enforced uniqueness or a cross-host lock. |
 | `mark_read` | taskSelector, projectSelector, actor, idempotencyKey | dryRun, responseMode | Project-verified direct PUT /tasks/{id}/read. Vikunja treats an already-read task as a successful no-op. |
 | `close` | taskSelector, projectSelector, actor, idempotencyKey | dryRun, responseMode | Identity/read preflight then task update transport |
@@ -177,7 +177,7 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
   * `mimeType`: string (optional)
   * `base64Content`: string (optional)
   * `filePaths`: array (optional)
-  * `attachmentId`: number (optional); integer, min 0
+  * `attachmentId`: number (optional); integer
   * `destinationPath`: string (optional)
   * `overwrite`: boolean (optional)
   * `page`: number (optional); integer, min 1
@@ -205,12 +205,12 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
   * `action`: enum ["create", "list", "get", "update", "delete"] (required)
   * `taskSelector`: object (required)
   * `projectSelector`: object (optional)
-  * `commentId`: number (optional); integer, min 0
+  * `commentId`: number (optional); integer
   * `comment`: string (optional); min 1
   * `format`: enum ["markdown", "plain"] (optional)
   * `idempotencyKey`: string (optional); min 1, max 200
   * `actor`: string (optional); min 1, max 80
-  * `page`: number (optional); integer, min 0
+  * `page`: number (optional); integer
   * `perPage`: number (optional); integer, min 1, max 100
   * `since`: string (optional)
   * `countOnly`: boolean (optional)
@@ -323,7 +323,7 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 * **Description**: Manage teams and team members.
 * **Parameters**:
   * `action`: enum ["list", "get", "create", "update", "delete", "add-member", "remove-member", "set-member-admin"] (required)
-  * `teamId`: number (optional); integer, min 0
+  * `teamId`: number (optional); integer
   * `name`: string (optional); min 1
   * `usernameOrId`: string | number (optional)
   * `admin`: boolean (optional)
@@ -345,7 +345,7 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 * **Description**: Create, read, update, or delete saved filters. Listing is unsupported (no collection route in the Vikunja v2 API); see self_check.unsupportedOperations.
 * **Parameters**:
   * `action`: enum ["create", "get", "update", "delete"] (required)
-  * `filterId`: number (optional); integer, min 0
+  * `filterId`: number (optional); integer
   * `title`: string (optional); min 1
   * `filterQuery`: string (optional)
   * `description`: string (optional)
@@ -533,7 +533,7 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
   * `action`: enum ["events", "list", "create", "update", "delete"] (required)
   * `scope`: enum ["project", "user"] (optional)
   * `projectSelector`: object (optional)
-  * `webhookId`: number (optional); integer, min 0
+  * `webhookId`: number (optional); integer
   * `targetUrl`: string (optional)
   * `events`: array (optional)
   * `secret`: string (optional)
@@ -644,7 +644,7 @@ Compact task lists include the creator username as `creator` when Vikunja suppli
 | `create_if_absent` | projectSelector, actor, idempotencyKey, fields.title | fields (including labels), attachments, firstComment, relations, dryRun, responseMode | MCP-composed exact-title search then optional create/attach. Best-effort duplicate prevention, not a distributed lock. |
 | `upsert` | projectSelector, actor, idempotencyKey, fields.title, externalKey | fields, expectedUpdatedAt, firstComment, relations, dryRun, responseMode | MCP-composed description-key lookup followed by create or conditional update. Requires server-side description filtering. fields.labels are applied and returned in the receipt; updating a matched title/description also requires expectedUpdatedAt. |
 | `update` | taskSelector, fields, projectSelector, actor, idempotencyKey | projectSelector (required with taskSelector.projectIndex; optional guard otherwise), expectedUpdatedAt, fields.appendDescription (mutually exclusive with fields.description), dryRun, responseMode | Identity/read preflight followed by RFC 6902 PATCH. Replacing title or description requires expectedUpdatedAt. |
-| `delete` | taskSelector, projectSelector, actor, idempotencyKey | dryRun, responseMode | Identity preflight then DELETE /tasks/{id} |
+| `delete` | taskSelector, projectSelector, actor, idempotencyKey | dryRun, responseMode | Identity preflight then DELETE /tasks/{id}. Vikunja 2.8 moves the task to server trash; older servers may delete immediately. The adapter does not expose permanent purge. |
 | `duplicate` | taskSelector, projectSelector, confirm, actor, idempotencyKey | dryRun, responseMode | Project-verified direct POST /tasks/{id}/duplicate. confirm must be true. The durable receipt protects same-installation retries only; it is not server-enforced uniqueness or a cross-host lock. |
 
 ### `vikunja_task_workflow`

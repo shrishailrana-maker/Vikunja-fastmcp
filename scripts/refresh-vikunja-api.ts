@@ -27,7 +27,7 @@ const lines = [
   '',
   '- Raw specification: [`vikunja-v2-openapi.json`](vikunja-v2-openapi.json)',
   '- Upstream API documentation: https://vikunja.io/docs/api-documentation/',
-  `- Minimum supported official release: https://github.com/go-vikunja/vikunja/releases/tag/${version}`,
+  `- Snapshot release: https://github.com/go-vikunja/vikunja/releases/tag/${version}`,
   `- API version: ${version}`,
   `- OpenAPI version: ${spec.openapi}`,
   '- Instance URLs are sanitized; no credentials are stored.',

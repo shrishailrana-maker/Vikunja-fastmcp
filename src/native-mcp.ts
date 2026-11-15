@@ -6,6 +6,7 @@ import {
   StreamableHTTPError,
 } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
 import type { Config } from './config.js';
 import { VikunjaError, mapStatusToCode, redactSecrets, registerSecret } from './errors.js';
 import {
@@ -16,6 +17,11 @@ import {
 } from './native-routes.js';
 import type { CallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js';
 import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
+
+const clientInfo = {
+  name: 'vikunja-fastmcp-adapter',
+  version: createRequire(import.meta.url)('../package.json').version as string,
+};
 
 function nativeError(error: any, config: Config, path = '/mcp'): VikunjaError {
   if (error instanceof VikunjaError) return error;
@@ -75,7 +81,7 @@ export function nativeResultData(result: CallToolResult): any {
 }
 
 export class NativeMcpConnection {
-  private client = new Client({ name: 'vikunja-fastmcp-adapter', version: '2.7.0' });
+  private client = new Client(clientInfo);
   private transport?: StreamableHTTPClientTransport;
   private ready?: Promise<void>;
   private routeMap?: Promise<NativeRoute[]>;
@@ -88,7 +94,7 @@ export class NativeMcpConnection {
 
   private async reset(): Promise<void> {
     await this.client.close().catch(() => {});
-    this.client = new Client({ name: 'vikunja-fastmcp-adapter', version: '2.7.0' });
+    this.client = new Client(clientInfo);
     this.transport = undefined;
     this.ready = undefined;
     this.tools = [];
@@ -349,7 +355,7 @@ export class NativeMcpConnection {
   ): Promise<{ handled: boolean; data?: T }> {
     await this.connect();
     this.routeMap ??= readOpenApi()
-      .then((spec) => nativeRoutes(spec, new Set([...NATIVE_ACTIONS, ...this.actions])))
+      .then(nativeRoutes)
       .catch((error) => {
         this.routeMap = undefined;
         throw error;
@@ -359,7 +365,10 @@ export class NativeMcpConnection {
     const route = routes.find(
       (item) => item.method === method.toUpperCase() && item.pattern.test(pathname),
     );
-    if (!route) return { handled: false };
+    // Match before checking exposure: REST-only /tasks/deleted must not bind to /tasks/{task}.
+    if (!route || (!NATIVE_ACTIONS.has(route.action) && !this.actions.has(route.action))) {
+      return { handled: false };
+    }
     if (headers && Object.keys(headers).some((name) => name.toLowerCase() !== 'content-type')) {
       throw new VikunjaError({
         status: 400,

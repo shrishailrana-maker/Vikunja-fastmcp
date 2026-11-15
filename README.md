@@ -14,7 +14,8 @@ wrappers from the original implementation remain in the current tree.
 
 ## Architecture
 
-The default native profile is a stdio adapter for Vikunja 2.7's built-in MCP.
+The default native profile is a stdio adapter for Vikunja's built-in MCP.
+The current adapter is verified against Vikunja 2.8.0; native mode requires 2.7.0 or newer.
 
 ```text
 Codex / Claude -> vikunja-mcp -> /api/v2/mcp
@@ -41,6 +42,9 @@ on demand. Raw native writes use the server's own semantics. Use
 our guarded write/comment/workflow tools when retries, attribution, evidence,
 or durable receipts are needed. Native failures never replay a write via REST.
 Binary transfer and routes excluded from native MCP use authenticated REST.
+On 2.8.0, use `find_action` to look up `filter_syntax` for filter help and inspect
+read tool schemas for upstream field selection. The campaign wrappers keep their
+existing projection options.
 Set `VIKUNJA_MCP_BACKEND=rest` explicitly for an older server. The existing core,
 qa, developer, full, and compatibility tool profiles remain available.
 
@@ -222,6 +226,12 @@ For native mode, create a token under **Settings -> MCP** with MCP access
 Transfers and excluded REST utilities also need their permissions on the same token.
 
 ## FAQ
+
+### What does delete do on Vikunja 2.8?
+
+Normal task deletion moves the task to server trash. Restore it from Vikunja's
+web UI before the retention period ends. This adapter does not expose restore,
+permanent delete, or empty-trash tools. Older servers may delete immediately.
 
 ### Does my existing REST API token work with native MCP?
 

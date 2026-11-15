@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.8.0 - 2026-11-15
+
+- Refresh the sanitized OpenAPI contract against live Vikunja 2.8.0 (214
+  operations), while retaining the Vikunja 2.7 native MCP minimum.
+- Match REST-only trash routes before parameterized native task/project routes.
+  Normal deletion follows the server's trash behavior; permanent purge is not exposed.
+- Document native `filter_syntax` and read field selection, and advertise the
+  installed adapter version in the upstream MCP handshake.
+- Update the MCP SDK and validation dependencies to patched versions; keep
+  action-specific schemas and bounded input validation on Zod 4.
+
 ## 2.7.0 - 2026-10-05
 
 **BREAKING:** the default backend is now Vikunja 2.7 native MCP. Servers older than 2.7 must set VIKUNJA_MCP_BACKEND=rest.

@@ -23,8 +23,8 @@ describe('V2 OpenAPI Capability Gate', () => {
     openapi = JSON.parse(content);
   });
 
-  it('pins the sanitized contract to the live Vikunja v2.7.0 snapshot', () => {
-    expect(openapi.info?.version).toBe('v2.7.0');
+  it('pins the sanitized contract to the live Vikunja v2.8.0 snapshot', () => {
+    expect(openapi.info?.version).toBe('v2.8.0');
     expect(openapi.openapi).toBe('3.1.0');
     expect(openapi.servers).toEqual([{ url: '/api/v2' }]);
     expect(openapi.components?.schemas?.FormFile).toBeUndefined();

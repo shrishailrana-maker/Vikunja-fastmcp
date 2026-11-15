@@ -179,11 +179,11 @@ function unwrapZod(schema: z.ZodTypeAny): { schema: z.ZodTypeAny; optional: bool
   for (let i = 0; i < 6; i++) {
     if (current instanceof z.ZodOptional || current instanceof z.ZodDefault) {
       optional = true;
-      current = (current as any)._def.innerType;
+      current = current.unwrap() as z.ZodType;
       continue;
     }
     if (current instanceof z.ZodNullable) {
-      current = (current as any)._def.innerType;
+      current = current.unwrap() as z.ZodType;
       continue;
     }
     break;
@@ -197,27 +197,26 @@ function zodTypeToJsonSchema(schema: z.ZodTypeAny): any {
   const describe = (jsonSchema: any) => (description ? { ...jsonSchema, description } : jsonSchema);
 
   if (current instanceof z.ZodString) {
+    const json = z.toJSONSchema(current, { io: 'input' });
     const output: Record<string, unknown> = { type: 'string' };
-    for (const check of (current as any)._def.checks ?? []) {
-      if (check.kind === 'min') output.minLength = check.value;
-      if (check.kind === 'max') output.maxLength = check.value;
-      if (check.kind === 'regex') output.pattern = check.regex.source;
-      if (['email', 'url', 'uuid', 'datetime'].includes(check.kind)) {
-        output.format = check.kind === 'datetime' ? 'date-time' : check.kind;
-      }
-    }
+    if (json.minLength !== undefined) output.minLength = json.minLength;
+    if (json.maxLength !== undefined) output.maxLength = json.maxLength;
+    if (json.pattern !== undefined && !json.format) output.pattern = json.pattern;
+    if (json.format) output.format = json.format;
     return describe(output);
   }
   if (current instanceof z.ZodNumber) {
-    const output: Record<string, unknown> = { type: 'number' };
-    for (const check of (current as any)._def.checks ?? []) {
-      if (check.kind === 'int') output.type = 'integer';
-      if (check.kind === 'min') {
-        output[check.inclusive === false ? 'exclusiveMinimum' : 'minimum'] = check.value;
-      }
-      if (check.kind === 'max') {
-        output[check.inclusive === false ? 'exclusiveMaximum' : 'maximum'] = check.value;
-      }
+    const json = z.toJSONSchema(current, { io: 'input' });
+    const output: Record<string, unknown> = { type: json.type };
+    for (const key of ['minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum'] as const) {
+      if (json[key] === undefined) continue;
+      // Zod 4 adds implicit safe-integer bounds; don't repeat them in every tool schema.
+      if (
+        json.type === 'integer' &&
+        (json[key] === Number.MIN_SAFE_INTEGER || json[key] === Number.MAX_SAFE_INTEGER)
+      )
+        continue;
+      output[key] = json[key];
     }
     return describe(output);
   }
@@ -225,19 +224,23 @@ function zodTypeToJsonSchema(schema: z.ZodTypeAny): any {
     return describe({ type: 'boolean' });
   }
   if (current instanceof z.ZodEnum) {
-    return describe({ type: 'string', enum: (current as any)._def.values });
+    return describe({ type: 'string', enum: current.options });
   }
   if (current instanceof z.ZodArray) {
-    const inner = (current as any)._def.type;
-    const output: Record<string, unknown> = { type: 'array', items: zodTypeToJsonSchema(inner) };
-    const minimum = (current as any)._def.minLength?.value;
-    const maximum = (current as any)._def.maxLength?.value;
+    const output: Record<string, unknown> = {
+      type: 'array',
+      items: zodTypeToJsonSchema(current.element as z.ZodType),
+    };
+    const { minItems: minimum, maxItems: maximum } = z.toJSONSchema(current, {
+      io: 'input',
+      unrepresentable: 'any',
+    });
     if (minimum !== undefined) output.minItems = minimum;
     if (maximum !== undefined) output.maxItems = maximum;
     return describe(output);
   }
   if (current instanceof z.ZodUnion) {
-    const options = (current as any)._def.options as z.ZodTypeAny[];
+    const options = current.options as readonly z.ZodType[];
     return describe({ anyOf: options.map((o) => zodTypeToJsonSchema(o)) });
   }
   if (current instanceof z.ZodObject) {
@@ -246,7 +249,7 @@ function zodTypeToJsonSchema(schema: z.ZodTypeAny): any {
   if (current instanceof z.ZodRecord) {
     return describe({
       type: 'object',
-      additionalProperties: zodTypeToJsonSchema((current as any)._def.valueType),
+      additionalProperties: zodTypeToJsonSchema(current.valueType as z.ZodType),
     });
   }
   if (current instanceof z.ZodAny || current instanceof z.ZodUnknown) {
@@ -731,7 +734,7 @@ function getToolManifest() {
     const inner = action ? unwrapZod(action).schema : undefined;
     return {
       name: tool.name,
-      subcommands: inner instanceof z.ZodEnum ? [...(inner as any)._def.values] : [],
+      subcommands: inner instanceof z.ZodEnum ? inner.options.map(String) : [],
     };
   });
 }
@@ -2498,7 +2501,7 @@ export const TOOLS: McpToolDefinition[] = [
       action: z.enum(['detect', 'preview', 'import', 'status']),
       mode: z.enum(['native', 'idempotent']).optional(),
       filePath: z.string().trim().min(1).optional(),
-      config: z.record(z.unknown()).optional(),
+      config: z.record(z.string(), z.unknown()).optional(),
       projectSelector: z
         .object({
           id: z.number().int().positive().optional(),
@@ -2699,7 +2702,7 @@ export const TOOLS: McpToolDefinition[] = [
           title: z.string().trim().min(1).optional(),
         })
         .optional(),
-      variables: z.record(z.string()).optional(),
+      variables: z.record(z.string(), z.string()).optional(),
     }),
     handler: async (args, client) => {
       switch (args.action) {

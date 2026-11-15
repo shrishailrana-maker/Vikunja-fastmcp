@@ -3,7 +3,7 @@ import { createServer, type Server as HttpServer } from 'node:http';
 import fs from 'node:fs';
 import { VikunjaApiClient } from '../src/api.js';
 import { closeNativeConnections, getNativeMcp, nativeResultData } from '../src/native-mcp.js';
-import { nativeArguments, nativeRoutes, NATIVE_ACTIONS } from '../src/native-routes.js';
+import { nativeArguments, nativeRoutes } from '../src/native-routes.js';
 import { createComment, listComments } from '../src/comments.js';
 import { idempotency } from '../src/idempotency.js';
 import { cache } from '../src/identity.js';
@@ -112,6 +112,13 @@ describe('native MCP shell transport', () => {
       }
       if (path === '/api/v2/user') {
         response.end(JSON.stringify({ id: 1, username: 'tester' }));
+        return;
+      }
+      if (
+        request.method === 'GET' &&
+        ['/api/v2/tasks/deleted', '/api/v2/projects/deleted'].includes(path)
+      ) {
+        response.end(JSON.stringify({ items: [] }));
         return;
       }
       if (path !== '/api/v2/mcp') {
@@ -618,6 +625,14 @@ describe('native MCP shell transport', () => {
       }),
     ).rejects.toMatchObject({ code: 'NATIVE_HEADER_UNSUPPORTED' });
   });
+  it('does not mistake the Vikunja 2.8 trash collections for numeric task or project routes', async () => {
+    spec = realSpec;
+    await expect(client.request('GET', '/tasks/deleted')).resolves.toEqual({ items: [] });
+    await expect(client.request('GET', '/projects/deleted')).resolves.toEqual({ items: [] });
+    expect(
+      calls.filter((call) => call.rpc?.method === 'tools/call').map((call) => call.rpc.params.name),
+    ).toEqual(['find_action']);
+  });
 });
 
 describe('native route conversion', () => {
@@ -626,23 +641,20 @@ describe('native route conversion', () => {
   });
 
   it('normalizes nullable numeric and boolean scalar types', () => {
-    const routes = nativeRoutes(
-      {
-        paths: {
-          '/tasks/{task}': {
-            get: {
-              operationId: 'tasks-read',
-              parameters: [
-                { name: 'task', in: 'path', schema: { type: ['integer', 'null'] } },
-                { name: 'flag', in: 'query', schema: { type: ['boolean', 'null'] } },
-                { name: 'value', in: 'query', schema: { type: ['number', 'null'] } },
-              ],
-            },
+    const routes = nativeRoutes({
+      paths: {
+        '/tasks/{task}': {
+          get: {
+            operationId: 'tasks-read',
+            parameters: [
+              { name: 'task', in: 'path', schema: { type: ['integer', 'null'] } },
+              { name: 'flag', in: 'query', schema: { type: ['boolean', 'null'] } },
+              { name: 'value', in: 'query', schema: { type: ['number', 'null'] } },
+            ],
           },
         },
       },
-      NATIVE_ACTIONS,
-    );
+    });
     expect(nativeArguments(routes[0], '/tasks/12?flag=true&value=1.5')).toEqual({
       task: 12,
       flag: true,
@@ -650,7 +662,7 @@ describe('native route conversion', () => {
     });
   });
   it('rejects nested JSON Patch rather than silently changing its meaning', () => {
-    const route = nativeRoutes(openapi, NATIVE_ACTIONS).find((item) => item.method === 'PATCH')!;
+    const route = nativeRoutes(openapi).find((item) => item.method === 'PATCH')!;
     expect(() =>
       nativeArguments(route, '/tasks/12', [{ op: 'replace', path: '/labels/0', value: 3 }]),
     ).toThrow(expect.objectContaining({ code: 'NATIVE_ARGUMENT_UNSUPPORTED' }));
@@ -673,9 +685,9 @@ describe('native route conversion', () => {
         },
       },
     };
-    expect(
-      nativeArguments(nativeRoutes(spec, NATIVE_ACTIONS)[0], '/tasks?sort_by=updated&sort_by=id'),
-    ).toEqual({ sort_by: ['updated', 'id'] });
+    expect(nativeArguments(nativeRoutes(spec)[0], '/tasks?sort_by=updated&sort_by=id')).toEqual({
+      sort_by: ['updated', 'id'],
+    });
   });
 
   it('loads native defaults and an explicit REST compatibility backend', () => {

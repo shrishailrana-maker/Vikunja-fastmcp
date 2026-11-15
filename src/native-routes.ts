@@ -2,7 +2,7 @@
 
 import { VikunjaError } from './errors.js';
 
-// Operation names are API facts from Vikunja v2.7.0's MCP exposure catalog.
+// Operation names are API facts from Vikunja's MCP exposure catalog (unchanged in v2.8.0).
 // Permission-filtered discovery must not cause a denied operation to fall back to REST.
 export const NATIVE_ACTIONS = new Set(
   `
@@ -39,7 +39,7 @@ export interface NativeRoute {
   pathNames: string[];
 }
 
-export function nativeRoutes(openapi: any, exposedActions: Set<string>): NativeRoute[] {
+export function nativeRoutes(openapi: any): NativeRoute[] {
   const routes: NativeRoute[] = [];
   for (const [path, item] of Object.entries<any>(openapi.paths ?? {})) {
     for (const method of ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']) {
@@ -48,7 +48,6 @@ export function nativeRoutes(openapi: any, exposedActions: Set<string>): NativeR
       // Native Vikunja prefers PATCH under the PUT operation name.
       const name = method === 'PATCH' && item.put ? item.put.operationId : operation.operationId;
       const action = String(name ?? '').replaceAll('-', '_');
-      if (!exposedActions.has(action)) continue;
       const pathNames: string[] = [];
       const pattern = path
         .split('/')

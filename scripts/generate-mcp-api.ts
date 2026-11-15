@@ -24,23 +24,23 @@ function getPropertyTypeDescription(prop: any): string {
 
   if (inner instanceof z.ZodOptional) {
     isOptional = true;
-    inner = inner._def.innerType;
+    inner = inner.unwrap();
   }
   if (inner instanceof z.ZodNullable) {
-    inner = inner._def.innerType;
+    inner = inner.unwrap();
   }
 
   let typeStr = 'string';
   if (inner instanceof z.ZodNumber) typeStr = 'number';
   else if (inner instanceof z.ZodBoolean) typeStr = 'boolean';
   else if (inner instanceof z.ZodEnum)
-    typeStr = `enum [${inner._def.values.map((v: any) => `"${v}"`).join(', ')}]`;
+    typeStr = `enum [${inner.options.map((v) => `"${v}"`).join(', ')}]`;
   else if (inner instanceof z.ZodArray) typeStr = 'array';
   else if (inner instanceof z.ZodObject) typeStr = 'object';
   else if (inner instanceof z.ZodRecord) typeStr = 'object';
   else if (inner instanceof z.ZodUnion) {
     const optionTypes = new Set(
-      inner._def.options.map((option: any) => {
+      inner.options.map((option) => {
         if (option instanceof z.ZodObject) return 'object';
         if (option instanceof z.ZodNumber) return 'number';
         if (option instanceof z.ZodBoolean) return 'boolean';
@@ -52,10 +52,13 @@ function getPropertyTypeDescription(prop: any): string {
   }
 
   const constraints: string[] = [];
-  for (const check of inner?._def?.checks ?? []) {
-    if (check.kind === 'int') constraints.push('integer');
-    if (check.kind === 'min') constraints.push(`min ${check.value}`);
-    if (check.kind === 'max') constraints.push(`max ${check.value}`);
+  if (inner instanceof z.ZodString || inner instanceof z.ZodNumber) {
+    const schema = z.toJSONSchema(inner, { io: 'input' });
+    if (schema.type === 'integer') constraints.push('integer');
+    const min = schema.minLength ?? schema.minimum;
+    const max = schema.maxLength ?? schema.maximum;
+    if (min !== undefined && min !== Number.MIN_SAFE_INTEGER) constraints.push(`min ${min}`);
+    if (max !== undefined && max !== Number.MAX_SAFE_INTEGER) constraints.push(`max ${max}`);
   }
 
   const suffix = constraints.length > 0 ? `; ${constraints.join(', ')}` : '';

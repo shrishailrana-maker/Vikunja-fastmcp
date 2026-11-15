@@ -241,6 +241,7 @@ export const TOOL_OPERATION_DOCS: Record<string, OperationDoc[]> = {
       required: ['taskSelector', ...mutationEnvelope],
       optional: ['dryRun', 'responseMode'],
       execution: 'Identity preflight then DELETE /tasks/{id}',
+      note: 'Vikunja 2.8 moves the task to server trash; older servers may delete immediately. The adapter does not expose permanent purge.',
     },
     {
       action: 'duplicate',

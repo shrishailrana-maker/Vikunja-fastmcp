@@ -4,8 +4,8 @@ This file is generated from the sanitized local OpenAPI snapshot.
 
 - Raw specification: [`vikunja-v2-openapi.json`](vikunja-v2-openapi.json)
 - Upstream API documentation: https://vikunja.io/docs/api-documentation/
-- Minimum supported official release: https://github.com/go-vikunja/vikunja/releases/tag/v2.7.0
-- API version: v2.7.0
+- Snapshot release: https://github.com/go-vikunja/vikunja/releases/tag/v2.8.0
+- API version: v2.8.0
 - OpenAPI version: 3.1.0
 - Instance URLs are sanitized; no credentials are stored.
 
@@ -73,6 +73,9 @@ This file is generated from the sanitized local OpenAPI snapshot.
 | GET | `/projects/{id}` | `projects-read` | Get a project |
 | PATCH | `/projects/{id}` | `patch-projects-read` | Update a project (partial) |
 | PUT | `/projects/{id}` | `projects-update` | Update a project |
+| GET | `/projects/{id}/count` | `projects-count` | Count a project's contents |
+| DELETE | `/projects/{id}/permanent` | `projects-delete-permanently` | Permanently delete a trashed project |
+| POST | `/projects/{id}/restore` | `projects-restore` | Restore a project from the trash |
 | GET | `/projects/{project_id}/time-entries` | `project-time-entries-list` | List a project's time entries |
 | DELETE | `/projects/{project}/background` | `projects-background-delete` | Remove a project background |
 | GET | `/projects/{project}/background` | `projects-background-get` | Get a project background |
@@ -112,6 +115,9 @@ This file is generated from the sanitized local OpenAPI snapshot.
 | DELETE | `/projects/{project}/webhooks/{webhook}` | `webhooks-delete` | Delete a webhook target |
 | PUT | `/projects/{project}/webhooks/{webhook}` | `webhooks-update` | Update a webhook target's events |
 | POST | `/projects/{projectid}/duplicate` | `projects-duplicate` | Duplicate a project |
+| DELETE | `/projects/deleted` | `projects-trash-empty` | Empty the project trash |
+| GET | `/projects/deleted` | `projects-trash-list` | List trashed projects |
+| GET | `/projects/deleted/count` | `projects-trash-count` | Count what emptying the project trash deletes |
 | POST | `/register` | `auth-register` | Register |
 | GET | `/routes` | `token-routes` | List API token routes |
 | POST | `/shares/{share}/auth` | `auth-link-share` | Get an auth token for a link share |
@@ -131,6 +137,7 @@ This file is generated from the sanitized local OpenAPI snapshot.
 | POST | `/tasks/{task}/attachments` | `task-attachments-upload` | Upload task attachments |
 | DELETE | `/tasks/{task}/attachments/{attachment}` | `task-attachments-delete` | Delete a task attachment |
 | GET | `/tasks/{task}/attachments/{attachment}` | `task-attachments-download` | Download a task attachment |
+| GET | `/tasks/{task}/attachments/{attachment}/preview` | `task-attachments-preview` | Get a preview of a task attachment |
 | GET | `/tasks/{task}/comments` | `task-comments-list` | List the comments of a task |
 | POST | `/tasks/{task}/comments` | `task-comments-create` | Create a comment on a task |
 | DELETE | `/tasks/{task}/comments/{commentid}` | `task-comments-delete` | Delete a comment of a task |
@@ -142,11 +149,16 @@ This file is generated from the sanitized local OpenAPI snapshot.
 | POST | `/tasks/{task}/labels` | `task-labels-create` | Add a label to a task |
 | DELETE | `/tasks/{task}/labels/{label}` | `task-labels-delete` | Remove a label from a task |
 | PUT | `/tasks/{task}/labels/bulk` | `task-labels-bulk-replace` | Replace all labels on a task |
+| DELETE | `/tasks/{task}/permanent` | `tasks-delete-permanently` | Permanently delete a trashed task |
 | PUT | `/tasks/{task}/position` | `tasks-position-update` | Set a task's position in a view |
 | PUT | `/tasks/{task}/read` | `tasks-mark-read` | Mark a task as read |
 | POST | `/tasks/{task}/relations` | `tasks-relations-create` | Create a task relation |
 | DELETE | `/tasks/{task}/relations/{relationKind}/{otherTask}` | `tasks-relations-delete` | Delete a task relation |
+| POST | `/tasks/{task}/restore` | `tasks-restore` | Restore a task from the trash |
 | PUT | `/tasks/bulk` | `tasks-bulk-update` | Bulk update tasks |
+| DELETE | `/tasks/deleted` | `tasks-trash-empty` | Empty the task trash |
+| GET | `/tasks/deleted` | `tasks-trash-list` | List trashed tasks |
+| GET | `/tasks/deleted/count` | `tasks-trash-count` | Count what emptying the task trash deletes |
 | GET | `/teams` | `teams-list` | List teams |
 | POST | `/teams` | `teams-create` | Create a team |
 | DELETE | `/teams/{id}` | `teams-delete` | Delete a team |
@@ -224,7 +236,7 @@ This file is generated from the sanitized local OpenAPI snapshot.
 | `AdminOwnerPatchBody` | $schema, owner_id |
 | `AdminSetPasswordBody` | $schema, new_password |
 | `AdminStatusPatchBody` | $schema, status |
-| `AdminUser` | $schema, auth_provider, bot_owner_id, created, email, id, is_admin, issuer, name, status, subject, updated, username |
+| `AdminUser` | $schema, auth_provider, bot_owner, bot_owner_id, created, email, id, is_admin, issuer, name, status, subject, updated, username |
 | `APIToken` | $schema, created, expires_at, id, owner_id, permissions, title, token |
 | `AttachmentUploadError` | code, message |
 | `AttachmentUploadResult` | $schema, errors, success |
@@ -233,9 +245,9 @@ This file is generated from the sanitized local OpenAPI snapshot.
 | `AuthorizeRequest` | $schema, client_id, code_challenge, code_challenge_method, redirect_uri, response_type, state |
 | `AuthorizeResponse` | $schema, code, redirect_uri, state |
 | `AuthTokenBodyBody` | $schema, token |
-| `BotUser` | $schema, bot_owner_id, created, email, id, name, status, updated, username |
-| `BotUserReadBody` | $schema, bot_owner_id, created, email, id, max_permission, name, status, updated, username |
-| `BotUserUpdateBody` | $schema, bot_owner_id, created, email, id, max_permission, name, status, updated, username |
+| `BotUser` | $schema, bot_owner, bot_owner_id, created, email, id, name, status, updated, username |
+| `BotUserReadBody` | $schema, bot_owner, bot_owner_id, created, email, id, max_permission, name, status, updated, username |
+| `BotUserUpdateBody` | $schema, bot_owner, bot_owner_id, created, email, id, max_permission, name, status, updated, username |
 | `Bucket` | $schema, count, created, created_by, id, limit, position, project_view_id, tasks, title, updated |
 | `BucketsWithTasksBodyBody` | $schema, items, total |
 | `BulkAssignees` | $schema, assignees |
@@ -262,7 +274,8 @@ This file is generated from the sanitized local OpenAPI snapshot.
 | `LabelTaskBulk` | $schema, labels |
 | `LabelWithTaskID` | created, created_by, description, hex_color, id, title, updated |
 | `LdapAuthInfo` | enabled |
-| `LegalInfo` | imprint_url, privacy_policy_url |
+| `LegalInfo` | imprint_url, links, privacy_policy_url |
+| `LegalLink` | text, url |
 | `LinkShareReadBody` | $schema, created, hash, id, max_permission, name, password, permission, shared_by, sharing_type, updated |
 | `LinkShareToken` | $schema, created, hash, id, name, password, permission, project_id, shared_by, sharing_type, token, updated |
 | `LinkSharing` | $schema, created, hash, id, name, password, permission, shared_by, sharing_type, updated |
@@ -294,6 +307,8 @@ This file is generated from the sanitized local OpenAPI snapshot.
 | `PaginatedTeamWithPermission` | $schema, items, page, per_page, total, total_pages |
 | `PaginatedTimeEntry` | $schema, items, page, per_page, total, total_pages |
 | `PaginatedToken` | $schema, items, page, per_page, total, total_pages |
+| `PaginatedTrashedProject` | $schema, items, page, per_page, total, total_pages |
+| `PaginatedTrashedTask` | $schema, items, page, per_page, total, total_pages |
 | `PaginatedUser` | $schema, items, page, per_page, total, total_pages |
 | `PaginatedUserInviteLink` | $schema, items, page, per_page, total, total_pages |
 | `PaginatedUserWithPermission` | $schema, items, page, per_page, total, total_pages |
@@ -302,9 +317,10 @@ This file is generated from the sanitized local OpenAPI snapshot.
 | `PasswordTokenRequest` | $schema, email |
 | `PreviewResult` | $schema, tasks, total_rows |
 | `PreviewTask` | description, done, due_date, end_date, labels, priority, project, start_date, title |
-| `Project` | $schema, background_blur_hash, background_information, created, description, hex_color, id, identifier, is_archived, is_favorite, max_permission, owner, parent_project_id, position, subscription, title, updated, views |
+| `Project` | $schema, background_blur_hash, background_information, created, deleted_at, deleted_by, description, hex_color, id, identifier, is_archived, is_favorite, max_permission, owner, parent_project_id, position, subscription, title, updated, views |
+| `ProjectCount` | $schema, sub_projects, tasks, time_entries, time_entry_authors |
 | `ProjectDuplicate` | $schema, duplicate_shares, duplicated_project, parent_project_id |
-| `ProjectReadBody` | $schema, background_blur_hash, background_information, created, description, hex_color, id, identifier, is_archived, is_favorite, max_permission, owner, parent_project_id, position, subscription, title, updated, views |
+| `ProjectReadBody` | $schema, background_blur_hash, background_information, created, deleted_at, deleted_by, description, hex_color, id, identifier, is_archived, is_favorite, max_permission, owner, parent_project_id, position, subscription, title, updated, views |
 | `ProjectUser` | $schema, created, id, permission, updated, username |
 | `ProjectView` | $schema, bucket_configuration, bucket_configuration_mode, created, default_bucket_id, done_bucket_id, filter, id, position, project_id, title, updated, view_kind |
 | `ProjectViewBucketConfiguration` | filter, title |
@@ -322,7 +338,7 @@ This file is generated from the sanitized local OpenAPI snapshot.
 | `ShareCounts` | link_shares, team_shares, user_shares |
 | `Status` | $schema, error_kind, error_message, finished_at, id, migrator_name, started_at |
 | `Subscription` | $schema, created, entity, entity_id, id |
-| `Task` | $schema, assignees, attachments, bucket_id, buckets, comment_count, comments, cover_image_attachment_id, created, created_by, deleted_at, description, done, done_at, due_date, end_date, hex_color, id, identifier, index, is_favorite, is_unread, labels, percent_done, position, priority, project_id, reactions, related_tasks, reminders, repeat_after, repeat_mode, start_date, subscription, time_entries_count, title, updated |
+| `Task` | $schema, assignees, attachments, bucket_id, buckets, comment_count, comments, cover_image_attachment_id, created, created_by, deleted_at, deleted_by, description, done, done_at, due_date, end_date, hex_color, id, identifier, index, is_favorite, is_unread, labels, percent_done, position, positions, priority, project_id, reactions, related_tasks, reminders, repeat_after, repeat_mode, start_date, subscription, time_entries_count, title, updated |
 | `TaskAssginee` | $schema, created, user_id |
 | `TaskAttachment` | created, created_by, file, id, task_id |
 | `TaskBucket` | $schema, bucket, bucket_id, project_view_id, task, task_id |
@@ -332,26 +348,31 @@ This file is generated from the sanitized local OpenAPI snapshot.
 | `TaskDuplicate` | $schema, duplicated_task |
 | `TaskPosition` | $schema, position, project_view_id, task_id |
 | `TaskReadBodyBody` | $schema, message |
-| `TaskReadOneBody` | $schema, assignees, attachments, bucket_id, buckets, comment_count, comments, cover_image_attachment_id, created, created_by, deleted_at, description, done, done_at, due_date, end_date, hex_color, id, identifier, index, is_favorite, is_unread, labels, max_permission, percent_done, position, priority, project_id, reactions, related_tasks, reminders, repeat_after, repeat_mode, start_date, subscription, time_entries_count, title, updated |
+| `TaskReadOneBody` | $schema, assignees, attachments, bucket_id, buckets, comment_count, comments, cover_image_attachment_id, created, created_by, deleted_at, deleted_by, description, done, done_at, due_date, end_date, hex_color, id, identifier, index, is_favorite, is_unread, labels, max_permission, percent_done, position, positions, priority, project_id, reactions, related_tasks, reminders, repeat_after, repeat_mode, start_date, subscription, time_entries_count, title, updated |
 | `TaskRelation` | $schema, created, created_by, other_task_id, relation_kind, task_id |
 | `TaskReminder` | relative_period, relative_to, reminder |
 | `Team` | $schema, created, created_by, description, external_id, id, is_public, members, name, updated |
 | `TeamMember` | $schema, admin, created, id, username |
 | `TeamProject` | $schema, created, id, permission, team_id, updated |
 | `TeamReadBody` | $schema, created, created_by, description, external_id, id, is_public, max_permission, members, name, updated |
-| `TeamUser` | admin, bot_owner_id, created, email, id, name, updated, username |
+| `TeamUser` | admin, bot_owner, bot_owner_id, created, email, id, name, updated, username |
 | `TeamWithPermission` | created, created_by, description, external_id, id, is_public, members, name, permission, updated |
-| `TimeEntry` | $schema, comment, created, end_time, id, project_id, start_time, task_id, updated, user_id |
-| `TimeEntryReadBody` | $schema, comment, created, end_time, id, max_permission, project_id, start_time, task_id, updated, user_id |
+| `TimeEntry` | $schema, comment, created, end_time, id, in_trash, project_id, start_time, task_id, updated, user |
+| `TimeEntryReadBody` | $schema, comment, created, end_time, id, in_trash, max_permission, project_id, start_time, task_id, updated, user |
 | `Token` | $schema, created, id, token |
 | `TokenPresets` | full, read_only, typed |
 | `TokenRequest` | $schema, client_id, code, code_verifier, grant_type, redirect_uri, refresh_token |
 | `TokenResponse` | $schema, access_token, expires_in, refresh_token, token_type |
 | `TokenTestBodyBody` | $schema, message |
 | `TOTP` | $schema, enabled, secret, url |
-| `TotpDisableBodyBody` | $schema, password |
-| `TotpEnableBodyBody` | $schema, passcode |
-| `User` | $schema, bot_owner_id, created, email, id, name, updated, username |
+| `TotpDisableBodyBody` | $schema, password, totp_passcode |
+| `TotpEnableBodyBody` | $schema, passcode, password |
+| `TotpEnrollBodyBody` | $schema, password |
+| `TrashCount` | $schema, by_others, total |
+| `TrashedProject` | background_blur_hash, background_information, created, deleted_at, deleted_by, description, hex_color, id, identifier, is_archived, is_favorite, max_permission, owner, parent_project_id, position, subscription, title, trashed_sub_projects, updated, views |
+| `TrashedSubProject` | depth, id, parent_project_id, title |
+| `TrashedTask` | assignees, attachments, bucket_id, buckets, can_delete_permanently, comment_count, comments, cover_image_attachment_id, created, created_by, deleted_at, deleted_by, description, done, done_at, due_date, end_date, hex_color, id, identifier, index, is_favorite, is_unread, labels, percent_done, position, positions, priority, project_id, reactions, related_tasks, reminders, repeat_after, repeat_mode, start_date, subscription, time_entries_count, title, updated |
+| `User` | $schema, bot_owner, bot_owner_id, created, email, id, name, updated, username |
 | `User-change-passwordRequest` | $schema, new_password, old_password |
 | `User-update-emailRequest` | $schema, new_email, password |
 | `UserActionMessageBody` | $schema, message |
@@ -361,9 +382,9 @@ This file is generated from the sanitized local OpenAPI snapshot.
 | `UserExportPasswordBodyBody` | $schema, password |
 | `UserExportStatus` | $schema, created, expires, id, size |
 | `UserGeneralSettings` | $schema, default_project_id, discoverable_by_email, discoverable_by_name, email_reminders_enabled, extra_settings_links, frontend_settings, language, name, overdue_tasks_reminders_enabled, overdue_tasks_reminders_time, timezone, week_start |
-| `UserInfoBody` | $schema, auth_provider, bot_owner_id, created, deletion_scheduled_at, email, id, is_admin, is_local_user, name, pending_email, settings, updated, username |
+| `UserInfoBody` | $schema, auth_provider, bot_owner, bot_owner_id, created, deletion_scheduled_at, email, id, is_admin, is_local_user, name, pending_email, settings, updated, username |
 | `UserInviteLink` | $schema, created, created_by, expires_at, id, max_uses, name, skip_email_confirm, teams, token, updated, uses |
-| `UserWithPermission` | bot_owner_id, created, email, id, name, permission, updated, username |
-| `VikunjaErrorModel` | $schema, code, detail, errors, i18n_params, instance, status, title, type |
+| `UserWithPermission` | bot_owner, bot_owner_id, created, email, id, name, permission, updated, username |
+| `VikunjaErrorModel` | $schema, code, detail, details, errors, i18n_params, instance, status, title, type |
 | `VikunjaInfos` | $schema, allow_icon_changes, auth, available_migrators, caldav_enabled, concurrent_writes, demo_mode_enabled, email_reminders_enabled, enabled_background_providers, enabled_pro_features, frontend_url, legal, link_sharing_enabled, max_file_size, max_items_per_page, motd, public_teams_enabled, task_attachments_enabled, task_comments_enabled, totp_enabled, user_deletion_enabled, version, webhooks_enabled |
 | `Webhook` | $schema, basic_auth_password, basic_auth_user, created, created_by, events, id, project_id, secret, target_url, updated, user_id |

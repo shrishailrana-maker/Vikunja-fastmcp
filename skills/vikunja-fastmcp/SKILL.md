@@ -11,9 +11,12 @@ requests or legacy tracker scripts while the MCP is available.
 ## Native adapter
 
 The npm executable is the only local installation. Its default native profile
-connects to Vikunja 2.7's `/api/v2/mcp` and exposes native action discovery plus
+connects to Vikunja 2.7+'s `/api/v2/mcp` and exposes native action discovery plus
 campaign wrappers. Use `find_action` and `do_action` for ordinary server actions;
 discovery includes both direct native tools and additional catalog actions.
+On Vikunja 2.8, discover `filter_syntax` for filter help and inspect native read
+schemas for field selection. Normal task deletion moves the task to server
+trash; use the web UI for restore. This adapter does not expose permanent purge.
 Use our `vikunja_task_write`, comments, workflow, and bulk tools for writes that
 need actor attribution, stable retry keys, evidence, or durable row receipts.
 Raw native tools retain the server's semantics and do not add local receipts.
